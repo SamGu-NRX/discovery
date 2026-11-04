@@ -278,29 +278,50 @@ class Runner:
         client_id = new_client_id()
         workdir = config.path("work", client_id, "x").parent
         items = self.write_base_files(workdir, b, prop)
-        if needs_tools:
+        verdict, rework = None, None
+        for attempt in range(2):
+            # One rework at most: a blocked prep or a judge "maybe" gets a second pass told what to fix. Only a
+            # ready prep the judge approves is posted (round 2: blocked and "maybe" cards misled Sam).
+            made_items = []
+            if needs_tools:
+                config.check_stop()
+                if not config.take("codex_preps", cfg["codex_preps_per_day"]):
+                    return self.complete(cand, "skipped" if attempt else "new",
+                                         f"codex prep budget used up{'; last review: ' + rework if rework else ''}", run)
+                if attempt == 0:
+                    run["snapshot"] = local_snapshot(prop.get("target"), workdir, cfg)
+                if rework:
+                    (workdir / "REWORK.md").write_text(f"# The previous attempt was reviewed\n\n{rework}\n")
+                prep = run_codex(workdir, cfg, self.llm.key(), self.log)
+                run.setdefault("preps", []).append(prep)
+                run["prep"] = prep
+                if prep.get("verdict") == "premise_false":
+                    return self.complete(cand, "skipped", f"prep found the premise false: {prep.get('summary')}", run)
+                made = verify_manifest(workdir, prep.get("items", []))
+                run["manifest"] = made
+                if prep.get("verdict") != "ready" or not made["verified"]:
+                    rework = (f"Prep was {prep.get('verdict')}: {prep.get('summary')}. Missing deliverables: "
+                              f"{made['missing']}. Fix the cause (see codex.log and PREP.md) and finish.")
+                    continue
+                made_items = made["verified"]
+                for k in ("approval_line", "final_step_kind", "final_step"):
+                    if k in prep and (prep[k] or k != "approval_line"):
+                        prop[k] = prep[k]
             config.check_stop()
-            if not config.take("codex_preps", cfg["codex_preps_per_day"]):
-                return self.complete(cand, "new", "codex prep budget used up for today; retry tomorrow", run)
-            prep = run_codex(workdir, cfg, self.llm.key(), self.log)
-            run["prep"] = prep
-            if prep.get("verdict") == "premise_false":
-                return self.complete(cand, "skipped", f"prep found the premise false: {prep.get('summary')}", run)
-            made = verify_manifest(workdir, prep.get("items", []))
-            run["manifest"] = made
-            if not made["verified"]:
-                return self.complete(cand, "failed" if int(cand.get("attempts") or 0) >= 3 else "skipped",
-                                     f"prep produced no verifiable deliverable ({prep.get('verdict')}: "
-                                     f"{prep.get('summary')}; missing: {made['missing']})", run)
-            items += made["verified"]
-            if prep.get("approval_line"):
-                prop["approval_line"] = prep["approval_line"]
-
-        config.check_stop()
-        verdict = self.judge(cand, b, prop, workdir, items, run)
-        if verdict.get("verdict") == "reject" or verdict.get("busywork"):
-            return self.complete(cand, "skipped", f"judge {verdict.get('verdict')}"
-                                 f"{' busywork' if verdict.get('busywork') else ''}: {verdict.get('reason')}", run)
+            verdict = self.judge(cand, b, prop, workdir, items + made_items, run)
+            if verdict.get("verdict") == "reject" or verdict.get("busywork"):
+                return self.complete(cand, "skipped", f"judge {verdict.get('verdict')}"
+                                     f"{' busywork' if verdict.get('busywork') else ''}: {verdict.get('reason')}", run)
+            if verdict.get("verdict") == "approve":
+                items += made_items
+                break
+            rework = f"Independent review said maybe: {verdict.get('reason')}. Edits asked for: {verdict.get('fixes')}"
+            if not needs_tools:
+                break
+        else:
+            verdict = None
+        if not verdict or verdict.get("verdict") != "approve":
+            return self.complete(cand, "skipped", f"not finished after rework: {rework}"[:1900], run)
         (workdir / "PROPOSAL.md").write_text(render_markdown(cand, prop, verdict, items, run.get("prep")))
         items.append({"type": "note", "ref": str(workdir / "PROPOSAL.md"), "summary": "the proposal, its evidence and checks"})
         body = self.proposal_body(client_id, cand, b, prop, verdict, items, run)
@@ -411,12 +432,10 @@ class Runner:
         if fsk not in prompts.FINAL_STEP_KINDS:
             fsk = None
         final_step = prop.get("final_step")
-        if verdict.get("verdict") == "maybe":
-            # A "maybe" still reaches Sam, with the reviewer's concern in front of him; the Worker's 3-a-day
-            # notification cap keeps asks rare. Recording it as done hid every maybe in round 1.
-            why += f" Reviewer's concern: {verdict.get('reason')}"
-            if verdict.get("fixes"):
-                why += " Suggested edits: " + "; ".join(verdict["fixes"][:3])
+        findings = (run.get("prep") or {}).get("findings") or []
+        if findings:
+            why += " Prep also found: " + "; ".join(f"{f.get('repo')}: {f.get('defect')} ({f.get('evidence')})"
+                                                    for f in findings[:4])
         prepared = [{**i, "summary": i.get("summary") or Path(i["ref"]).name} for i in prepared]
         return {"client_id": client_id, "candidate_ids": [cand["id"]], "kind": prop.get("kind"),
                 "title": prop.get("title", "")[:120], "why": why[:4000], "evidence": evidence, "prepared": prepared,
@@ -487,6 +506,56 @@ def render_application(app):
     return "\n".join(lines) + "\n"
 
 
+def _git(*args, cwd=None, check=False, input=None):
+    return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=input is None or isinstance(input, str),
+                          input=input, stdin=None if input is not None else subprocess.DEVNULL, check=check)
+
+
+def local_snapshot(target, workdir, cfg):
+    """Copy Sam's checkout that `target` lives in to workdir/src/<repo>, uncommitted work included.
+
+    Prep should change the code as it is on his machine, not GitHub's HEAD (round 2 worked on stale shallow
+    clones). Reads his repo only: a shallow clone of local HEAD, then his working-tree diff and untracked
+    files committed on top as "WIP snapshot". Returns a description, or None when the target is not inside
+    one of his repos.
+    """
+    if not target or not str(target).startswith(("~", "/")):
+        return None
+    p = Path(os.path.expanduser(str(target)))
+    while not p.exists() and p != p.parent:
+        p = p.parent
+    top = _git("rev-parse", "--show-toplevel", cwd=p if p.is_dir() else p.parent)
+    if top.returncode != 0:
+        return None
+    root = Path(top.stdout.strip())
+    roots = [Path(os.path.expanduser(r)).resolve() for r in cfg["repo_roots"]]
+    if root == Path.home() or not any(r in root.parents for r in roots) or policy.coursework_hit([str(root)], cfg):
+        return None
+    dest = workdir / "src" / root.name
+    if _git("clone", "-q", "--depth", "1", f"file://{root}", str(dest)).returncode != 0:
+        return {"repo": str(root), "error": "local clone failed"}
+    note = {"repo": str(root), "path": str(dest.relative_to(workdir)),
+            "head": _git("rev-parse", "--short", "HEAD", cwd=root).stdout.strip()}
+    diff = subprocess.run(["git", "diff", "HEAD", "--binary"], cwd=root, capture_output=True, stdin=subprocess.DEVNULL).stdout
+    if diff:
+        ap = subprocess.run(["git", "apply", "--whitespace=nowarn"], cwd=dest, input=diff, capture_output=True)
+        note["uncommitted_diff"] = "applied" if ap.returncode == 0 else f"not applied: {ap.stderr.decode()[:200]}"
+    copied, total = 0, 0
+    for rel in filter(None, _git("ls-files", "--others", "--exclude-standard", "-z", cwd=root).stdout.split("\0")):
+        src = root / rel
+        if src.is_file() and not src.is_symlink() and src.stat().st_size <= 5_000_000 and total < 30_000_000:
+            (dest / rel).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dest / rel)
+            copied += 1
+            total += src.stat().st_size
+    note["untracked_copied"] = copied
+    if diff or copied:
+        _git("add", "-A", cwd=dest)
+        _git("-c", "user.name=discovery-runner", "-c", "user.email=runner@localhost", "commit", "-qm",
+             f"WIP snapshot of uncommitted work at {config.now_iso()}", cwd=dest)
+    return note
+
+
 def _sha(p):
     import hashlib
     return hashlib.sha256(Path(p).read_bytes()).hexdigest()[:16]
@@ -530,11 +599,36 @@ def dir_mb(p: Path):
     return total / 1e6
 
 
+CODEX_HOME_CONFIG = """# Written by the discovery runner. Prep runs with this home instead of ~/.codex, so it inherits none of
+# Sam's MCP servers, plugins or skills: some of those drive his desktop, browser or T3 outside the sandbox.
+# Context7 (read-only library docs) is the one server prep gets; it runs keyless so no key is copied here.
+model_provider = "cliproxy"
+
+[model_providers.cliproxy]
+name = "OpenAI"
+base_url = "http://127.0.0.1:8317/v1"
+env_key = "CLIPROXY_API_KEY"
+wire_api = "responses"
+requires_openai_auth = false
+
+[mcp_servers.Context7]
+command = "npx"
+args = ["-y", "@upstash/context7-mcp"]
+"""
+
+
+def codex_home():
+    home = config.path("codex-home", "config.toml").parent
+    f = home / "config.toml"
+    if not f.exists() or f.read_text() != CODEX_HOME_CONFIG:
+        f.write_text(CODEX_HOME_CONFIG)
+    return home
+
+
 def codex_command(workdir, cfg):
     """No sandbox-bypass or approval-bypass flag, ever: writes stay in workdir, network via sandbox config."""
-    # mcp_servers={} keeps Sam's interactive MCP servers (OAuth-gated, irrelevant to prep) out of the run.
     return ["codex", "exec", "-c", "model_provider=cliproxy", "-m", cfg["models"]["prep"],
-            "-c", 'model_reasoning_effort="medium"', "-c", "mcp_servers={}", "--sandbox", "workspace-write",
+            "-c", 'model_reasoning_effort="medium"', "--sandbox", "workspace-write",
             "-c", "sandbox_workspace_write.network_access=true", "-C", str(workdir), "--skip-git-repo-check",
             "--ephemeral", "-o", str(workdir / "last-message.md"), prompts.PREP]
 
@@ -543,7 +637,7 @@ def run_codex(workdir, cfg, gateway_key, log=print):
     """The gateway key reaches codex only through its environment (the provider's env_key), never argv or logs."""
     cmd = codex_command(workdir, cfg)
     t0 = dt.datetime.now(dt.timezone.utc)
-    env = {**os.environ, "CLIPROXY_API_KEY": gateway_key}
+    env = {**os.environ, "CLIPROXY_API_KEY": gateway_key, "CODEX_HOME": str(codex_home())}
     with open(workdir / "codex.log", "w") as out:
         proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT, cwd=workdir,
                                 start_new_session=True, env=env)
@@ -584,6 +678,10 @@ def run_codex(workdir, cfg, gateway_key, log=print):
             res.update(verdict=p.get("verdict"), summary=p.get("summary"), approval_line=p.get("approval_line"))
             res["items"] = [i for i in p.get("items") or [] if i.get("type") in ("file", "branch", "draft", "note")]
             res["checks"] = p.get("checks") or []
+            res["findings"] = p.get("findings") or []
+            for k in ("final_step_kind", "final_step"):
+                if k in p:
+                    res[k] = p[k]
         except json.JSONDecodeError as e:
             res.update(verdict="blocked", summary=f"prepared.json unreadable: {e}")
     else:

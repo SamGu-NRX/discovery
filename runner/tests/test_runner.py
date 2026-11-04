@@ -179,6 +179,33 @@ class Manifest(unittest.TestCase):
         self.assertEqual(len(out["missing"]), 4)
 
 
+class Snapshot(unittest.TestCase):
+    def test_snapshot_carries_uncommitted_work_and_leaves_the_checkout_alone(self):
+        # fails if prep works on a stale HEAD without Sam's uncommitted changes, or the snapshot writes to his repo
+        import subprocess
+        from discovery_runner.pipeline import local_snapshot
+        with tempfile.TemporaryDirectory() as root, tempfile.TemporaryDirectory() as work:
+            repo = Path(root) / "proj"
+            repo.mkdir()
+            git = lambda *a: subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *a], cwd=repo,
+                                            check=True, capture_output=True)
+            git("init", "-q")
+            (repo / "app.py").write_text("v1\n")
+            git("add", "-A")
+            git("commit", "-qm", "init")
+            (repo / "app.py").write_text("v2 uncommitted\n")
+            (repo / "new.py").write_text("untracked\n")
+            before = subprocess.run(["git", "status", "--porcelain"], cwd=repo, capture_output=True, text=True).stdout
+            cfg = {**config.DEFAULTS, "repo_roots": [root]}
+            note = local_snapshot(str(repo / "app.py"), Path(work), cfg)
+            snap = Path(work) / note["path"]
+            self.assertEqual((snap / "app.py").read_text(), "v2 uncommitted\n")
+            self.assertEqual((snap / "new.py").read_text(), "untracked\n")
+            after = subprocess.run(["git", "status", "--porcelain"], cwd=repo, capture_output=True, text=True).stdout
+            self.assertEqual(before, after)
+            self.assertIsNone(local_snapshot("https://github.com/acme/tool", Path(work), cfg))
+
+
 class Coursework(unittest.TestCase):
     cfg = config.DEFAULTS
 
@@ -322,15 +349,15 @@ class EndToEnd(Home):
         self.assertEqual(models["You deep-read"], "gpt-6.1-sol")
         self.assertEqual(models["independent"], "gpt-6-astra")
 
-    def test_judge_maybe_reaches_sam_with_the_concern(self):
-        # fails if a "maybe" is silently recorded as done (round 1 hid every maybe that way) or loses its concern
+    def test_unfinished_work_is_not_posted_and_keeps_the_review(self):
+        # fails if work the independent review calls unfinished ("maybe") reaches Sam as a card (round 2's
+        # graders: maybe and blocked cards promised work that did not exist), or the review is lost
         r = self.runner({"You triage": TRIAGE_TRY, "You deep-read": deep_read("~/x"),
                          "independent": {"verdict": "maybe", "busywork": False, "reason": "needs a real baseline"}})
         self.captured_post()
-        r.work()
-        (p,) = self.mock.state.proposals.values()
-        self.assertEqual(p["final_step_kind"], "open_pr")
-        self.assertIn("needs a real baseline", p["why"])
+        run = r.work()[0]
+        self.assertEqual(self.mock.state.proposals, {})
+        self.assertIn("needs a real baseline", run["complete"]["note"])
 
     def test_plan_without_deliverable_is_never_posted(self):
         # fails if a proposal whose only output is a plan is recorded as finished work (round 1's main defect)
