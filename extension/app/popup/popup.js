@@ -14,6 +14,7 @@ const REASON = {
   window_closed: "window closed",
   interrupted: "interrupted",
   paused: "paused by the Worker",
+  capture_off: "capture turned off",
   login_wall: "login wall",
   rate_limited: "rate limited",
   challenge: "challenge shown",

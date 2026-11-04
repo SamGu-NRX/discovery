@@ -10,12 +10,20 @@ import { packPieces, splitCapture } from "./batch.js";
 import { WorkerError, postIngest } from "./worker-api.js";
 import { bumpStats, createLock, getLocal, loadConfig, recordProblem, setLocal } from "./store.js";
 
-// About 2000 home-timeline responses. Past this the oldest pieces are
-// dropped and the drop is reported, rather than growing storage without bound
-// while the Worker is down.
-const OUTBOX_LIMIT = 2000;
+// chrome.storage.local holds 10 MiB (QUOTA_BYTES, counted as each key plus
+// the JSON of its value). The outbox may use 7 MiB, measured in UTF-8 bytes,
+// which is never less than Chrome's count. The other 3 MiB stay free for the
+// small keys the extension must always be able to write: config, stats,
+// session records, sent bookmark ids. While the Worker is unreachable the
+// outbox fills; past the budget its oldest pieces are dropped and the drop is
+// reported in the popup. 7 MiB is a few hundred captured responses, more
+// than a day of browsing.
+const OUTBOX_BUDGET_BYTES = 7 * 1024 * 1024;
 const BOOKMARK_MEMORY = 200;
 const serial = createLock();
+const encoder = new TextEncoder();
+// Stored with each entry so the budget check does not re-encode the outbox.
+const sizeOf = (entry) => encoder.encode(JSON.stringify(entry)).length + 32;
 
 export function enqueue({ account, session_id, mode, batch }) {
   return serial(async () => {
@@ -25,14 +33,32 @@ export function enqueue({ account, session_id, mode, batch }) {
     }
     const captured_at = new Date().toISOString();
     const outbox = await getLocal("outbox", []);
-    for (const piece of pieces) outbox.push({ account, session_id, mode, captured_at, piece });
-    const overflow = outbox.length - OUTBOX_LIMIT;
-    if (overflow > 0) {
-      outbox.splice(0, overflow);
-      await recordProblem("outbox", `outbox full: dropped the ${overflow} oldest piece(s)`);
+    for (const piece of pieces) {
+      const entry = { account, session_id, mode, captured_at, piece };
+      outbox.push({ ...entry, bytes: sizeOf(entry) });
     }
-    await setLocal({ outbox });
+    let total = outbox.reduce((sum, entry) => sum + entry.bytes, 0);
+    let overflow = 0;
+    while (total > OUTBOX_BUDGET_BYTES && outbox.length > pieces.length) {
+      total -= outbox.shift().bytes;
+      overflow += 1;
+    }
+    if (overflow) await recordProblem("outbox", `outbox full: dropped the ${overflow} oldest piece(s) not yet sent`);
+    await storeOutbox(outbox);
   });
+}
+
+// The budget leaves room for everything else, but if Chrome still refuses
+// the write (other keys grew), the older half of the outbox goes, once,
+// rather than losing the new capture and every later one.
+async function storeOutbox(outbox) {
+  try {
+    await setLocal({ outbox });
+  } catch (err) {
+    const drop = Math.ceil(outbox.length / 2);
+    await recordProblem("outbox", `storage refused the outbox (${err.message}); dropped the ${drop} oldest piece(s)`);
+    await setLocal({ outbox: outbox.slice(drop) });
+  }
 }
 
 export function flush() {

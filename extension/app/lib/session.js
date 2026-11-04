@@ -52,12 +52,17 @@ export function requestStop(reason, detail) {
   if (!s) return false;
   if (s.finishing) {
     // A blocking stop (a 429 from the closing page, say) still decides the
-    // status until teardown has chosen it.
+    // status until teardown has chosen it, and is written at once so a
+    // restart in the meantime reports it.
     if (!BLOCKING.has(reason) || s.statusDecided) return false;
-    s.lateStop ??= { reason, detail };
+    if (BLOCKING.has(s.outcome?.reason) || s.lateStop) return true;
+    s.lateStop = { reason, detail };
+    publish(s, s.lateStop).catch(() => {});
     return true;
   }
-  if (s.stop) return true;
+  // A blocking reason (a 429 after Sam pressed Stop, say) replaces a
+  // harmless stop; nothing replaces a blocking one.
+  if (s.stop && (BLOCKING.has(s.stop.reason) || !BLOCKING.has(reason))) return true;
   s.stop = { reason, detail };
   // Before its first record the session may still be waiting for recovery
   // to report the previous one; that record must not be overwritten. The
@@ -100,6 +105,7 @@ export async function startSession(trigger) {
     recorded: false,
     statusDecided: false,
     lateStop: null,
+    outcome: null,
     notes: [],
     errorPages: 0,
     account: null,
@@ -151,8 +157,9 @@ async function run(s) {
   } catch (err) {
     outcome = err instanceof StopSession ? { reason: err.reason, detail: err.detail } : { reason: "error", detail: err.message };
   }
-  // An exception caused by the stop (a closed window, say) is not the reason.
-  if (s.stop) outcome = s.stop;
+  // An exception caused by the stop (a closed window, say) is not the
+  // reason, unless the session hit a blocking page while stopping.
+  if (s.stop && !(BLOCKING.has(outcome.reason) && !BLOCKING.has(s.stop.reason))) outcome = s.stop;
 
   clearInterval(keepAlive);
   chrome.windows.onRemoved.removeListener(onRemoved);
@@ -172,8 +179,9 @@ async function run(s) {
 }
 
 async function finish(s, outcome) {
+  s.outcome = outcome;
   // Recorded before any teardown step that could be cut short.
-  await publish(s, outcome);
+  await publish(s, s.lateStop && !BLOCKING.has(outcome.reason) ? s.lateStop : outcome);
   if (!s.windowClosed && s.windowId !== null) {
     // Let captures already in flight from the closing page reach the worker.
     await sleep(1000);
@@ -232,9 +240,12 @@ async function recover() {
   const { activeSession } = await chrome.storage.session.get("activeSession");
   if (!activeSession || activeSession.id === current?.id) return;
   if (activeSession.windowId != null) await chrome.windows.remove(activeSession.windowId).catch(() => {});
+  // A recorded blocking outcome or stop wins over everything else,
+  // including the completion checkpoint.
+  const recorded = [activeSession.outcome, activeSession.stop].filter(Boolean);
   const outcome =
-    activeSession.outcome ??
-    activeSession.stop ??
+    recorded.find((o) => BLOCKING.has(o.reason)) ??
+    recorded[0] ??
     (activeSession.completed
       ? { reason: "completed", detail: "finished before the service worker restarted" }
       : { reason: "interrupted", detail: "the extension's service worker restarted mid-session" });

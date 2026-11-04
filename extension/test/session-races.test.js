@@ -117,6 +117,7 @@ const capture = (url = "https://x.com/i/api/graphql/q/HomeTimeline") => ({
 });
 
 async function reset() {
+  await chrome.storage.local.set({ config: CONFIG });
   await session.recoverInterruptedSession();
   fake.local.delete("pauseUntil");
   fake.local.delete("outbox");
@@ -311,4 +312,63 @@ test("a GraphQL 429 that arrives while a finished session closes is still report
   assert.equal(report.id, started.id);
   assert.equal(report.status, "rate_limited");
   assert.ok(Date.parse(fake.local.get("pauseUntil")) > Date.now());
+});
+
+// Found in review at 58bd508.
+
+test("turning capture Off stops a running session and rejects its captures", async () => {
+  await reset();
+  const started = await session.startSession("manual");
+  const tabId = session.sessionTabId();
+  const off = { ...CONFIG, mode: "off" };
+  await chrome.storage.local.set({ config: off });
+  chrome.storage.onChanged.fire({ config: { oldValue: CONFIG, newValue: off } }, "local");
+
+  const reply = await fromTab(tabId, capture());
+  const report = await ended.promise;
+  await untilIdle();
+  assert.equal(reply.ignored, true);
+  assert.equal((fake.local.get("outbox") ?? []).length, 0);
+  assert.equal(report.id, started.id);
+  assert.equal(report.reason, "capture_off");
+});
+
+test("a 429 after Sam pressed Stop is reported as rate_limited and recorded at once", async () => {
+  await reset();
+  await session.startSession("manual");
+  const tabId = session.sessionTabId();
+  session.requestStop("stopped_by_user", "Sam pressed Stop");
+  await fromTab(tabId, { type: "x-status", operation: "HomeTimeline", status: 429 });
+  const recorded = structuredClone(fake.session.get("activeSession"));
+  const report = await ended.promise;
+  await untilIdle();
+  assert.equal(recorded.stop.reason, "rate_limited");
+  assert.equal(report.status, "rate_limited");
+  assert.ok(Date.parse(fake.local.get("pauseUntil")) > Date.now());
+});
+
+test("a 429 during teardown survives a service worker restart before teardown ends", async () => {
+  await reset();
+  await session.startSession("manual");
+  const tabId = session.sessionTabId();
+  const closing = deferred();
+  const release = deferred();
+  const remove = chrome.windows.remove;
+  chrome.windows.remove = async (id) => {
+    chrome.windows.remove = remove;
+    closing.resolve();
+    await release.promise;
+    return remove(id);
+  };
+  await closing.promise;
+  await fromTab(tabId, { type: "x-status", operation: "HomeTimeline", status: 429 });
+  await new Promise((resolve) => realSetTimeout(resolve, 5));
+
+  // A fresh copy of the module stands in for the restarted worker.
+  const restarted = await import(`../app/lib/session.js?restart-${Date.now()}`);
+  await restarted.recoverInterruptedSession();
+  const recovered = structuredClone(fake.local.get("lastSession"));
+  release.resolve();
+  await untilIdle();
+  assert.equal(recovered.status, "rate_limited");
 });

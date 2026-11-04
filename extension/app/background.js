@@ -49,6 +49,8 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === "local" && changes.config && changes.config.oldValue?.mode !== changes.config.newValue?.mode) {
+    // Off means nothing is captured, including by a session already running.
+    if (changes.config.newValue?.mode === "off") requestStop("capture_off", "capture was turned off");
     scheduleNext().catch((err) => recordProblem("session", err.message));
   }
 });
@@ -99,7 +101,7 @@ async function handleCapture(message, tabId) {
   const session = tabId === sessionTabId() ? sessionInfo() : null;
   const inSession = session !== null;
   const config = await loadConfig();
-  if (!inSession && config.mode === "off") return { ignored: true };
+  if (config.mode === "off") return { ignored: true };
 
   let json;
   try {

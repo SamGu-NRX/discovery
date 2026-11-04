@@ -30,7 +30,7 @@ The service worker turns each response into one contract batch:
 
 If a response lacks a field the contract needs, or has an entry type the parser does not know, the whole response is dropped and the popup shows the error. The parser never fills in a guess. X changes these payloads without notice, and a loud failure is easier to fix than months of wrong rows.
 
-Each capture is cut once, when it is queued, into pieces that each fit a request alone. Each piece carries `batch_id` `<capture uuid>:<piece index>`, the Worker's idempotency key, and the thread goes on the last piece. Pieces wait in `chrome.storage.local` until the Worker accepts them, so a closed browser or an offline Worker loses nothing. Requests of at most 128 KB, the contract's cap, carry whole pieces. A piece leaves the outbox as soon as its request is accepted, so it is never sent again. A piece whose request failed is retried under the same `batch_id`.
+Each capture is cut once, when it is queued, into pieces that each fit a request alone. Each piece carries `batch_id` `<capture uuid>:<piece index>`, the Worker's idempotency key, and the thread goes on the last piece. Pieces wait in `chrome.storage.local` until the Worker accepts them, so a closed browser or a short Worker outage loses nothing. Chrome gives an extension 10 MiB of local storage. The outbox may use 7 MiB, which is a few hundred captured responses, and the rest stays free for config, stats and session records. Past 7 MiB the oldest unsent pieces are dropped and the popup says so. If Chrome refuses a write anyway, the older half of the outbox is dropped so the new capture is still stored. The extension does not ask for `unlimitedStorage`: a Worker outage long enough to fill 7 MiB should show up as a problem, not grow storage without limit. Requests of at most 128 KB, the contract's cap, carry whole pieces. A piece leaves the outbox as soon as its request is accepted, so it is never sent again. A piece whose request failed is retried under the same `batch_id`.
 
 ## Modes
 
@@ -38,7 +38,7 @@ The popup has three modes.
 
 - **Passive** (default). Whatever Sam scrolls himself is captured with `mode: "passive"`. All passive captures from one day share one `session_id`.
 - **Active**. Passive capture, plus a read-only session at most every 3 hours with up to 20 minutes of random delay.
-- **Off**. Nothing is captured and no session runs.
+- **Off**. Nothing is captured and no session runs. Switching to Off also stops a session already running, and its captures are dropped.
 
 "Run session now" starts a session right away in Passive or Active mode.
 
@@ -52,7 +52,7 @@ The popup has three modes.
 
 It checks the page after every load and every screen. On a login wall, a rate-limit or "limited" message, a challenge or CAPTCHA, or a GraphQL 429 (or X error code 88), it stops, reports `login_wall`, `rate_limited`, `challenge` or `error`, and pauses sessions for 24 hours. On any other page than the one it opened, it stops with `error` before reading or scrolling it. It also honors the `pause_until` the Worker returns. A rate limit seen while Sam browses also pauses sessions and is reported once. Closing the session window or pressing Stop in the popup ends the session with status `ok` and the reason in `detail`.
 
-A session writes its stop reason to `chrome.storage.session` as soon as it stops, and a completion checkpoint when it finishes. If the service worker restarts mid-session, the next start closes the window and reports the recorded stop. With no stop and no checkpoint, it reports `error` with detail `interrupted`, because an unrecorded login wall or rate limit may have ended it. Starting is reserved before anything else runs, so an alarm and the popup cannot start two sessions at once. A new session also waits for any restart recovery to report the old session first, and a session removes its record before it frees the slot, so one session's teardown never deletes another's record.
+A blocking reason (rate limit, login wall, challenge) replaces a harmless stop such as Stop in the popup, so a 429 that arrives after Sam pressed Stop is still reported as `rate_limited`. A session writes its stop reason to `chrome.storage.session` as soon as it stops, including a 429 that arrives while it is closing, and a completion checkpoint when it finishes. If the service worker restarts mid-session, the next start closes the window and reports the recorded stop; a recorded blocking reason wins over the completion checkpoint. With no stop and no checkpoint, it reports `error` with detail `interrupted`, because an unrecorded login wall or rate limit may have ended it. Starting is reserved before anything else runs, so an alarm and the popup cannot start two sessions at once. A new session also waits for any restart recovery to report the old session first, and a session removes its record before it frees the slot, so one session's teardown never deletes another's record.
 
 ## Read-only guarantee
 
@@ -83,7 +83,7 @@ Permissions are `storage`, `alarms` and `scripting`, with host access to `https:
 All in `chrome.storage.local` of the browser profile, readable from the service worker console:
 
 - `config`: `mode`, `workerUrl`, `ingestToken`, and optional overrides. `account` is the handle used when the side nav shows none. `intervalHours`, `jitterMinutes`, `homeMaxScreens`, `homeMaxMinutes`, `bookmarksMaxScreens`, `detailMaxPosts` and `detailMaxScreens` may be lowered but never raised past the limits above. `loadConfig()` clamps them.
-- `outbox` holds pieces not yet accepted. `stats` holds today's posts sent and parse errors.
+- `outbox` holds pieces not yet accepted, at most 7 MiB. `stats` holds today's posts sent and parse errors.
 - `lastSession`, `nextSessionAt`, `pauseUntil` and `lastProblem` back the popup.
 - `sentBookmarkIds` and `lastAccount`.
 
@@ -105,9 +105,9 @@ npm test
 
 - `test/capture.test.js` covers normalization, note tweets, the visibility wrapper, cursor and module entries, display order, quoted and reposted posts, the bookmark rule, loud failures, and self-thread versus replies across permalink pages, including posts added to an earlier module, a reply also shown under Discover more, and a focal post inside a module.
 - `test/batch.test.js` covers cutting captures into pieces with `batch_id` and the 128 KB cap.
-- `test/outbox.test.js` runs the outbox against a local Worker that fails one request, and checks that only unsent pieces are retried, under the same `batch_id`.
+- `test/outbox.test.js` runs the outbox against a local Worker that fails one request, and checks that only unsent pieces are retried, under the same `batch_id`. It also fills storage past Chrome's quota, which the test's fake storage enforces, and checks that the newest captures and room for other state survive.
 - `test/session-recovery.test.js` checks what a restarted service worker reports for a half-finished session.
-- `test/session-races.test.js` runs `session.js` and `background.js` with a stubbed browser through interleavings of start, stop, teardown, restart recovery, captures and a late 429.
+- `test/session-races.test.js` runs `session.js` and `background.js` with a stubbed browser through interleavings of start, stop, teardown, restart recovery, captures, a late 429 and switching to Off.
 - `test/page-agent.test.js` checks in real Chromium DOM that the page agent has no click, type or submit command and fires no input while reading or scrolling.
 - `test/hook.test.js` loads `hook.js` and `bridge.js` into a page the way the extension does and checks that page scripts cannot forge a capture or take the channel.
 - `test/e2e.test.js` loads `app/` into a throwaway Chromium profile and deletes the profile afterward. Chromium resolves `x.com` to a local HTTPS server holding fixture pages and fails every other hostname, so the test cannot reach the real X. It checks passive capture through both `fetch` and XHR, a full session by navigation alone (pages visited, no clicks, thread and `batch_id`s sent, status `ok`), that a login wall, a GraphQL 429 or a redirect to an unexpected page stops a session, and that two simultaneous starts run one session.
