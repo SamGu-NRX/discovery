@@ -121,7 +121,7 @@ Scoring runs in the runner, because cosine similarity over hundreds of saves wou
 - `POST /x/posts/scores { scores: [{ id, score, parts }] }`
 - `POST /candidates { kind, ref, title, url, score, score_parts }` is idempotent on `(kind, ref)`. It returns 429 after the 15th unbookmarked candidate of the UTC day.
 - `POST /candidates/claim { owner, ttl_s, limit }` returns leased candidates, each with a random `lease_token`. `owner` is a random runner instance id generated at startup, not hostname and PID. An expired lease can be reclaimed. Completing with a stale owner returns 409.
-- `POST /candidates/:id/complete { owner, lease_token, state, note }` succeeds only when `lease_token` matches the current lease. A reclaimed lease invalidates the old token.
+- `POST /candidates/:id/complete { owner, lease_token, state, note }` succeeds only when `lease_token` matches the current lease. A reclaimed lease invalidates the old token. `state` is `proposed`, `done`, `skipped` or `failed`, or `new` to defer: that releases the lease and returns the candidate to the queue with `attempts` kept and `note` stored. Claims take the least-attempted candidates first. A candidate fails after its lease expires 3 times; deferrals don't count toward that.
 - `GET /x/posts/:id/context` returns the post, its quoted post, the captured thread (`op_self_thread` and `replies` in server order, each a normalized post) and `thread_captured: true|false`.
 - `POST /proposals` takes
   ```
