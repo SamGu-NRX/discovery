@@ -163,13 +163,13 @@ async function handleXStatus(message, tabId) {
 
 // X throttles the account, not the tab: a back-off signal stops a running
 // session wherever it was seen, including one still opening its window or
-// one restart recovery is reporting. A signal no session will report (seen
-// while Sam browses, or after a session reported its status) is reported
-// once under the passive session and holds sessions off for the pause.
+// one restart recovery is reporting, and that session reports it. Only a
+// signal no session takes (seen while Sam browses with no session running,
+// or after a session reported its status) is reported under the passive
+// session, once, and holds sessions off for the pause.
 async function onBackOff(tabId, reason, detail) {
   const fromSession = tabId === sessionTabId();
-  const accepted = requestStop(reason, fromSession ? detail : `${detail} in another tab`);
-  if (fromSession && accepted) return;
+  if (requestStop(reason, fromSession ? detail : `${detail} in another tab`)) return;
   await recordProblem("x", detail);
   if (await getPauseUntil()) return;
   await setLocal({ pauseUntil: new Date(Date.now() + 24 * 3600_000).toISOString() });

@@ -57,8 +57,16 @@ export function sessionInfo() {
 export function requestStop(reason, detail) {
   const s = current;
   if (!s) {
-    if (!recovering || !X_SIGNALS.has(reason)) return false;
-    recovering.lateStop ??= { reason, detail };
+    // During restart recovery, until it has chosen the old session's outcome,
+    // a back-off signal joins that outcome. It is written into the old record
+    // at once, so a second restart still reports it.
+    if (!recovering || recovering.decided || !X_SIGNALS.has(reason)) return false;
+    if (!recovering.lateStop) {
+      recovering.lateStop = { reason, detail };
+      recovering.saved = chrome.storage.session
+        .set({ activeSession: { ...recovering.record, lateStop: recovering.lateStop } })
+        .catch(() => {});
+    }
     return true;
   }
   if (s.finishing) {
@@ -181,13 +189,16 @@ async function run(s) {
   clearInterval(keepAlive);
   chrome.windows.onRemoved.removeListener(onRemoved);
   s.finishing = true;
+  let reported = false;
   try {
-    await finish(s, outcome);
+    reported = await finish(s, outcome);
   } finally {
     // Record first, then the slot: while `current` is still this session no
     // other session can start and write a record this removal would delete.
+    // A session whose status did not reach the Worker keeps its record, which
+    // holds its final outcome; restart recovery or the next start reports it.
     try {
-      await removeRecord(s.id);
+      if (reported) await removeRecord(s.id);
     } finally {
       if (current === s) current = null;
     }
@@ -235,6 +246,7 @@ async function finish(s, outcome) {
     reported = true;
   } catch (err) {
     await recordProblem("worker", `session status not reported: ${err.message}`);
+    await publish(s, outcome, { awaitingReport: true });
   }
   await setLocal({
     lastSession: {
@@ -250,6 +262,7 @@ async function finish(s, outcome) {
       reported,
     },
   });
+  return reported;
 }
 
 // Called when the service worker starts. A session record without a running
@@ -265,7 +278,7 @@ export function recoverInterruptedSession() {
 async function recover() {
   const { activeSession } = await chrome.storage.session.get("activeSession");
   if (!activeSession || activeSession.id === current?.id) return;
-  recovering = { id: activeSession.id, lateStop: null };
+  recovering = { record: activeSession, lateStop: null, decided: false, saved: Promise.resolve() };
   try {
     await recoverRecord(activeSession);
   } finally {
@@ -275,10 +288,15 @@ async function recover() {
 
 async function recoverRecord(activeSession) {
   if (activeSession.windowId != null) await chrome.windows.remove(activeSession.windowId).catch(() => {});
+  // From here a signal is no longer part of the old session; once the write
+  // of one that is has landed, the outcome is chosen.
+  recovering.decided = true;
+  await recovering.saved;
   // A recorded blocking outcome or stop wins over everything else,
-  // including the completion checkpoint, and so does a back-off signal
-  // that arrived while the old window closed.
-  const recorded = [activeSession.outcome, activeSession.stop, recovering.lateStop].filter(Boolean);
+  // including the completion checkpoint, and so does a back-off signal that
+  // arrived while the old window closed, in this recovery or in one a
+  // restart cut short.
+  const recorded = [activeSession.outcome, activeSession.stop, activeSession.lateStop, recovering.lateStop].filter(Boolean);
   const outcome =
     recorded.find((o) => BLOCKING.has(o.reason)) ??
     recorded[0] ??
@@ -319,9 +337,12 @@ async function extendPause() {
 }
 
 // Progress the popup shows while a session runs, and what recovery reads.
-function publish(s, outcome = null) {
+// `awaitingReport` marks a finished session whose status has not reached the
+// Worker yet.
+function publish(s, outcome = null, extra = {}) {
   return chrome.storage.session.set({
     activeSession: {
+      ...extra,
       id: s.id,
       trigger: s.trigger,
       startedAt: s.startedAt,

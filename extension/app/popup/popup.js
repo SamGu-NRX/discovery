@@ -29,7 +29,9 @@ async function render() {
   const local = await chrome.storage.local.get([
     "stats", "lastSession", "nextSessionAt", "pauseUntil", "lastProblem", "lastAccount",
   ]);
-  const { activeSession } = await chrome.storage.session.get("activeSession");
+  const { activeSession: record } = await chrome.storage.session.get("activeSession");
+  // A finished session kept only until its status reaches the Worker is not running.
+  const activeSession = record && !record.awaitingReport ? record : null;
   const today = new Date().toLocaleDateString("en-CA");
 
   $("account").textContent = local.lastAccount ? `@${local.lastAccount}` : "";
@@ -55,7 +57,8 @@ async function render() {
   if (last) {
     const dot = document.createElement("span");
     dot.className = `dot ${last.status === "ok" ? (last.reason === "completed" ? "ok" : "") : "bad"}`;
-    lastCell.append(dot, `${ago(last.endedAt)} · ${REASON[last.reason] ?? last.reason}`);
+    const unreported = last.reported === false ? " · not yet sent to the Worker" : "";
+    lastCell.append(dot, `${ago(last.endedAt)} · ${REASON[last.reason] ?? last.reason}${unreported}`);
     lastCell.title = last.detail ?? "";
   } else {
     lastCell.textContent = "none yet";
@@ -134,7 +137,8 @@ document.querySelector(".segmented").addEventListener("keydown", (event) => {
 
 $("run").addEventListener("click", async () => {
   const { activeSession } = await chrome.storage.session.get("activeSession");
-  const reply = await chrome.runtime.sendMessage({ type: activeSession ? "stopSession" : "runSession" });
+  const running = activeSession && !activeSession.awaitingReport;
+  const reply = await chrome.runtime.sendMessage({ type: running ? "stopSession" : "runSession" });
   $("run-note").textContent = reply?.error ?? reply?.reason ?? (reply?.stopping ? "Stopping…" : "");
 });
 

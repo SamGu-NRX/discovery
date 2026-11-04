@@ -542,3 +542,66 @@ test("a Following timeline captured after home first loaded is still noted in th
     chrome.scripting.executeScript = execute;
   }
 });
+
+// Crash injection, found in review at 376c50c. A worker is "killed" by
+// abandoning a copy of session.js mid-flight (it never resumes) and
+// "restarted" by importing a fresh copy, which shares only stored state.
+let copies = 0;
+const workerCopy = () => import(`../app/lib/session.js?worker-${++copies}`);
+
+test("a login wall whose status report failed is still reported after the worker is killed and restarted", async () => {
+  await reset();
+  const doomed = await workerCopy();
+  const execute = chrome.scripting.executeScript;
+  chrome.scripting.executeScript = async (options) =>
+    options.args?.[0]?.name === "inspect"
+      ? [{ result: { ok: { account: "owner", blocker: "login_wall", evidence: "login form", path: "/home" } } }]
+      : execute(options);
+  statusDown = true;
+  try {
+    await doomed.startSession("manual");
+    const first = await ended.promise;
+    while (doomed.sessionInfo() !== null) await new Promise((resolve) => realSetTimeout(resolve, 1));
+    assert.equal(first.reported, false);
+  } finally {
+    chrome.scripting.executeScript = execute;
+  }
+
+  // Killed here; the restarted worker can reach the Worker again.
+  statusDown = false;
+  log.length = 0;
+  const restarted = await workerCopy();
+  await restarted.recoverInterruptedSession();
+  assert.ok(log.some((entry) => /^status:.+:login_wall$/.test(entry)), log.join(" "));
+  assert.equal(fake.session.get("activeSession"), undefined);
+});
+
+test("a 429 that arrived while recovery closed the old window is reported after the worker is killed mid-recovery", async () => {
+  await reset();
+  await chrome.storage.session.set({
+    activeSession: { id: "old", windowId: 7, account: "owner", stop: { reason: "stopped_by_user", detail: "Stop" }, completed: false },
+  });
+  const doomed = await workerCopy();
+  const closing = hold(chrome.windows, "remove");
+  doomed.recoverInterruptedSession(); // never resumes: the worker is killed below
+  await closing.entered;
+  assert.equal(doomed.requestStop("rate_limited", "HomeTimeline answered HTTP 429"), true);
+  await new Promise((resolve) => realSetTimeout(resolve, 1));
+
+  // Killed while recovery is still closing the window.
+  log.length = 0;
+  const restarted = await workerCopy();
+  await restarted.recoverInterruptedSession();
+  assert.ok(log.includes("status:old:rate_limited"), log.join(" "));
+});
+
+test("a 429 from another X tab during a session is reported once, on the session", async () => {
+  await reset();
+  const started = await session.startSession("manual");
+  await fromTab(500, { type: "x-status", operation: "HomeTimeline", status: 429 });
+  const report = await ended.promise;
+  await untilIdle();
+  assert.equal(report.status, "rate_limited");
+  assert.deepEqual(log.filter((entry) => entry.startsWith("status:")), [`status:${started.id}:rate_limited`]);
+  assert.ok(Date.parse(fake.local.get("pauseUntil")) > Date.now());
+});
