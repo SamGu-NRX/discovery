@@ -19,7 +19,9 @@ const fx = (path) => `http://127.0.0.1:8832${path}`;
 const check = (id) => s.call("POST", `/admin/watchers/${id}/check`);
 const events = async (id) => (await s.call("GET", `/admin/watchers/${id}`)).events;
 const addWatcher = (w) => s.call("POST", "/admin/watchers", { first_check_in_s: 3600, ...w });
-const posts = async (watcherId) => (await s.control("webhooks")).filter((p) => p.body.watcher_id === watcherId);
+// Watcher rule matches become watcher_event candidates keyed "<watcher>:<item id>".
+const candidates = async (watcherId) =>
+  (await s.call("GET", "/candidates?kind=watcher_event")).candidates.filter((c) => c.ref.startsWith(`${watcherId}:`));
 
 test("unchanged sources emit no events: 304, volatile JSON metadata, per-request page nonces", async () => {
   await addWatcher({ id: "t-unch-feed", kind: "atom", url: fx("/feed.xml"), interval_s: 600 });
@@ -53,7 +55,7 @@ test("a change emits exactly one event per new item, and seeded items never emit
   assert.equal((await events("t-chg-feed")).length, 2);
 });
 
-test("duplicate WebSub delivery creates one event and one notification, a bad signature none, and the poller agrees", async () => {
+test("duplicate WebSub delivery creates one event and one candidate, a bad signature none, and the poller agrees", async () => {
   await addWatcher({ id: "t-push", kind: "atom", url: fx("/feed.xml"), interval_s: 600, notify_all_new: true });
   await check("t-push");
 
@@ -77,9 +79,9 @@ test("duplicate WebSub delivery creates one event and one notification, a bad si
   const d = await s.call("GET", "/admin/watchers/t-push");
   assert.deepEqual(d.events.map((e) => e.dedupe_key), ["t-push:fx:entry:pushed"]);
   assert.equal(d.jobs.length, 1, "a duplicate delivery must not enqueue a second triage job");
-  const sent = await posts("t-push");
-  assert.equal(sent.length, 1, "seeding must not notify under notify_all_new, and a duplicate delivery must not notify twice");
-  assert.equal(sent[0].body.kind, "item.new");
+  const c = await candidates("t-push");
+  assert.deepEqual(c.map((x) => x.ref), ["t-push:fx:entry:pushed"], "seeding must not create candidates under notify_all_new, and a duplicate delivery must not create a second");
+  assert.equal(c[0].title, "Pushed video");
 });
 
 test("an expired lease is reclaimed by a second claimant; a done job and a stale owner are refused", async () => {
@@ -131,7 +133,7 @@ test("a matching new item switches the watcher to the hot interval, and it retur
   assert.ok(s.lines.some((l) => l.includes("[t-hot] interval switch normal(3600s) -> hot(60s)")));
 });
 
-test("a seeded rule match notifies once, never sets hot, and later checks notify only new matches, one POST per check", async () => {
+test("a seeded rule match becomes one candidate per open item, never sets hot, later checks add only new matches, and nothing POSTs", async () => {
   await s.control("add-job", { id: 4001, title: "Anthropic Fellows Program, Safety" });
   await s.control("add-job", { id: 4002, title: "Anthropic Fellows Program, Policy" });
   await addWatcher({ id: "t-seed", kind: "greenhouse", url: fx("/jobs.json"), interval_s: 1800, hot_interval_s: 60, hot_window_s: 3600, hot_rule: "fellow" });
@@ -144,72 +146,41 @@ test("a seeded rule match notifies once, never sets hot, and later checks notify
   const openFellows = s.fixtureState.jobs.filter((j) => /fellow/i.test(j.title)).length;
   assert.ok(openFellows >= 2);
   assert.equal(JSON.parse(ev[0].payload).count, openFellows);
-  let sent = await posts("t-seed");
-  assert.equal(sent.length, 1);
-  assert.equal(sent[0].body.kind, "seed.match");
-  for (const f of ["event_id", "kind", "watcher_id", "title", "url", "detected_at", "reason"]) assert.equal(typeof sent[0].body[f], "string", f);
+  const fellows = s.fixtureState.jobs.filter((j) => /fellow/i.test(j.title));
+  let c = await candidates("t-seed");
+  assert.deepEqual(c.map((x) => x.ref).sort(), fellows.map((j) => `t-seed:${j.id}`).sort());
+  assert.ok(c.every((x) => x.state === "new" && x.origin === "watcher" && x.url.startsWith("http")));
 
   await s.control("add-job", { id: 4003, title: "Office Manager" });
   const plain = await check("t-seed");
   assert.equal(plain.events_created, 1);
-  assert.equal((await posts("t-seed")).length, 1, "an unmatched new item and a re-check must not notify or repeat the seed match");
+  assert.equal((await candidates("t-seed")).length, fellows.length, "an unmatched new item and a re-check must not add candidates");
 
   await s.control("add-job", { id: 4004, title: "Fellows Program, Interpretability" });
   await s.control("add-job", { id: 4005, title: "Fellows Program, Alignment" });
   const two = await check("t-seed");
   assert.equal(two.events_created, 2);
-  sent = await posts("t-seed");
-  assert.equal(sent.length, 2, "two matches in one check must be one notification");
-  assert.match(sent[1].body.title, /^2 new matching items/);
+  assert.equal(two.candidates_created, 2);
+  c = await candidates("t-seed");
+  assert.equal(c.length, fellows.length + 2);
   assert.equal((await events("t-seed")).filter((e) => e.kind === "seed.match").length, 1);
+  assert.equal((await check("t-seed")).candidates_created, 0);
+  assert.deepEqual((await s.control("webhooks")).filter((p) => p.body.watcher_id), [], "watcher matches must not POST to any webhook");
 });
 
-test("notifications: a failed POST is recorded and retried by the cron with the same event_id, pause holds them, and at most 5 go out per day", async () => {
-  const hit = async (id, n) => {
-    await s.control("add-job", { id: 5000 + n, title: `Notify-case ${n}` });
-    return check(id);
-  };
-  await addWatcher({ id: "t-notify", kind: "greenhouse", url: fx("/jobs.json"), interval_s: 1800, notify_rule: "notify-case" });
-  await check("t-notify");
-
-  await s.control("webhook-status", { status: 500 });
-  await hit("t-notify", 1);
-  await s.control("webhook-status", { status: 200 });
-  let rows = (await s.call("GET", "/admin/notifications")).notifications.filter((n) => n.watcher_id === "t-notify");
-  assert.equal(rows[0].state, "failed");
-  assert.equal(rows[0].last_status, 500);
+test("the cron re-arms a watcher whose alarm was lost, and /health reports the run", async () => {
+  await addWatcher({ id: "t-cron", kind: "atom", url: fx("/feed.xml"), interval_s: 600, first_check_in_s: 0 });
+  await s.waitForFetches("t-cron", 1);
+  await s.call("POST", "/admin/watchers/t-cron/drop-alarm");
+  assert.equal((await s.call("GET", "/admin/watchers/t-cron")).alarm_at, null);
+  // A lost alarm is only presumed after the grace period; backdate instead of waiting.
+  await s.d1(`UPDATE watchers SET next_check_at = ${Date.now() - 120_000} WHERE id = 't-cron'`);
   assert.equal((await fetch(`${s.base}/__scheduled?cron=*/15+*+*+*+*`)).status, 200);
-  rows = (await s.call("GET", "/admin/notifications")).notifications.filter((n) => n.watcher_id === "t-notify");
-  assert.equal(rows[0].state, "sent");
-  assert.equal(rows[0].last_status, 200);
-  assert.equal(rows[0].attempts, 2);
-  const tries = await posts("t-notify");
-  assert.deepEqual(tries.map((p) => p.status), [500, 200]);
-  assert.equal(tries[0].body.event_id, tries[1].body.event_id);
-  assert.ok((await (await fetch(`${s.base}/health`)).json()).last_cron_at, "health must report the cron run");
-
-  await s.call("POST", "/admin/notifications/pause", { paused: true });
-  await hit("t-notify", 2);
-  await s.call("POST", "/admin/notifications/pause", { paused: false });
-  rows = (await s.call("GET", "/admin/notifications")).notifications.filter((n) => n.watcher_id === "t-notify");
-  assert.equal(rows[0].state, "paused");
-  assert.equal((await posts("t-notify")).length, 2, "a paused notification must not be sent");
-
-  // Fill the rest of today's cap, then one more.
-  let n = 3;
-  for (;;) {
-    const { used_today } = await s.call("GET", "/admin/notifications");
-    if (used_today >= 5) break;
-    await hit("t-notify", n++);
-  }
-  const before = (await s.control("webhooks")).length;
-  await hit("t-notify", n++);
-  const all = (await s.call("GET", "/admin/notifications")).notifications;
-  assert.equal(all[0].state, "capped");
-  assert.equal((await s.control("webhooks")).length, before, "a capped notification must not be sent");
-  const today = new Date().toISOString().slice(0, 10);
-  const sentToday = new Set((await s.control("webhooks")).filter((p) => p.status === 200 && p.body.detected_at.startsWith(today)).map((p) => p.body.event_id));
-  assert.equal(sentToday.size, 5);
+  const d = await s.call("GET", "/admin/watchers/t-cron");
+  assert.equal(d.fetch_log.at(-1).via, "backstop");
+  assert.ok(d.alarm_at > Date.now(), "the backstop check must re-arm the alarm");
+  const health = await (await fetch(`${s.base}/health`)).json();
+  assert.ok(Date.now() - Date.parse(health.last_cron_at) < 10_000, "health must report the cron run");
 });
 
 test("a failing primary URL falls back without counting as a failure, and the switch emits nothing", async () => {

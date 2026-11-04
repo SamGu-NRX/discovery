@@ -2,12 +2,15 @@
 # Deploys discovery-watcher to the Cloudflare account wrangler is logged in to.
 #
 # Creates exactly one cloud resource (the D1 database "discovery-watcher"),
-# applies migrations remotely, deploys the Worker with its one cron, sets three
-# secrets and registers the production watchers. The first checks run right
-# after registration, and the Greenhouse seed sends one POST to the T3 webhook.
+# applies migrations remotely, deploys the Worker with its one cron and the
+# Workers AI binding, sets the secrets and registers the production watchers.
+# Watcher matches become candidates; nothing here POSTs to T3.
 #
 # Secrets are read from ~/.agent-secrets and piped to wrangler; none is
-# printed. ADMIN_TOKEN and WEBSUB_SECRET are generated on the first run.
+# printed. The four tokens are generated on the first run.
+# T3_APPROVALS_WEBHOOK_URL is set only if
+# ~/.agent-secrets/discovery-t3-approvals-webhook-url exists; without it,
+# proposals wait unnotified.
 #
 # Usage: scripts/deploy-production.sh     (re-running is safe; each step checks first)
 
@@ -17,11 +20,10 @@ W=node_modules/.bin/wrangler
 S="$HOME/.agent-secrets"
 export CI=1 WRANGLER_SEND_METRICS=false
 
-[ -s "$S/discovery-t3-webhook-url" ] || { echo "missing $S/discovery-t3-webhook-url" >&2; exit 1; }
 "$W" whoami | grep -E 'logged in|Account' | head -3
 
 umask 077
-for name in discovery-admin-token discovery-websub-secret; do
+for name in discovery-admin-token discovery-websub-secret discovery-ingest-token discovery-runner-token; do
   [ -s "$S/$name" ] || openssl rand -hex 32 > "$S/$name"
   chmod 600 "$S/$name"
 done
@@ -42,7 +44,13 @@ url=$(grep -oE 'https://discovery-watcher\.[a-z0-9-]+\.workers\.dev' .wrangler/d
 
 "$W" secret put ADMIN_TOKEN < "$S/discovery-admin-token"
 "$W" secret put WEBSUB_SECRET < "$S/discovery-websub-secret"
-"$W" secret put T3_WEBHOOK_URL < "$S/discovery-t3-webhook-url"
+"$W" secret put INGEST_TOKEN < "$S/discovery-ingest-token"
+"$W" secret put RUNNER_TOKEN < "$S/discovery-runner-token"
+if [ -s "$S/discovery-t3-approvals-webhook-url" ]; then
+  "$W" secret put T3_APPROVALS_WEBHOOK_URL < "$S/discovery-t3-approvals-webhook-url"
+else
+  echo "T3_APPROVALS_WEBHOOK_URL not set: no $S/discovery-t3-approvals-webhook-url"
+fi
 
 # Secrets reach a new deployment within seconds; wait until the token works.
 for _ in $(seq 1 30); do

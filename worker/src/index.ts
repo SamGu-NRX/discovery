@@ -1,7 +1,10 @@
 import type { Kind } from "./adapters";
+import { callerScope, type Scope } from "./auth";
+import { claimCandidates, completeCandidate, createCandidate, listCandidates } from "./candidates";
 import type { Env, WatcherRow } from "./check";
-import { DAILY_CAP, retryNotifications } from "./notify";
+import { HttpError, json, readJson } from "./http";
 import { handleDelivery, handleVerification, requestSubscription } from "./websub";
+import { addPositives, detailQueue, embed, ingest, ingestStatus, listPositives, listPosts, postContext, saveScores } from "./x";
 
 export { WatcherDO } from "./watcher";
 
@@ -11,34 +14,11 @@ const BACKSTOP_GRACE_MS = 60_000;
 
 const KINDS: Kind[] = ["atom", "greenhouse", "hn", "page", "youtube_page"];
 
-class HttpError extends Error {
-  constructor(
-    readonly status: number,
-    message: string,
-  ) {
-    super(message);
-  }
-}
-
-const json = (data: unknown, status = 200) =>
-  new Response(JSON.stringify(data, null, 2), { status, headers: { "content-type": "application/json" } });
-
 function stub(env: Env, watcherId: string) {
   return env.WATCHER.get(env.WATCHER.idFromName(watcherId));
 }
 
-function requireAdmin(req: Request, env: Env) {
-  if (!env.ADMIN_TOKEN) throw new HttpError(500, "ADMIN_TOKEN is not set; see .dev.vars.example");
-  if (req.headers.get("authorization") !== `Bearer ${env.ADMIN_TOKEN}`) throw new HttpError(401, "bad or missing bearer token");
-}
-
-async function body<T>(req: Request): Promise<T> {
-  try {
-    return (await req.json()) as T;
-  } catch {
-    throw new HttpError(400, "body must be JSON");
-  }
-}
+const body = <T>(req: Request) => readJson<T>(req);
 
 interface NewWatcher {
   id: string;
@@ -143,6 +123,54 @@ async function watcherDetail(env: Env, id: string) {
   return { watcher: w, alarm_at: await stub(env, id).alarmAt(), seen_items: seen?.n ?? 0, events: events.results, jobs: jobs.results, fetch_log: log.results };
 }
 
+type Handler = (req: Request, env: Env, url: URL, params: string[]) => Promise<Response>;
+
+interface Route {
+  method: "GET" | "POST";
+  path: RegExp;
+  // Tokens that may call this route besides ADMIN_TOKEN, which may call all.
+  scopes: Scope[];
+  handler: Handler;
+}
+
+const ok = (p: Promise<unknown>, status = 200) => p.then((data) => json(data, status));
+
+// docs/CONTRACT.md, "Tokens". A token not listed for a route gets 403.
+const ROUTES: Route[] = [
+  { method: "POST", path: /^\/ingest\/x$/, scopes: ["ingest"], handler: (req, env) => ok(ingest(env, req)) },
+  { method: "POST", path: /^\/ingest\/x\/status$/, scopes: ["ingest"], handler: (req, env) => ok(ingestStatus(env, req)) },
+  { method: "GET", path: /^\/x\/detail-queue$/, scopes: ["ingest"], handler: (_r, env, url) => ok(detailQueue(env, url)) },
+  { method: "GET", path: /^\/x\/posts$/, scopes: ["runner"], handler: (_r, env, url) => ok(listPosts(env, url)) },
+  { method: "POST", path: /^\/x\/posts\/scores$/, scopes: ["runner"], handler: (req, env) => ok(saveScores(env, req)) },
+  { method: "GET", path: /^\/x\/posts\/([^/]+)\/context$/, scopes: ["runner"], handler: (_r, env, _u, [id]) => ok(postContext(env, id)) },
+  { method: "POST", path: /^\/embed$/, scopes: ["runner"], handler: (req, env) => ok(embed(env, req)) },
+  { method: "POST", path: /^\/positives$/, scopes: ["runner"], handler: (req, env) => ok(addPositives(env, req)) },
+  { method: "GET", path: /^\/positives$/, scopes: ["runner"], handler: (_r, env, url) => ok(listPositives(env, url)) },
+  {
+    method: "POST",
+    path: /^\/candidates$/,
+    scopes: ["runner"],
+    handler: async (req, env) => {
+      const r = await createCandidate(env, await body(req));
+      return json(r.body, r.status);
+    },
+  },
+  { method: "GET", path: /^\/candidates$/, scopes: ["runner"], handler: (_r, env, url) => ok(listCandidates(env, url)) },
+  { method: "POST", path: /^\/candidates\/claim$/, scopes: ["runner"], handler: async (req, env) => ok(claimCandidates(env, await body(req))) },
+  { method: "POST", path: /^\/candidates\/([^/]+)\/complete$/, scopes: ["runner"], handler: async (req, env, _u, [id]) => ok(completeCandidate(env, id, await body(req))) },
+];
+
+function match(req: Request, url: URL): { route: Route; params: string[] } | "wrong_method" | null {
+  let pathMatched = false;
+  for (const route of ROUTES) {
+    const m = url.pathname.match(route.path);
+    if (!m) continue;
+    pathMatched = true;
+    if (route.method === req.method) return { route, params: m.slice(1).map(decodeURIComponent) };
+  }
+  return pathMatched ? "wrong_method" : null;
+}
+
 async function route(req: Request, env: Env): Promise<Response> {
   const url = new URL(req.url);
   const parts = url.pathname.split("/").filter(Boolean);
@@ -167,7 +195,15 @@ async function route(req: Request, env: Env): Promise<Response> {
     if (req.method === "POST") return handleDelivery(env, parts[1], req);
   }
 
-  requireAdmin(req, env);
+  const scope = await callerScope(req, env);
+  const found = match(req, url);
+  if (found === "wrong_method") throw new HttpError(405, `${req.method} is not allowed on ${url.pathname}`);
+  if (found) {
+    if (scope !== "admin" && !found.route.scopes.includes(scope)) throw new HttpError(403, `the ${scope} token cannot call ${req.method} ${url.pathname}`);
+    return found.route.handler(req, env, url, found.params);
+  }
+  // Everything below is the watcher administration API: ADMIN_TOKEN only.
+  if (scope !== "admin") throw new HttpError(403, `the ${scope} token cannot call ${req.method} ${url.pathname}`);
 
   if (parts[0] === "admin" && parts[1] === "watchers") {
     const id = parts[2];
@@ -193,12 +229,8 @@ async function route(req: Request, env: Env): Promise<Response> {
     return json((await q.all()).results);
   }
   if (parts[0] === "admin" && parts[1] === "notifications" && !parts[2] && req.method === "GET") {
-    const today = new Date().toISOString().slice(0, 10);
-    const [rows, used] = await Promise.all([
-      env.DB.prepare("SELECT * FROM notifications ORDER BY id DESC LIMIT 100").all(),
-      env.DB.prepare("SELECT count(*) AS n FROM notifications WHERE day = ? AND state IN ('pending', 'sent', 'failed')").bind(today).first<{ n: number }>(),
-    ]);
-    return json({ day: today, used_today: used?.n ?? 0, daily_cap: DAILY_CAP, notifications: rows.results });
+    // Watcher notifications stopped in v2; these are the rows from before.
+    return json({ legacy_watcher_notifications: (await env.DB.prepare("SELECT * FROM notifications ORDER BY id DESC LIMIT 100").all()).results });
   }
   if (parts[0] === "admin" && parts[1] === "notifications" && parts[2] === "pause" && req.method === "POST") {
     const b = await body<{ paused: boolean }>(req);
@@ -267,8 +299,7 @@ export default {
   },
 
   // The one cron (Workers Free allows five per account). Watchers schedule
-  // themselves; this catches lost alarms, retries failed notifications, and
-  // records the run for /health.
+  // themselves; this catches lost alarms and records the run for /health.
   async scheduled(controller: ScheduledController, env: Env): Promise<void> {
     const now = Date.now();
     const { results } = await env.DB.prepare(
@@ -282,10 +313,9 @@ export default {
       const r = await stub(env, w.id).checkNow("backstop");
       console.log(`[backstop] ${w.id} re-armed, next check in ${r.next_interval_s}s`);
     }
-    const retried = await retryNotifications(env, Date.now());
-    await env.DB.prepare("INSERT INTO cron_runs (ts, cron, overdue_checked, notifications_retried) VALUES (?1, ?2, ?3, ?4)")
-      .bind(now, controller.cron, results.length, retried)
+    await env.DB.prepare("INSERT INTO cron_runs (ts, cron, overdue_checked, notifications_retried) VALUES (?1, ?2, ?3, 0)")
+      .bind(now, controller.cron, results.length)
       .run();
-    console.log(`[cron] done overdue_checked=${results.length} notifications_retried=${retried}`);
+    console.log(`[cron] done overdue_checked=${results.length}`);
   },
 } satisfies ExportedHandler<Env>;
