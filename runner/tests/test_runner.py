@@ -6,6 +6,7 @@ never asserted.
 import datetime as dt
 import json
 import os
+import re
 import sys
 import tempfile
 import unittest
@@ -274,8 +275,8 @@ class BudgetsAndStop(Home):
         self.assertEqual([x["stage"] for x in self.gw.calls], ["You triage"])
         self.assertEqual(self.mock.state.candidates[c["id"]]["state"], "new")
 
-    def test_exhausted_deep_read_budget_claims_nothing(self):
-        r = self.runner({}, deep_reads_per_day=2)
+    def test_runaway_guard_on_deep_reads_claims_nothing(self):
+        r = self.runner({}, max_deep_reads_per_day=2)
         self.assertTrue(config.take("deep_reads", 2, 2))
         self.captured_post()
         self.assertEqual(r.work(), [])
@@ -464,31 +465,21 @@ class RegressionClasses(Home):
     """One test per loss class found by the regression gate (runner/README.md, Grading)."""
     URL = OpenApplications.URL
 
-    def test_spent_prep_budget_still_posts_the_application_package(self):
-        # class: budget. Fails if an application gets "prep budget used up" instead of its package (round 5,
-        # both Research Resident postings; the gate confirmed it as a regression)
+    def test_runaway_prep_guard_still_posts_the_application_package(self):
+        # class: budget. Fails if an application ends without its package when prep cannot run (round 5, both
+        # Research Resident postings; the gate confirmed it as a regression)
         package = {"decline": False, "kind": "apply_or_attend", "title": "Acme Fellows application", "why": "w",
                    "target": "acme.com:fellows", "prep": {"needs_tools": True, "task": "read the live form"},
                    "evidence": [], "application": {"employer": "Acme", "employer_domain": "acme.com",
                    "fields": [{"name": "Graduation", "kind": "fact", "value": "May 2028", "source": "facts"}]}}
         r = self.runner({"You triage": {"action_type": "apply_or_attend", "why_it_matters": "w"},
-                         "You deep-read": package, "independent": JUDGE_OK}, codex_preps_per_day=0)
+                         "You deep-read": package, "independent": JUDGE_OK}, max_codex_preps_per_day=0)
         OpenApplications.seed_posting(self)
         run = r.work()[0]
         (p,) = self.mock.state.proposals.values()
         self.assertEqual(p["final_step_kind"], "submit")
-        self.assertIn("Prep not run today", p["why"])
+        self.assertIn("Prep did not run", p["why"])
         self.assertNotIn("preps", run)
-
-    def test_spent_prep_budget_requeues_other_tool_work(self):
-        # class: budget. Fails if non-application tool work runs past the share reserved for applications
-        dr = deep_read("~/x", draft=None, prep={"needs_tools": True, "task": "build it"}, value=5)
-        r = self.runner({"You triage": TRIAGE_TRY, "You deep-read": dr, "independent": JUDGE_OK}, codex_preps_per_day=2)
-        # value 5: worth waiting for, so it is re-queued rather than declined
-        self.captured_post()
-        run = r.work()[0]
-        self.assertIn("reserved for applications", run["complete"]["note"])
-        self.assertEqual(config.used("codex_preps"), 0)
 
     def test_nothing_to_ask_and_nothing_found_is_not_a_proposal(self):
         # class: busywork. Fails if a negative result (no final step, no finding) is posted as a proposal
@@ -526,16 +517,71 @@ class RegressionClassesRound6(Home):
         self.assertIn("RAILWAY_TOKEN", " ".join(ex["evidence"]))
         self.assertNotIn("sk-super-secret-value", json.dumps(ex))
 
-    def test_low_value_work_under_budget_pressure_gets_its_reason(self):
-        # class: budget. Fails if lower-value tool work shows Sam "prep budget is reserved" instead of a reason
-        # (round 6: a save an earlier round declined with a real reason)
-        dr = deep_read("~/x", draft=None, prep={"needs_tools": True, "task": "build it"}, value=3,
-                       value_reason="an active thread already covers this reference")
-        r = self.runner({"You triage": TRIAGE_TRY, "You deep-read": dr, "independent": JUDGE_OK}, codex_preps_per_day=2)
-        self.captured_post()
+BIN = Path(__file__).resolve().parent / "bin"
+PLACEHOLDER = re.compile(r"\bbudget\b|\breserved\b|^waiting\b|prep ceiling|deep-read ceiling", re.I)
+
+
+def pool_snapshot(path, usable):
+    accs = {f"acct-{i}": {"sampledAt": iso(now()), "planType": "pro", "allowed": i < usable, "limitReached": i >= usable,
+                          "windows": [{"kind": "secondary", "usedPercent": 10 if i < usable else 100}]} for i in range(3)}
+    Path(path).write_text(json.dumps(accs))
+
+
+class Allocation(Home):
+    """Prep runs on headroom, not a fixed daily count (director, Nov 4: budgets caused 3 of 5 confirmed regressions)."""
+
+    def setUp(self):
+        super().setUp()
+        self._path = os.environ["PATH"]
+        os.environ["PATH"] = f"{BIN}:{self._path}"
+        self.snap = Path(self.tmp.name) / "codex-usage-latest.json"
+
+    def tearDown(self):
+        os.environ["PATH"] = self._path
+        super().tearDown()
+
+    def test_no_item_in_a_round_ends_in_a_budget_placeholder(self):
+        # fails if any candidate in a full round with pool headroom ends waiting, deferred or with a budget note
+        # (rounds 4 to 6 showed Sam "prep budget used up / reserved" for items that deserved an outcome)
+        pool_snapshot(self.snap, usable=3)
+        tool = deep_read("~/x", draft=None, prep={"needs_tools": True, "task": "build it"}, value=3,
+                         final_step_kind="open_pr", final_step="open the PR")
+        r = self.runner({"You triage": TRIAGE_TRY, "You deep-read": tool, "independent": JUDGE_OK},
+                        codex_usage_snapshot=str(self.snap))
+        for i in range(9):
+            self.captured_post(str(500 + i), text=f"tool number {i} for agent runners")
+        runs = []
+        while True:
+            batch = r.work()
+            if not batch:
+                break
+            runs += batch
+        self.assertEqual(len(runs), 9)
+        for run in runs:
+            self.assertNotEqual(run["complete"]["state"], "new", run["complete"]["note"])
+            self.assertIsNone(PLACEHOLDER.search(run["complete"]["note"]), run["complete"]["note"])
+
+    def test_constrained_pool_holds_lower_value_work_and_never_posts_it(self):
+        # fails if a real shortage posts a placeholder, or holds back priority work (value 4+, applications)
+        pool_snapshot(self.snap, usable=0)
+        low = deep_read("~/x", draft=None, prep={"needs_tools": True, "task": "build it"}, value=3)
+        r = self.runner({"You triage": TRIAGE_TRY, "You deep-read": low, "independent": JUDGE_OK},
+                        codex_usage_snapshot=str(self.snap))
+        c = self.captured_post()
         run = r.work()[0]
-        self.assertEqual(run["complete"]["state"], "skipped")
-        self.assertIn("an active thread already covers this reference", run["complete"]["note"])
+        self.assertEqual(run["complete"]["state"], "new")
+        self.assertEqual(self.mock.state.proposals, {})
+        self.assertEqual(self.mock.state.candidates[c["id"]]["state"], "new")
+
+    def test_constrained_pool_still_preps_high_value_work(self):
+        pool_snapshot(self.snap, usable=0)
+        high = deep_read("~/x", draft=None, prep={"needs_tools": True, "task": "build it"}, value=4)
+        r = self.runner({"You triage": TRIAGE_TRY, "You deep-read": high, "independent": JUDGE_OK},
+                        codex_usage_snapshot=str(self.snap))
+        self.captured_post()
+        r.work()
+        (p,) = self.mock.state.proposals.values()
+        self.assertEqual(p["final_step_kind"], "open_pr")
 
 
 class Scoring(Home):

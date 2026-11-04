@@ -40,7 +40,7 @@ The runner checks STOP before it claims work and between steps (each model call,
 6. **Employer AI-use guidance.** For applications, essay fields are always left blank unless the employer's guidance page explicitly allows AI drafting. The pages are listed in `ai_guidance` in the config. Anthropic's page asks candidates to write their own first draft. Other fields are filled only from the verified facts in the application-letters skill.
 7. **Duplicates** merge into the existing proposal when they act on the same target, or when they fall within 14 days at cosine 0.85 or above.
 8. **Independent judge**, gpt-6-astra at low effort, a different model from the proposer. If it rejects the proposal or flags it as busywork, the candidate is skipped. If it says "maybe", the proposal is recorded as done without asking.
-9. **Prep.** The runner writes `PROPOSAL.md` and any application draft into `~/.discovery/work/<id>/`. When the work needs tools and the judge approved it, it runs `codex exec` with gpt-6.1-sol there under `--sandbox workspace-write`. Network comes only from `sandbox_workspace_write.network_access`, stdin is closed, and the run stops after 10 minutes. No bypass flag is ever passed. Scratch over 200 MB loses its clones. If prep finds the premise false, the proposal is dropped.
+9. **Prep.** The runner writes `PROPOSAL.md` and any application draft into `~/.discovery/work/<id>/`. When the work needs tools, it runs `codex exec` with gpt-6.1-sol there under `--sandbox workspace-write`. Network comes only from `sandbox_workspace_write.network_access`, stdin is closed, and the run stops after 10 minutes. No bypass flag is ever passed. Scratch over 200 MB loses its clones. If prep finds the premise false, the proposal is dropped.
 10. `POST /proposals`, which goes to the outbox if the route isn't live. Then the candidate is completed. If the lease expired along the way, nothing is posted.
 
 ## Config: `~/.discovery/config.json`
@@ -49,8 +49,8 @@ The file is created with defaults on first run, and unknown keys are an error. T
 
 | Key | Default | |
 | --- | --- | --- |
-| `deep_reads_per_day` | 20 | `work` claims nothing once the budget is used up |
-| `codex_preps_per_day` | 5 | |
+| `max_deep_reads_per_day`, `max_codex_preps_per_day` | 60, 50 | Runaway guards, not budgets: a full 19-candidate round used 24 deep reads and about 14 preps (at most 2 per item), and daily inflow is about 25 candidates |
+| `codex_usage_snapshot`, `pool_weekly_ceiling_pct`, `pool_min_usable_accounts` | AgentSetup snapshot, 90, 1 | Prep runs while the Codex pool has headroom. Only a measured shortage holds work back, and then applications, deadlines, security notices and value 4+ go first; the rest waits in the queue, never as a card |
 | `prep_timeout_s`, `prep_scratch_mb` | 600, 200 | |
 | `unbookmarked_candidates_per_day` | 15 | The Worker enforces the same cap |
 | `score_threshold` | 0.75 | The contract's starting value; see Calibration |
@@ -59,7 +59,7 @@ The file is created with defaults on first run, and unknown keys are an error. T
 | `coursework` | | Course codes, paths, exceptions, domains and words that are never touched |
 | `models`, `judge_effort` | luna / sol / astra, low | |
 
-Budgets are counted per UTC day in `~/.discovery/state/usage.json`.
+Usage is counted per UTC day in `~/.discovery/state/usage.json`. A runaway guard tripping is logged as `RUNAWAY GUARD` in `runner.out.log`; it means a loop, not a busy day.
 
 ## Logs and state
 

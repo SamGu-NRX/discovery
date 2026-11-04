@@ -24,8 +24,20 @@ DEFAULTS = {
     "session_top_fraction": 0.02,
     "author_prior": 0.02,
     "unbookmarked_candidates_per_day": 15,
-    "deep_reads_per_day": 20,
-    "codex_preps_per_day": 5,
+    # Runaway guards, not budgets. Measured on two full 19-candidate rounds (Nov 4, rounds 5 and 6): 24 deep
+    # reads each (at most 2 per item) and 12 codex preps each, capped, on 8 to 9 items (at most 2 per item);
+    # uncapped demand was about 14 preps. Daily inflow is at most about 25 candidates: 15 unbookmarked (the
+    # contract cap), about 3.5 saves a day (69 saves Oct 7 to 26), and a few watcher events. 25 x 2 = 50 deep
+    # reads and preps, so 60 and 50 stop a loop (round 6's re-claim loop) without ever binding on real work.
+    "max_deep_reads_per_day": 60,
+    "max_codex_preps_per_day": 50,
+    # Prep runs while the Codex pool has headroom, read from AgentSetup's usage snapshot (written by
+    # scripts/codex-usage.mjs, a read-only quota probe). On Nov 4 at 21:28Z: 6 of 13 accounts usable at 0-39%
+    # of their weekly window; a full round used about 0.7-0.8M codex tokens. Constrained means fewer than
+    # pool_min_usable_accounts accounts below pool_weekly_ceiling_pct.
+    "codex_usage_snapshot": "~/Library/Application Support/AgentSetup/codex-usage-latest.json",
+    "pool_weekly_ceiling_pct": 90,
+    "pool_min_usable_accounts": 1,
     "prep_timeout_s": 600,
     "prep_scratch_mb": 200,
     "claim_limit": 3,
@@ -70,6 +82,9 @@ def load() -> dict:
     if not f.exists():
         f.write_text(json.dumps(DEFAULTS, indent=2) + "\n")
     cfg = json.loads(f.read_text())
+    # Keys retired on Nov 4 (fixed daily budgets that starved items; see max_codex_preps_per_day) are dropped.
+    for old in ("deep_reads_per_day", "codex_preps_per_day"):
+        cfg.pop(old, None)
     unknown = set(cfg) - set(DEFAULTS)
     if unknown:
         raise ValueError(f"{f}: unknown config keys {sorted(unknown)}")
@@ -103,6 +118,33 @@ def _usage():
         tmp = f.with_suffix(".tmp")
         tmp.write_text(json.dumps(data, indent=1))
         tmp.replace(f)
+
+
+def pool_headroom(cfg) -> dict:
+    """Codex pool headroom from AgentSetup's snapshot: usable accounts below the weekly ceiling.
+
+    A missing or day-old snapshot is "unknown", and unknown is not constrained: only measured shortage holds
+    work back, and the runaway guard still bounds a day."""
+    import datetime as _dt
+    f = Path(cfg["codex_usage_snapshot"]).expanduser()
+    if not f.exists():
+        return {"state": "unknown", "reason": f"no snapshot at {f}"}
+    data = json.loads(f.read_text())
+    fresh = _dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(hours=24)
+    usable, sampled = 0, 0
+    for acc in data.values():
+        if not isinstance(acc, dict) or "sampledAt" not in acc:
+            continue
+        if parse_iso(acc["sampledAt"]) < fresh:
+            continue
+        sampled += 1
+        weekly = next((w.get("usedPercent") for w in acc.get("windows") or [] if w.get("kind") == "secondary"), None)
+        if acc.get("allowed") and not acc.get("limitReached") and (weekly is None or weekly < cfg["pool_weekly_ceiling_pct"]):
+            usable += 1
+    if not sampled:
+        return {"state": "unknown", "reason": "no account sampled in the last 24 h"}
+    return {"state": "constrained" if usable < cfg["pool_min_usable_accounts"] else "available",
+            "usable_accounts": usable, "sampled_accounts": sampled}
 
 
 def used(kind: str) -> int:

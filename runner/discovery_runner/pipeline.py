@@ -23,7 +23,9 @@ from .scoring import EmbeddingCache, cos
 from .worker import LeaseLost, WorkerError, WorkerUnavailable, new_client_id, submit_proposal
 
 ACTIONABLE = set(prompts.ACTION_TYPES) - {"no_action", "reference_note"}
-PREP_RESERVE = 2  # daily codex preps only applications may use
+# When the Codex pool is constrained (config.pool_headroom), these kinds of work still prep; other work waits in
+# the queue. Fixed daily budgets starved one item class after another on Nov 4 (gates 5 and 6).
+PRIORITY_VALUE = 4
 
 
 # The lease owner. Random per process start, because hostname+PID collides when a restarted runner gets a
@@ -121,8 +123,8 @@ class Runner:
         # Only the deep-read budget stops claiming. An exhausted prep budget is handled per candidate: applications
         # still post their package built from the facts, and other work returns to the queue (rounds 4 and 5 left
         # application postings with no outcome behind a spent prep budget).
-        if config.used("deep_reads") >= self.cfg["deep_reads_per_day"]:
-            self.log("work: deep_reads budget used up for today; nothing claimed")
+        if config.used("deep_reads") >= self.cfg["max_deep_reads_per_day"]:
+            self.log(f"work: RUNAWAY GUARD: {config.used('deep_reads')} deep reads today; nothing claimed")
             return []
         cands = self.worker.claim(self.owner, self.cfg["claim_ttl_s"], self.cfg["claim_limit"])
         # Watcher events (job postings, mostly) first within a batch: they carry deadlines and the prep budget
@@ -148,7 +150,7 @@ class Runner:
         cfg = self.cfg
         run = {"candidate": cand, "started_at": config.now_iso(), "owner": self.owner}
         held = deferred_today(cand["ref"])
-        if held and config.used("codex_preps") >= cfg["codex_preps_per_day"] - PREP_RESERVE:
+        if held and config.pool_headroom(cfg)["state"] == "constrained":
             # Already deep-read today and waiting for prep budget: no model calls until tomorrow (round 6 re-read
             # the same deferred candidates every cycle).
             return self.complete(cand, "new", held, run)
@@ -196,8 +198,8 @@ class Runner:
             tri["upgraded_from"] = "reference_note: connects to 2+ related saves"
 
         config.check_stop()
-        if not config.take("deep_reads", cfg["deep_reads_per_day"]):
-            return self.complete(cand, "new", "deep-read budget used up for today; retry tomorrow", run)
+        if not config.take("deep_reads", cfg["max_deep_reads_per_day"]):
+            return self.complete(cand, "new", "runaway guard: deep-read ceiling reached today; waiting", run)
         prop = self.deep_read(cand, b, user, tri, run)
         if prop is None:
             return run
@@ -293,22 +295,15 @@ class Runner:
                                      f"(PATH, config paths, file names and .env variable names under "
                                      f"{', '.join(ex['roots'])}, {ex['scanned_files']} files)", run)
             prop["why"] = (prop.get("why") or "") + " Found on this Mac: " + "; ".join(ex["evidence"][:6])
-        if needs_tools and not is_app and not is_security:
-            # Round 4 spent the whole prep budget on optional tool trials and left four application postings with
-            # no outcome. Applications may use every prep; other work stops PREP_RESERVE short of the limit and
-            # needs a value of 3 or more.
-            if value < 3:
-                return self.complete(cand, "skipped", f"value {value}/5 is below the bar for tool prep: "
-                                                      f"{prop.get('value_reason')}", run)
-            if config.used("codex_preps") >= cfg["codex_preps_per_day"] - PREP_RESERVE:
-                if value < 4:
-                    # Only work worth waiting for waits; the rest gets its reason now (round 6 showed Sam
-                    # "prep budget is reserved" for a save an earlier round declined with a real reason).
-                    return self.complete(cand, "skipped", f"not worth a prep today at value {value}/5: "
-                                                          f"{prop.get('value_reason')}", run)
-                note = "prep budget is reserved for applications today"
-                defer_today(cand["ref"], note)
-                return self.complete(cand, "new", note, run)
+        if needs_tools and not is_app and not is_security and value < 3:
+            # The deep read's own judgment, not a budget: it proposed tool work it rates below 3 of 5.
+            return self.complete(cand, "skipped", f"declined at value {value}/5: {prop.get('value_reason')}", run)
+        priority = is_app or is_security or value >= PRIORITY_VALUE or bool((prop.get("application") or {}).get("deadline"))
+        if needs_tools and not priority and config.pool_headroom(cfg)["state"] == "constrained":
+            # Waiting in the queue is not an outcome: complete("new") returns it, and Sam never sees it.
+            note = "waiting: the Codex pool is constrained and this item ranks below applications, deadlines and value 4+"
+            defer_today(cand["ref"], note)
+            return self.complete(cand, "new", note, run)
         if not (prop.get("application") or (prop.get("draft") or {}).get("text") or needs_tools):
             if not prep_spec.get("task"):
                 return self.complete(cand, "skipped", "nothing to prepare: the deep read named no deliverable", run)
@@ -322,18 +317,17 @@ class Runner:
             # One rework at most: a blocked prep or a judge "maybe" gets a second pass told what to fix. Only a
             # ready prep the judge approves is posted (round 2: blocked and "maybe" cards misled Sam).
             made_items = []
-            if needs_tools and not is_app and attempt and \
-                    config.used("codex_preps") >= cfg["codex_preps_per_day"] - PREP_RESERVE:
-                break  # rework obeys the application reserve too (round 6: reworks of posts used it up)
+            if needs_tools and attempt and not priority and config.pool_headroom(cfg)["state"] == "constrained":
+                break  # rework is the first thing a constrained pool gives up, for lower-priority work
             if needs_tools:
                 config.check_stop()
-                if not config.take("codex_preps", cfg["codex_preps_per_day"]):
+                if not config.take("codex_preps", cfg["max_codex_preps_per_day"]):
+                    self.log(f"RUNAWAY GUARD: {cfg['max_codex_preps_per_day']} codex preps today")
                     if not (is_app and items):
-                        return self.complete(cand, "skipped" if attempt else "new",
-                                             f"codex prep budget used up{'; last review: ' + rework if rework else ''}", run)
+                        return self.complete(cand, "new", "runaway guard: prep ceiling reached today; waiting", run)
                     needs_tools = False
                     if not run.get("preps"):
-                        prop["why"] = (prop.get("why") or "") + " Prep not run today (budget); the package is " \
+                        prop["why"] = (prop.get("why") or "") + " Prep did not run (runaway guard); the package is " \
                                                                 "built from the facts and the posting."
             if needs_tools:
                 if attempt == 0:
