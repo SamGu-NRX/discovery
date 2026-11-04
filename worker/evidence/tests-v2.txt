@@ -1,0 +1,27 @@
+
+> test
+> node --test test/
+
+✔ each token reaches only its own routes (1090.729584ms)
+✔ ingest upserts posts with the latest metrics, writes one sighting per post per batch, and makes one candidate per newly bookmarked post (41.827583ms)
+✔ a captured thread leaves the detail queue and reads back in server order; a non-ok session pauses the account (18.980125ms)
+✔ candidates: an expired lease is reclaimed, a stale owner gets 409, and a candidate that keeps expiring fails instead of looping (2168.060416ms)
+✔ a proposal with no irreversible step is done at once and never notifies (10.145ms)
+✔ an approval link is single-use, bound to the inputs_hash it showed, escapes proposal text, and dies at expiry (1175.129292ms)
+✔ at most 3 approval notifications go out per UTC day, and a retried proposal never notifies twice (22.971ms)
+✔ unchanged sources emit no events: 304, volatile JSON metadata, per-request page nonces (1116.106625ms)
+✔ a change emits exactly one event per new item, and seeded items never emit (28.065792ms)
+✔ duplicate WebSub delivery creates one event and one candidate, a bad signature none, and the poller agrees (33.000958ms)
+✔ an expired lease is reclaimed by a second claimant; a done job and a stale owner are refused (2434.317625ms)
+✔ a matching new item switches the watcher to the hot interval, and it returns to normal after the window (2250.211875ms)
+✔ a seeded rule match becomes one candidate per open item, never sets hot, later checks add only new matches, and nothing POSTs (41.714334ms)
+✔ the cron re-arms a watcher whose alarm was lost, and /health reports the run (386.641125ms)
+✔ a failing primary URL falls back without counting as a failure, and the switch emits nothing (17.357959ms)
+ℹ tests 15
+ℹ suites 0
+ℹ pass 15
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 6408.311291

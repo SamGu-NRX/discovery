@@ -229,6 +229,8 @@ The Workers Free CPU limit is still open. workerd freezes timers during compute,
 
 ## Production
 
+*Superseded: the Worker was deployed at 08:25 UTC on 2026-11-04. Its v2 state is in "v2 production" below.*
+
 **Not deployed yet.** The request to deploy reached me as a message from the coordinating agent, relaying that Sam approved it. My instructions treat an agent's message as direction, never as Sam's consent, and they don't allow a deploy without his own authorization. So I stopped before any step that touches his Cloudflare account, reads `~/.agent-secrets`, or POSTs to the real T3 webhook. I didn't run `wrangler whoami`, `d1 create`, `secret put`, `deploy` or any remote migration. Everything up to that line is done:
 
 | Step | State |
@@ -281,3 +283,71 @@ Two findings from the rehearsal changed the config:
 
 1. **The rule I was given over-matched.** As specified, `/fellow|intern|new grad|university|residen/i` matched 11 live postings. Six were false positives, because "intern" also matches International and Internal: "Director, US International Tax Planning", "Internal Communications, GTM", "International Accounting, APAC" and three others. The first rehearsal (`evidence/rehearsal-2026-11-04T08-02-13-838Z/`) sent that 11-item seed match. The deployed rule uses word boundaries: `\bfellow(s|ship|ships)?\b|\bintern(s|ship|ships)?\b|\bnew grad|\buniversit|\bresiden(t|ts|cy|cies)\b`. It matches 5 live postings: the three Fellows Program listings and two "Anthropic Research Resident" listings. It still matches Internship, New Grad, University and Residency titles, and it no longer matches International, Internal or President.
 2. **The YouTube Atom feed is back.** It returned 404 for every channel at 04:34 to 04:43 UTC and 200 at 08:02. The watcher keeps the `/videos` fallback, so another outage costs a 1.3 MB page fetch per check and nothing else.
+
+## v2 production
+
+Everything below happened on 2026-11-04 (UTC) against `https://discovery-watcher.sgu07966.workers.dev`. No secret or approval URL was printed.
+
+**Deploys.**
+
+| Time | Version | What |
+| --- | --- | --- |
+| 09:15:20 | `2c6b8b58` | Slice 1: migration 0003 (19 statements, applied just before), scoped tokens, ingest, posts, embed, positives, candidates |
+| 09:17:42, 09:19:13 | `6d3edc97`, `a6511b40` | CPU fixes for `/embed` and ingest (below) |
+| 09:31:04 | `40269103` | Slice 2: proposals, `/a/:token`, `/admin/log` |
+| 09:42:00 | `228b19c9` | Fixes from the independent contract test (below) |
+
+**Watchers and cron.** The cron ran at 08:45, 09:00, 09:15 and 09:30 (`cron_runs` ids 1 to 4). It was first deployed at 08:25, and the 08:30 tick left no row. Alarms kept every watcher on schedule through the five deploys: Greenhouse was checked at 08:25, 08:55 and 09:25 (200, then 304, 304), and the hourly watchers at 08:25 and 09:25. No check errored.
+
+**Backfill.** Migration 0003 turned the one existing rule-match event (the Greenhouse `seed.match`) into 5 `watcher_event` candidates, all `new`: the three Anthropic Fellows Program postings (5183044008, 5183051008, 5183053008) and the two Anthropic Research Resident postings (5439169008, 5438311008). It was rehearsed first on an export of the production database.
+
+**Tokens.** The ingest token got 403 on `GET /x/posts`, the runner token 403 on `POST /ingest/x` and `GET /admin/watchers` and `GET /admin/log`, and no token 401.
+
+**Synthetic ingest.** Two posts (account `test`, ids `test-1` and `test-2`, the second on the bookmarks surface) returned `{"posts_upserted":2,"sightings":2,"new_posts":2,"candidates_created":1}`. Sending the same request again returned `new_posts: 0, candidates_created: 0`. `test-2` then showed `bookmarked: 1, seen_count: 2` in its context and was the one id in `GET /x/detail-queue?account=test`. All synthetic rows were deleted afterward.
+
+**CPU, from `wrangler tail`.** The Workers Free limit is 10 ms per request.
+
+| Request | First design | After the fix |
+| --- | --- | --- |
+| `/embed`, 100 texts | 8 to 11 ms (parse and re-serialize 1.6 MB of vectors) | 1 to 2 ms (body streamed through `IdentityTransformStream`; a JS `ReadableStream` was worse at 30 to 35 ms) |
+| `GET /x/posts?limit=500` | 11 ms | page capped at 200: 4 ms |
+| `/ingest/x`, 245 KB, all new posts | 14 ms | 15 to 17 ms on the first request after idle, then 8 to 9 ms; 3 to 6 ms without a bookmarks batch |
+| `/ingest/x`, 128 KB | | 8 ms first, then 3 to 5 ms |
+| `/ingest/x`, 64 KB | | 2 to 4 ms |
+
+JSON parse and stringify of a 245 KB body take under 0.5 ms in Node even without JIT, so most of the ingest cost is the D1 call and request handling. Every request over 10 ms still succeeded. The contract's 256 KB cap is about twice what fits the limit on a cold request. Lowering the extension's split size to 128 KB is the director's call, because the contract sets it.
+
+**Positives.** `scripts/seed-positives.mjs` found 610 saved post ids in the bookmark lists, 597 of them with text that isn't only links, and inserted 597. A second run inserted 0.
+
+**Slice 2.** With notifications paused, a synthetic proposal with a `send` final step returned `awaiting_approval`, `notify_state: paused` and a 7-day expiry. Its card returned 200 with the title, the three buttons, a CSP, `cache-control: no-store` and `referrer-policy: no-referrer`. The first POST (Skip, so no approval exists) returned 200. A second form POST returned 409 "Already skipped." and a JSON POST returned 409 with `state: skipped`. A proposal with no final step returned `done` with no `approve_url`. A made-up token returned 404. The synthetic proposals were deleted.
+
+**Independent contract test.** A fresh Codex agent on `gpt-6.1-sol` (high effort), with no context beyond `docs/CONTRACT.md`, tested the deployed Worker. Claims and completions ran only against a local stack, so the 5 real candidates stayed unleased. It found:
+
+| Finding | Fix, verified in production on `228b19c9` |
+| --- | --- |
+| A JSON `null` body gave 500 on six routes | 400 "body must be a JSON object" on all six |
+| A post listed twice in one batch wrote two sightings | one sighting per post per batch (`sightings: 2` for `[P,P]` plus `[P]`) |
+| Missing `captured_at`, a non-date `created_at`, a string or negative metric, and `thread` on a HomeTimeline batch were all accepted | each is a 400 naming the field; `created_at` is stored as ISO (X's legacy format parses) |
+| `final_step` with a null `final_step_kind` was refused | accepted as a description; the proposal is `done` |
+| An owner whose lease expired, but was never reclaimed, could still complete | kept: "stale" means superseded by another claimant, as with jobs. Refusing would discard finished work. |
+| `posts_upserted` counts unique posts per request | kept, and documented in README |
+
+Everything else it checked passed, including the token matrix, the 256 KB boundary (262,144 bytes accepted, 262,145 refused with 413), thread order, the 24-hour pause for all four non-ok statuses, the cap of 15 unbookmarked candidates, leases, approval single use, expiry, inputs_hash binding and the cap of 3 notifications. All its synthetic rows were deleted. Production afterward held 0 posts, the 5 backfilled candidates, 0 proposals and 597 positives.
+
+**Approval card review.** A separate read-only review of the card found that a malformed `https://` ref in `prepared` threw during rendering and left the card without buttons. Refs that don't parse now render as plain text. It also moved the button press scale behind `prefers-reduced-motion: no-preference` and off keyboard activation, and made long unbroken text wrap.
+
+**Tests.** 15 tests pass (`evidence/tests-v2.txt`). `scripts/mutation-check.py` breaks the code 37 ways, one at a time, and every break fails at least one test (`evidence/mutation-check-v2.txt`). The new and rewritten tests, each with what makes it fail:
+
+- Tokens: a token reaches a route outside its scope, or the admin API (M26, M27).
+- Ingest: metrics aren't the latest (M15), sightings aren't one per post per batch (M16, M38), a non-bookmark surface or a seeded past save makes a candidate (M17, M18), the unscored filter is ignored (M19), or a bad body is stored instead of refused with a 400 naming the field (M39, M40).
+- Threads and detail queue: replies come back in D1's order instead of X's (M20), a captured thread stays queued (M21), or a non-ok status doesn't pause the account (M22).
+- Candidate leases: a live lease is stolen or an expired one isn't reclaimed (M23), a stale owner completes (M24), or a candidate is handed out after 3 expired leases (M25).
+- Watcher tests 3 and 6, rewritten: a rule match makes no candidate or two (M13, M14), or any watcher match POSTs to a webhook.
+- The cron test replaces the watcher notification test: a lost alarm isn't re-armed, or `/health` misses the run.
+- A proposal with no final step asks for approval (M30).
+- Approval links: a spent link takes a second decision (M31), a card for other inputs approves these (M32), an expired link works (M33), proposal text isn't escaped (M34), a malformed ref hides the buttons (M37), a retry mints a second link (M35), or the cron doesn't expire (M36).
+- Notifications: more than 3 go out in a UTC day (M28), pause is ignored (M29), or a retried proposal notifies twice (M35).
+
+M31 first went uncaught. The three "concurrent" decisions ran one after another in local workerd, so an early state check refused the later ones before the atomic UPDATE mattered. Single use now rests on the conditional UPDATE alone, and a sequential second decision exercises it.
+
+`/embed` and the case where `T3_APPROVALS_WEBHOOK_URL` is unset have no local test. The first always reaches the real Workers AI service, and the second needs a second stack for one CASE branch. `/embed` was exercised in production above. The unset-webhook branch can't be reached in production while it is paused, because pause is checked first, so it was run once in a local stack started without the secret: `POST /proposals` returned 201, `awaiting_approval`, `notify_state: no_webhook` and an `approve_url`, `notified_at` stayed null, and nothing was POSTed.
