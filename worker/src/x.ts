@@ -101,12 +101,13 @@ export async function ingest(env: Env, req: Request) {
   isoTime(b.captured_at, "captured_at");
   if (!Array.isArray(b.batches)) fail("batches must be an array");
 
-  // Last occurrence wins for the post's fields, so metrics end at the latest
-  // values in the request. urls, media and metrics stay objects: SQLite's
-  // json_extract returns them as JSON text, so they are serialized once.
-  // batch_ids lists the batches a post was sighted in; only batches new to
-  // the Worker count toward seen_count (see ingestStatements).
-  const posts = new Map<string, Post & { batch_ids: string[]; bookmark_batch_ids: string[]; bookmarked: number }>();
+  // One version of each post per batch, the last occurrence in that batch.
+  // The upsert applies them in request order and skips batches the Worker
+  // already recorded, so the last occurrence in a new batch wins and a
+  // replayed copy can't overwrite newer values. urls, media and metrics stay
+  // objects: SQLite's json_extract returns them as JSON text.
+  const versions: (Post & { batch_id: string; bookmarked: number })[] = [];
+  const posts = new Map<string, { id: string; author_handle: string; text: string; batch_ids: string[]; bookmark_batch_ids: string[] }>();
   const sightings: { batch_id: string; post_id: string; surface: string; position: unknown; metrics: unknown }[] = [];
   const threads: unknown[] = [];
   const batchIds = new Set<string>();
@@ -122,6 +123,8 @@ export async function ingest(env: Env, req: Request) {
     // One sighting per post per batch: a post X lists twice in one response
     // keeps its first position and its last metrics.
     const inBatch = new Map<string, (typeof sightings)[number]>();
+    const batchVersions = new Map<string, (typeof versions)[number]>();
+    const bookmark = surface === "bookmarks";
     batch.posts.forEach((raw: Record<string, unknown>, pi: number) => {
       const p = normalizePost(raw, `${at}.posts[${pi}]`);
       const position = raw.position === undefined || raw.position === null ? null : raw.position;
@@ -131,17 +134,19 @@ export async function ingest(env: Env, req: Request) {
         seen.metrics = p.metrics;
       } else {
         inBatch.set(p.id, { batch_id: batchId, post_id: p.id, surface, position, metrics: p.metrics });
+        const prev = posts.get(p.id);
+        posts.set(p.id, {
+          id: p.id,
+          author_handle: p.author_handle,
+          text: p.text,
+          batch_ids: [...(prev?.batch_ids ?? []), batchId],
+          bookmark_batch_ids: bookmark ? [...(prev?.bookmark_batch_ids ?? []), batchId] : (prev?.bookmark_batch_ids ?? []),
+        });
       }
-      const prev = posts.get(p.id);
-      const bookmark = surface === "bookmarks";
-      posts.set(p.id, {
-        ...p,
-        batch_ids: seen ? prev!.batch_ids : [...(prev?.batch_ids ?? []), batchId],
-        bookmark_batch_ids: bookmark && !seen ? [...(prev?.bookmark_batch_ids ?? []), batchId] : (prev?.bookmark_batch_ids ?? []),
-        bookmarked: prev?.bookmarked || (bookmark ? 1 : 0),
-      });
+      batchVersions.set(p.id, { ...p, batch_id: batchId, bookmarked: bookmark ? 1 : 0 });
     });
     sightings.push(...inBatch.values());
+    versions.push(...batchVersions.values());
     if (batch.thread !== undefined && batch.thread !== null) {
       if (op !== "TweetDetail") fail(`${at}.thread is only allowed on TweetDetail batches, not ${op}`);
       const t = batch.thread as Record<string, unknown>;
@@ -167,8 +172,8 @@ export async function ingest(env: Env, req: Request) {
   // subquery an unqualified `value` means bj.value.
   const freshCount = (arr: string, req: string) => `(SELECT count(*) FROM json_each(${arr}) bj WHERE ${fresh("bj.value", req)})`;
   // One D1 batch is one transaction. Each bound string is serialized to D1
-  // and counted against the 10 ms CPU limit, so the full post list is bound
-  // once and the other statements get ids only.
+  // and counted against the 10 ms CPU limit, so the full post versions are
+  // bound once and the other statements get ids only.
   const results = await db.batch<Record<string, unknown>>([
     db
       .prepare(
@@ -176,11 +181,12 @@ export async function ingest(env: Env, req: Request) {
          SELECT value, ?2, ?3, ?4, ?5 FROM json_each(?1) RETURNING batch_id`,
       )
       .bind(JSON.stringify([...batchIds]), requestId, account, sessionId, now),
+    // Before the upsert: how many posts this request writes, and how many of
+    // those are new.
     db
       .prepare(
-        `SELECT count(*) AS n FROM json_each(?1) AS src
-         WHERE ${freshCount("json_extract(src.value, '$.b')", "?2")} > 0
-           AND NOT EXISTS (SELECT 1 FROM x_posts WHERE id = json_extract(value, '$.id'))`,
+        `SELECT coalesce(sum(fresh > 0), 0) AS upserted, coalesce(sum(fresh > 0 AND NOT EXISTS (SELECT 1 FROM x_posts WHERE x_posts.id = pid)), 0) AS n
+         FROM (SELECT json_extract(src.value, '$.id') AS pid, ${freshCount("json_extract(src.value, '$.b')", "?2")} AS fresh FROM json_each(?1) AS src)`,
       )
       .bind(JSON.stringify(postList.map((p) => ({ id: p.id, b: p.batch_ids }))), requestId),
     // UNIQUE (kind, ref) keeps a post that is bookmarked again from making a
@@ -201,18 +207,14 @@ export async function ingest(env: Env, req: Request) {
       .prepare(
         `INSERT INTO x_posts (id, author_handle, author_name, created_at, text, lang, conversation_id, in_reply_to_id,
            quoted_id, retweet_of_id, urls_json, media_json, metrics_json, first_seen_at, last_seen_at, seen_count, bookmarked)
-         SELECT id, author_handle, author_name, created_at, text, lang, conversation_id, in_reply_to_id, quoted_id, retweet_of_id,
-                urls, media, metrics, ?2, ?2, fresh_batches, bookmarked
-         FROM (SELECT json_extract(value, '$.id') AS id, json_extract(value, '$.author_handle') AS author_handle,
-                      json_extract(value, '$.author_name') AS author_name, json_extract(value, '$.created_at') AS created_at,
-                      json_extract(value, '$.text') AS text, json_extract(value, '$.lang') AS lang,
-                      json_extract(value, '$.conversation_id') AS conversation_id, json_extract(value, '$.in_reply_to_id') AS in_reply_to_id,
-                      json_extract(value, '$.quoted_id') AS quoted_id, json_extract(value, '$.retweet_of_id') AS retweet_of_id,
-                      json_extract(value, '$.urls') AS urls, json_extract(value, '$.media') AS media, json_extract(value, '$.metrics') AS metrics,
-                      json_extract(value, '$.bookmarked') AS bookmarked,
-                      ${freshCount("json_extract(src.value, '$.batch_ids')", "?3")} AS fresh_batches
-               FROM json_each(?1) AS src)
-         WHERE fresh_batches > 0
+         SELECT json_extract(value, '$.id'), json_extract(value, '$.author_handle'), json_extract(value, '$.author_name'),
+                json_extract(value, '$.created_at'), json_extract(value, '$.text'), json_extract(value, '$.lang'),
+                json_extract(value, '$.conversation_id'), json_extract(value, '$.in_reply_to_id'), json_extract(value, '$.quoted_id'),
+                json_extract(value, '$.retweet_of_id'), json_extract(value, '$.urls'), json_extract(value, '$.media'),
+                json_extract(value, '$.metrics'), ?2, ?2, 1, json_extract(value, '$.bookmarked')
+         FROM json_each(?1)
+         WHERE ${fresh("json_extract(value, '$.batch_id')", "?3")}
+         ORDER BY key
          ON CONFLICT (id) DO UPDATE SET
            author_handle = excluded.author_handle, author_name = excluded.author_name, text = excluded.text, lang = excluded.lang,
            conversation_id = excluded.conversation_id, in_reply_to_id = excluded.in_reply_to_id, quoted_id = excluded.quoted_id,
@@ -220,7 +222,7 @@ export async function ingest(env: Env, req: Request) {
            metrics_json = excluded.metrics_json, last_seen_at = excluded.last_seen_at,
            seen_count = x_posts.seen_count + excluded.seen_count, bookmarked = max(x_posts.bookmarked, excluded.bookmarked)`,
       )
-      .bind(JSON.stringify(postList), now, requestId),
+      .bind(JSON.stringify(versions), now, requestId),
     db
       .prepare(
         `INSERT INTO x_sightings (post_id, account, surface, position, session_id, mode, seen_at, metrics_json, batch_id)
@@ -250,7 +252,7 @@ export async function ingest(env: Env, req: Request) {
   ]);
   const recorded = new Set(results[0].results.map((r) => r.batch_id as string));
   return {
-    posts_upserted: results[3].meta.changes,
+    posts_upserted: results[1].results[0].upserted as number,
     sightings: results[4].meta.changes,
     new_posts: results[1].results[0].n as number,
     candidates_created: results[2].results.length,

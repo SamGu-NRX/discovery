@@ -136,6 +136,16 @@ test("a replayed batch_id writes no sightings and moves no counter, and a partia
   assert.equal((await seen())["r-1"], before["r-1"] + 1);
   assert.equal((await seen())["r-2"], before["r-2"]);
   assert.equal(await sessionPosts(), 5);
+
+  // A new batch, then a replayed one holding an older copy of the same post:
+  // the replay must not overwrite the newer values.
+  const newer = batch("home_for_you", [post("r-1", { text: "edited", metrics: { likes: 777 } })]);
+  const order = await ingest("sess-replay", [newer, request[0]]);
+  assert.deepEqual(order, { posts_upserted: 1, sightings: 1, new_posts: 0, candidates_created: 0, duplicate_batch_ids: [request[0].batch_id] });
+  const r1 = (await runner("GET", "/x/posts/r-1/context")).post;
+  assert.equal(r1.text, "edited");
+  assert.deepEqual(r1.metrics, { likes: 777 });
+  assert.equal(r1.seen_count, before["r-1"] + 2);
 });
 
 test("the ingest cap is 128 KB of bytes, counted while reading, even without a Content-Length", async () => {

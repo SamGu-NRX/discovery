@@ -18,7 +18,7 @@ muts = [
  ("M13 watcher match makes no candidate", "src/check.ts", "WHERE json_extract(value, '$.notify') = 1", "WHERE 0"),
  ("M14 seed match makes no candidates", "src/check.ts", "rows = matched.map((i) => ({ ref: `${w.id}:${i.id}`, title: itemTitle(i), url: i.url }));", "rows = matched.slice(0, 1).map((i) => ({ ref: `${w.id}:${i.id}`, title: itemTitle(i), url: i.url }));"),
  ("M15 ingest keeps old metrics", "src/x.ts", "metrics_json = excluded.metrics_json, last_seen_at", "last_seen_at"),
- ("M16 one sighting per post per request", "src/x.ts", "seen_count = x_posts.seen_count + excluded.seen_count", "seen_count = x_posts.seen_count + 1"),
+ ("M16 one post version per occurrence, not per batch", "src/x.ts", "batchVersions.set(p.id, {", "batchVersions.set(p.id + ':' + pi, {"),
  ("M17 every surface counts as a bookmark", "src/x.ts", 'const bookmark = surface === "bookmarks";', "const bookmark = true;"),
  ("M18 seeded past saves become candidates", "src/x.ts", "\n           AND NOT EXISTS (SELECT 1 FROM positives WHERE id = json_extract(value, '$.id'))", ""),
  ("M19 unscored filter ignored", "src/x.ts", "WHERE p.score IS NULL ORDER BY", "WHERE 1 ORDER BY"),
@@ -45,7 +45,7 @@ muts = [
  ("M40 thread accepted on any batch", "src/x.ts", 'if (op !== "TweetDetail") fail(', "if (false) fail("),
  # contract 10b06ac and the 191a188 reviews
  ("M41 replayed batch writes sightings", "src/x.ts", "         WHERE ${fresh(\"json_extract(value, '$.batch_id')\", \"?6\")}`", "`"),
- ("M42 replayed batch bumps seen_count", "src/x.ts", "               FROM json_each(?1) AS src)\n         WHERE fresh_batches > 0", "               FROM json_each(?1) AS src)\n         WHERE true"),
+ ("M42 replayed batch rewrites posts", "src/x.ts", "         WHERE ${fresh(\"json_extract(value, '$.batch_id')\", \"?3\")}\n         ORDER BY key", "         WHERE true\n         ORDER BY key"),
  ("M43 replayed batch bumps session posts", "src/x.ts", "(SELECT count(*) FROM json_each(?5) WHERE ${fresh(\"value\", \"?6\")})", "(SELECT count(*) FROM json_each(?5))"),
  ("M44 complete ignores lease_token", "src/candidates.ts", "WHERE id = ?1 AND owner = ?2 AND lease_token = ?6 AND state = 'claimed'", "WHERE id = ?1 AND owner = ?2 AND ?6 IS NOT NULL AND state = 'claimed'"),
  ("M45 reclaim keeps the old lease_token", "src/candidates.ts", "lease_token = lower(hex(randomblob(16)))", "lease_token = coalesce(lease_token, lower(hex(randomblob(16))))"),
