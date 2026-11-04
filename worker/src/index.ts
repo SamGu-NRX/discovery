@@ -3,7 +3,7 @@ import { callerScope, type Scope } from "./auth";
 import { claimCandidates, completeCandidate, createCandidate, listCandidates } from "./candidates";
 import type { Env, WatcherRow } from "./check";
 import { HttpError, json, readJson, timeParam, utcDay } from "./http";
-import { APPROVAL_DAILY_CAP, approvalPage, createProposal, decide, expireProposals, listProposals, presentProposal } from "./proposals";
+import { APPROVAL_DAILY_CAP, approvalPage, createProposal, decide, expireProposals, listProposals, presentProposal, rotateToken } from "./proposals";
 import { handleDelivery, handleVerification, requestSubscription } from "./websub";
 import { addPositives, detailQueue, embed, ingest, ingestStatus, listPositives, listPosts, postContext, saveScores } from "./x";
 
@@ -167,6 +167,7 @@ const ROUTES: Route[] = [
     },
   },
   { method: "GET", path: /^\/proposals$/, scopes: ["runner"], handler: (_r, env, url) => ok(listProposals(env, url)) },
+  { method: "POST", path: /^\/proposals\/([^/]+)\/rotate-token$/, scopes: ["runner"], handler: (req, env, _u, [id]) => ok(rotateToken(env, id, req)) },
   { method: "GET", path: /^\/admin\/log$/, scopes: [], handler: (_r, env, url) => ok(activityLog(env, url)) },
   { method: "POST", path: /^\/candidates\/claim$/, scopes: ["runner"], handler: async (req, env) => ok(claimCandidates(env, await body(req))) },
   { method: "POST", path: /^\/candidates\/([^/]+)\/complete$/, scopes: ["runner"], handler: async (req, env, _u, [id]) => ok(completeCandidate(env, id, await body(req))) },

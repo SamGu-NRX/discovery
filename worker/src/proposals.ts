@@ -9,7 +9,7 @@
 
 import { sha256Hex } from "./adapters";
 import type { Env } from "./check";
-import { canonicalJson, fail, HttpError, intParam, oneOf, optStr, randomHex, readJson, str, timeParam, utcDay } from "./http";
+import { canonicalJson, fail, HttpError, intParam, oneOf, optStr, randomHex, readJson, readText, str, timeParam, utcDay } from "./http";
 
 export const APPROVAL_DAILY_CAP = 3;
 const DEFAULT_EXPIRY_S = 7 * 86400;
@@ -191,6 +191,53 @@ async function notify(env: Env, row: ProposalRow, approveUrl: string): Promise<s
   return state;
 }
 
+// A runner that lost the POST /proposals response gets `duplicate: true` and
+// no link on retry, because the Worker keeps only the token's hash. This
+// re-mints the token of an unspent proposal, keeping its expiry and
+// inputs_hash; the old link stops working. If the notification already went
+// to T3, the old link is the one in Sam's question card, so rotating needs
+// `force: true`.
+export async function rotateToken(env: Env, id: string, req: Request) {
+  const text = await readText(req, 4096);
+  let force = false;
+  if (text.trim()) {
+    let b: Record<string, unknown>;
+    try {
+      b = JSON.parse(text);
+    } catch {
+      fail("body must be JSON");
+    }
+    if (typeof b !== "object" || b === null || Array.isArray(b)) fail("body must be a JSON object");
+    if (b.force !== undefined && typeof b.force !== "boolean") fail("force must be true or false");
+    force = b.force === true;
+  }
+  const p = await env.DB.prepare("SELECT * FROM proposals WHERE id = ?").bind(id).first<ProposalRow>();
+  if (!p) throw new HttpError(404, `proposal ${id} not found`);
+  const now = Date.now();
+  if (expired(p, now)) throw new HttpError(410, `proposal ${id} expired at ${new Date(p.expires_at!).toISOString()}`);
+  if (p.state !== "awaiting_approval") throw new HttpError(409, `proposal ${id} is ${p.state}; only an unspent approval link can be rotated`);
+  if (!force && (p.notify_state === "sent" || p.notify_state === "pending")) {
+    throw new HttpError(409, `proposal ${id} was already sent to T3 (notify_state ${p.notify_state}); rotating would break the link in that question card. Send {"force": true} to rotate anyway.`);
+  }
+  const token = randomHex(32);
+  const row = await env.DB.prepare(
+    `UPDATE proposals SET approval_token_hash = ?2
+     WHERE id = ?1 AND state = 'awaiting_approval' AND expires_at > ?3 AND approval_token_hash = ?4
+     RETURNING expires_at, inputs_hash, state`,
+  )
+    .bind(id, await sha256Hex(token), now, p.approval_token_hash)
+    .first<{ expires_at: number; inputs_hash: string; state: string }>();
+  if (!row) throw new HttpError(409, `proposal ${id} changed while rotating; read it again`);
+  console.log(`[approvals] ${id} token rotated${force ? " (forced)" : ""}`);
+  return {
+    id,
+    state: row.state,
+    approve_url: `${new URL(req.url).origin}/a/${token}`,
+    expires_at: new Date(row.expires_at).toISOString(),
+    inputs_hash: row.inputs_hash,
+  };
+}
+
 export async function listProposals(env: Env, url: URL) {
   const state = url.searchParams.get("state");
   const since = timeParam(url, "since");
@@ -227,28 +274,46 @@ export async function approvalPage(env: Env, token: string): Promise<Response> {
   return page(200, p.title, card(p));
 }
 
+// A decision is `decision` plus the card's inputs_hash; nothing near 4 KB.
+export const DECISION_MAX_BYTES = 4 * 1024;
+
 export async function decide(env: Env, token: string, req: Request): Promise<Response> {
   const type = req.headers.get("content-type") ?? "";
-  const fromForm = type.includes("application/x-www-form-urlencoded") || type.includes("multipart/form-data");
+  const fromForm = type.includes("application/x-www-form-urlencoded");
   const reply = (status: number, headline: string, detail: string, title?: string, data?: Record<string, unknown>) =>
     fromForm ? page(status, headline, messageBody(headline, detail, title)) : new Response(JSON.stringify(data ?? { error: `${headline} ${detail}` }), { status, headers: { "content-type": "application/json" } });
 
+  // This route needs no bearer token, so the link is resolved before any of
+  // the body is read, and the body is read under a byte limit.
+  const p = await byToken(env, token);
+  if (!p) return reply(404, "Link not found.", "This approval link is not valid.");
+
   let decisionRaw: unknown;
   let boundHash: unknown;
+  let text: string;
+  try {
+    text = await readText(req, DECISION_MAX_BYTES);
+  } catch (e) {
+    if (e instanceof HttpError) return reply(e.status, "Request too large.", "A decision is only approve, skip or later.", p.title, { error: e.message });
+    throw e;
+  }
   if (fromForm) {
-    const form = await req.formData();
+    const form = new URLSearchParams(text);
     decisionRaw = form.get("decision");
     boundHash = form.get("inputs_hash");
   } else {
-    const b = await readJson<Record<string, unknown>>(req);
-    decisionRaw = b.decision;
-    boundHash = b.inputs_hash;
+    let b: unknown;
+    try {
+      b = JSON.parse(text);
+    } catch {
+      return reply(400, "Body must be JSON or a form.", "Send decision=approve, skip or later.");
+    }
+    if (typeof b !== "object" || b === null || Array.isArray(b)) return reply(400, "Body must be a JSON object.", "Send {\"decision\": \"approve|skip|later\"}.");
+    decisionRaw = (b as Record<string, unknown>).decision;
+    boundHash = (b as Record<string, unknown>).inputs_hash;
   }
   if (!(typeof decisionRaw === "string" && decisionRaw in DECISIONS)) return reply(400, "Unknown decision.", "Choose approve, skip or later.");
   const decision = decisionRaw as Decision;
-
-  const p = await byToken(env, token);
-  if (!p) return reply(404, "Link not found.", "This approval link is not valid.");
   const now = Date.now();
   const refuse = (current: ProposalRow) =>
     expired(current, now)
@@ -323,6 +388,24 @@ function preparedItem(item: Prepared): string {
   return `<li><span class="tag">${esc(item.type)}</span><div>${main}<code>${esc(url ? url.host : item.ref)}</code></div></li>`;
 }
 
+// Every field of inputs, the exact values inputs_hash binds, so an approval
+// can't hide a recipient, payload or branch. Strings keep their whitespace;
+// numbers, booleans and null show in monospace so "42" and 42 differ.
+const MAX_INPUT_DEPTH = 12;
+
+function inputValue(v: unknown, depth: number): string {
+  if (typeof v === "string") return v === "" ? `<code class="lit">empty text</code>` : `<span class="str">${esc(v)}</span>`;
+  if (v === null || typeof v !== "object") return `<code class="lit">${esc(String(v))}</code>`;
+  if (depth >= MAX_INPUT_DEPTH) return `<code class="lit">${esc(canonicalJson(v))}</code>`;
+  if (Array.isArray(v)) {
+    if (v.length === 0) return `<code class="lit">empty list</code>`;
+    return `<ol class="list">${v.map((x) => `<li>${inputValue(x, depth + 1)}</li>`).join("")}</ol>`;
+  }
+  const entries = Object.entries(v as Record<string, unknown>);
+  if (entries.length === 0) return `<code class="lit">no fields</code>`;
+  return `<dl class="fields">${entries.map(([k, x]) => `<div><dt>${esc(k)}</dt><dd>${inputValue(x, depth + 1)}</dd></div>`).join("")}</dl>`;
+}
+
 function card(p: ProposalRow): string {
   const prepared: Prepared[] = JSON.parse(p.prepared_json);
   const kind = (p.final_step_kind ?? "").replace("_", " ");
@@ -339,6 +422,10 @@ function card(p: ProposalRow): string {
     <span class="stamp">${esc(kind)}</span>
     <h2 id="final-h">Final step</h2>
     <p>${esc(p.final_step ?? "")}</p>
+    <div class="inputs">
+      <h2>Exactly these inputs</h2>
+      ${p.inputs_json === "null" ? `<p class="muted">No inputs.</p>` : inputValue(JSON.parse(p.inputs_json), 0)}
+    </div>
     <p class="muted">Approving records your decision. The step itself runs only when it is executed.</p>
   </section>
   <form method="post" class="actions">
@@ -384,6 +471,14 @@ section{border-top:1px solid var(--rule);padding-top:16px;margin-top:16px}
 .final p:last-child{margin-bottom:0}
 .stamp{float:right;margin:-4px -4px 8px 12px;font:700 12px/1 ui-monospace,"SF Mono",Menlo,monospace;letter-spacing:.12em;text-transform:uppercase;
   color:var(--stamp);border:2px solid var(--stamp);border-radius:4px;padding:6px 8px;transform:rotate(-4deg)}
+.inputs{margin:14px 0 12px;padding-top:12px;border-top:1px dashed var(--stamp)}
+.fields{margin:0;display:grid;gap:8px}
+.fields .fields{padding-left:10px;border-left:2px solid var(--rule);margin-top:4px}
+.fields dt{font:12px/1.4 ui-monospace,"SF Mono",Menlo,monospace;color:var(--muted)}
+.fields dd{margin:0}
+.list{margin:2px 0 0;padding-left:1.4em}
+.str{white-space:pre-wrap}
+.lit{font:13px/1.4 ui-monospace,"SF Mono",Menlo,monospace}
 .actions{margin-top:20px;display:grid;gap:10px}
 .pair{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 button{font:inherit;font-weight:600;min-height:50px;border-radius:10px;border:1px solid var(--rule);background:var(--sheet);color:var(--ink);

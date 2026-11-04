@@ -19,14 +19,14 @@ muts = [
  ("M14 seed match makes no candidates", "src/check.ts", "rows = matched.map((i) => ({ ref: `${w.id}:${i.id}`, title: itemTitle(i), url: i.url }));", "rows = matched.slice(0, 1).map((i) => ({ ref: `${w.id}:${i.id}`, title: itemTitle(i), url: i.url }));"),
  ("M15 ingest keeps old metrics", "src/x.ts", "metrics_json = excluded.metrics_json, last_seen_at", "last_seen_at"),
  ("M16 one sighting per post per request", "src/x.ts", "seen_count = x_posts.seen_count + excluded.seen_count", "seen_count = x_posts.seen_count + 1"),
- ("M17 every surface counts as a bookmark", "src/x.ts", 'bookmarked: prev?.bookmarked || (surface === "bookmarks" ? 1 : 0)', "bookmarked: 1"),
- ("M18 seeded past saves become candidates", "src/x.ts", "WHERE NOT EXISTS (SELECT 1 FROM positives WHERE id = json_extract(value, '$.id'))", ""),
+ ("M17 every surface counts as a bookmark", "src/x.ts", 'const bookmark = surface === "bookmarks";', "const bookmark = true;"),
+ ("M18 seeded past saves become candidates", "src/x.ts", "\n           AND NOT EXISTS (SELECT 1 FROM positives WHERE id = json_extract(value, '$.id'))", ""),
  ("M19 unscored filter ignored", "src/x.ts", "WHERE p.score IS NULL ORDER BY", "WHERE 1 ORDER BY"),
  ("M20 thread replies in D1 order", "src/x.ts", "replies: inOrder(replyIds)", "replies: rows.filter((r) => replyIds.includes(r.id)).map(presentPost)"),
- ("M21 detail queue ignores captured threads", "src/x.ts", "AND NOT EXISTS (SELECT 1 FROM x_threads t WHERE t.root_id IN (c.ref, p.conversation_id))", ""),
+ ("M21 detail queue ignores captured threads", "src/x.ts", 'AND NOT EXISTS (SELECT 1 FROM x_threads t WHERE ${capturedFor("c.ref", "p.conversation_id")})', ""),
  ("M22 status pause ignored", "src/x.ts", "if (endedAt) return", "if (false) return"),
  ("M23 candidate claim ignores lease expiry", "src/candidates.ts", "OR (state = 'claimed' AND lease_until < ?3)", "OR state = 'claimed'"),
- ("M24 candidate complete ignores owner", "src/candidates.ts", "WHERE id = ?1 AND owner = ?2 AND state = 'claimed'", "WHERE id = ?1 AND ?2 IS NOT NULL AND state = 'claimed'"),
+ # M24 (complete ignores owner) was retired in 10b06ac: lease_token now carries that guarantee (M44).
  ("M25 no attempt cap on candidates", "src/candidates.ts", "AND attempts >= ?2`", "AND attempts >= ?2 AND 0`"),
  ("M26 route scopes not checked", "src/index.ts", 'if (scope !== "admin" && !found.route.scopes.includes(scope))', "if (false)"),
  ("M27 admin API open to any token", "src/index.ts", '  if (scope !== "admin") throw new HttpError(403, `the ${scope} token cannot call ${req.method} ${url.pathname}`);\n', ""),
@@ -43,14 +43,37 @@ muts = [
  ("M38 one sighting per occurrence, not per batch", "src/x.ts", "      if (seen) {\n        seen.metrics = p.metrics;\n      } else {\n        inBatch.set(p.id,", "      if (false) {\n      } else {\n        inBatch.set(p.id + ':' + pi,"),
  ("M39 non-object JSON body reaches handlers", "src/http.ts", 'if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) throw', "if (false) throw"),
  ("M40 thread accepted on any batch", "src/x.ts", 'if (op !== "TweetDetail") fail(', "if (false) fail("),
+ # contract 10b06ac and the 191a188 reviews
+ ("M41 replayed batch writes sightings", "src/x.ts", "         WHERE ${fresh(\"json_extract(value, '$.batch_id')\", \"?6\")}`", "`"),
+ ("M42 replayed batch bumps seen_count", "src/x.ts", "               FROM json_each(?1) AS src)\n         WHERE fresh_batches > 0", "               FROM json_each(?1) AS src)\n         WHERE true"),
+ ("M43 replayed batch bumps session posts", "src/x.ts", "(SELECT count(*) FROM json_each(?5) WHERE ${fresh(\"value\", \"?6\")})", "(SELECT count(*) FROM json_each(?5))"),
+ ("M44 complete ignores lease_token", "src/candidates.ts", "WHERE id = ?1 AND owner = ?2 AND lease_token = ?6 AND state = 'claimed'", "WHERE id = ?1 AND owner = ?2 AND ?6 IS NOT NULL AND state = 'claimed'"),
+ ("M45 reclaim keeps the old lease_token", "src/candidates.ts", "lease_token = lower(hex(randomblob(16)))", "lease_token = coalesce(lease_token, lower(hex(randomblob(16))))"),
+ ("M46 card omits inputs", "src/proposals.ts", 'inputValue(JSON.parse(p.inputs_json), 0)}', '""}'),
+ ("M47 decision body limit not enforced", "src/proposals.ts", "export const DECISION_MAX_BYTES = 4 * 1024;", "export const DECISION_MAX_BYTES = 64 * 1024 * 1024;"),
+ ("M48 decision body read before the token", "src/proposals.ts",
+  ['  const p = await byToken(env, token);\n  if (!p) return reply(404, "Link not found.", "This approval link is not valid.");\n\n  let decisionRaw', '  const decision = decisionRaw as Decision;\n  const now = Date.now();'],
+  ['  let decisionRaw', '  const decision = decisionRaw as Decision;\n  const p = await byToken(env, token);\n  if (!p) return reply(404, "Link not found.", "This approval link is not valid.");\n  const now = Date.now();']),
+ ("M49 ingest cap back at 256 KB", "src/x.ts", "export const INGEST_MAX_BYTES = 128 * 1024;", "export const INGEST_MAX_BYTES = 256 * 1024;"),
+ ("M50 body limit counts characters", "src/http.ts", "    total += value.byteLength;", "    total += new TextDecoder().decode(value).length;"),
+ ("M51 rotate ignores a sent notification", "src/proposals.ts", 'if (!force && (p.notify_state === "sent" || p.notify_state === "pending"))', "if (false)"),
+ ("M52 rotate revives a spent link", "src/proposals.ts",
+  ['  if (p.state !== "awaiting_approval") throw new HttpError(409, `proposal ${id} is ${p.state}; only an unspent approval link can be rotated`);', "     WHERE id = ?1 AND state = 'awaiting_approval' AND expires_at > ?3 AND approval_token_hash = ?4"],
+  ["", "     WHERE id = ?1 AND expires_at > ?3 AND approval_token_hash = ?4"]),
+ ("M53 a root capture covers its replies", "src/x.ts", "`(t.root_id = ${postId} OR (t.root_id = ${conversationId} AND EXISTS (SELECT 1 FROM json_each(t.op_self_thread_ids_json) WHERE value = ${postId})))`", "`(t.root_id IN (${postId}, ${conversationId}))`"),
  ("M37 malformed prepared URL breaks the card", "src/proposals.ts", "  } catch {\n    return null;\n  }\n}\n\nfunction preparedItem", "  } finally {\n  }\n}\n\nfunction preparedItem"),
 ]
 for name, path, old, new in muts:
     if only and name.split()[0] not in only:
         continue
+    # old and new may be lists, for a break that needs several edits at once.
+    pairs = list(zip(old, new)) if isinstance(old, list) else [(old, new)]
     src = open(path).read()
-    assert old in src, name
-    open(path, "w").write(src.replace(old, new))
+    mutated = src
+    for o, n in pairs:
+        assert o in mutated, name
+        mutated = mutated.replace(o, n)
+    open(path, "w").write(mutated)
     try:
         r = subprocess.run(["node", "--test", "test/"], capture_output=True, text=True, timeout=240)
         # node --test lists each failure twice (inline and in the summary).

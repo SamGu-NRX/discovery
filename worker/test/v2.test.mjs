@@ -29,7 +29,9 @@ const post = (id, extra = {}) => ({
   metrics: { likes: 1 },
   ...extra,
 });
+let batchSeq = 0;
 const batch = (surface, posts, extra = {}) => ({
+  batch_id: `cap-${process.pid}:${batchSeq++}`,
   op: { bookmarks: "Bookmarks", detail: "TweetDetail" }[surface] ?? "HomeTimeline",
   surface,
   posts: posts.map((p, i) => ({ ...p, position: i })),
@@ -69,10 +71,10 @@ test("ingest upserts posts with the latest metrics, writes one sighting per post
     batch("home_following", [post("i-2", { metrics: { likes: 2 } })]),
     batch("bookmarks", [post("i-3"), post("i-old-save")]),
   ]);
-  assert.deepEqual(r1, { posts_upserted: 4, sightings: 5, new_posts: 4, candidates_created: 1 });
+  assert.deepEqual(r1, { posts_upserted: 4, sightings: 5, new_posts: 4, candidates_created: 1, duplicate_batch_ids: [] });
 
   const r2 = await ingest("sess-2", [batch("home_for_you", [post("i-1", { metrics: { likes: 9 } })]), batch("bookmarks", [post("i-1", { metrics: { likes: 9 } }), post("i-3")])]);
-  assert.deepEqual(r2, { posts_upserted: 2, sightings: 3, new_posts: 0, candidates_created: 1 });
+  assert.deepEqual(r2, { posts_upserted: 2, sightings: 3, new_posts: 0, candidates_created: 1, duplicate_batch_ids: [] });
 
   const { posts } = await runner("GET", "/x/posts?unscored=1&limit=500");
   const byId = Object.fromEntries(posts.map((p) => [p.id, p]));
@@ -102,6 +104,8 @@ test("ingest upserts posts with the latest metrics, writes one sighting per post
     [{ ...valid, batches: [batch("home_for_you", [post("i-9", { created_at: "not-a-date" })])] }, /created_at/],
     [{ ...valid, batches: [batch("home_for_you", [post("i-9", { metrics: { likes: "lots" } })])] }, /metrics\.likes/],
     [{ ...valid, batches: [batch("home_for_you", [post("i-9")], { thread: { root_id: "i-9", op_self_thread_ids: [], reply_ids: [] } })] }, /thread/],
+    [{ ...valid, batches: [{ ...batch("home_for_you", [post("i-9")]), batch_id: undefined }] }, /batch_id/],
+    [{ ...valid, batches: [batch("home_for_you", [post("i-9")], { batch_id: "same" }), batch("home_for_you", [post("i-9")], { batch_id: "same" })] }, /appears twice/],
   ];
   for (const [body, field] of badBodies) {
     const res = await s.call("POST", "/ingest/x", body, { raw: true, token: "ingest" });
@@ -109,6 +113,44 @@ test("ingest upserts posts with the latest metrics, writes one sighting per post
     assert.match(await res.text(), field);
   }
   assert.equal((await runner("GET", "/x/posts?limit=200")).posts.filter((p) => p.id === "i-9").length, 0, "a refused request stores nothing");
+});
+
+test("a replayed batch_id writes no sightings and moves no counter, and a partial replay counts only the new batch", async () => {
+  const sessionPosts = async () => (await s.call("GET", "/admin/log?since=0")).x_sessions.find((x) => x.session_id === "sess-replay").posts;
+  const request = [batch("home_for_you", [post("r-1"), post("r-2")]), batch("bookmarks", [post("r-3")])];
+  const first = await ingest("sess-replay", request);
+  assert.deepEqual(first, { posts_upserted: 3, sightings: 3, new_posts: 3, candidates_created: 1, duplicate_batch_ids: [] });
+  const seen = async () => Object.fromEntries((await runner("GET", "/x/posts?limit=200")).posts.filter((p) => p.id.startsWith("r-")).map((p) => [p.id, p.seen_count]));
+  const before = await seen();
+  assert.equal(await sessionPosts(), 3);
+
+  // The same request again, as after a lost response.
+  const replay = await ingest("sess-replay", request);
+  assert.deepEqual(replay, { posts_upserted: 0, sightings: 0, new_posts: 0, candidates_created: 0, duplicate_batch_ids: request.map((b) => b.batch_id) });
+  assert.deepEqual(await seen(), before, "a replay must not bump seen_count");
+  assert.equal(await sessionPosts(), 3, "a replay must not bump the session's posts");
+
+  // One old batch and one new one: only the new one is written.
+  const mixed = await ingest("sess-replay", [request[0], batch("home_following", [post("r-1"), post("r-4")])]);
+  assert.deepEqual(mixed, { posts_upserted: 2, sightings: 2, new_posts: 1, candidates_created: 0, duplicate_batch_ids: [request[0].batch_id] });
+  assert.equal((await seen())["r-1"], before["r-1"] + 1);
+  assert.equal((await seen())["r-2"], before["r-2"]);
+  assert.equal(await sessionPosts(), 5);
+});
+
+test("the ingest cap is 128 KB of bytes, counted while reading, even without a Content-Length", async () => {
+  const send = (text) => {
+    // A stream body goes out chunked, with no Content-Length to check first.
+    const body = new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode(text)); c.close(); } });
+    return fetch(`${s.base}/ingest/x`, { method: "POST", duplex: "half", body, headers: { authorization: `Bearer ${s.vars.INGEST_TOKEN}`, "content-type": "application/json" } });
+  };
+  const wrap = (text) => JSON.stringify({ account: "acct-cap", session_id: "sess-cap", mode: "passive", captured_at: new Date().toISOString(), batches: [batch("home_for_you", [post("cap-1", { text })])] });
+  // 2-byte characters: under 128 K characters, over 128 KB of bytes.
+  const multibyte = wrap("é".repeat(70_000));
+  assert.ok(multibyte.length < 128 * 1024 && new TextEncoder().encode(multibyte).length > 128 * 1024);
+  assert.equal((await send(multibyte)).status, 413);
+  assert.equal((await send(wrap("a".repeat(132_000)))).status, 413);
+  assert.equal((await send(wrap("a".repeat(120_000)))).status, 200);
 });
 
 test("a captured thread leaves the detail queue and reads back in server order; a non-ok session pauses the account", async () => {
@@ -131,6 +173,26 @@ test("a captured thread leaves the detail queue and reads back in server order; 
   assert.ok(pauseMs > 23.9 * 3600_000 && pauseMs <= 24 * 3600_000, `pause_until should be 24 h out, was ${pauseMs} ms`);
 });
 
+test("a reply is covered only by a capture of its own permalink, not by the root's capture listing it among replies", async () => {
+  const root = post("t-root", { author_handle: "bob" });
+  const self = post("t-self", { author_handle: "bob", conversation_id: "t-root", in_reply_to_id: "t-root" });
+  const reply = post("t-reply", { author_handle: "alice", conversation_id: "t-root", in_reply_to_id: "t-root" });
+  await ingest("sess-t", [batch("bookmarks", [reply, self])], "acct-t");
+  await ingest("sess-t", [batch("detail", [root, self, reply], { thread: { root_id: "t-root", op_self_thread_ids: ["t-self"], reply_ids: ["t-reply"] } })], "acct-t");
+
+  const replyCtx = await runner("GET", "/x/posts/t-reply/context");
+  assert.equal(replyCtx.thread_captured, false, "another author's root thread is not this reply's thread");
+  const queue = (await s.call("GET", "/x/detail-queue?account=acct-t", undefined, { token: "ingest" })).post_ids;
+  assert.ok(queue.includes("t-reply"), "the reply's own permalink must still be queued");
+  assert.ok(!queue.includes("t-self"), "the OP's own self-thread post is covered by the root capture");
+  assert.equal((await runner("GET", "/x/posts/t-self/context")).thread_captured, true);
+
+  await ingest("sess-t", [batch("detail", [reply], { thread: { root_id: "t-reply", op_self_thread_ids: [], reply_ids: [] } })], "acct-t");
+  const own = await runner("GET", "/x/posts/t-reply/context");
+  assert.equal(own.thread_captured, true);
+  assert.equal(own.thread.root_id, "t-reply");
+});
+
 test("candidates: an expired lease is reclaimed, a stale owner gets 409, and a candidate that keeps expiring fails instead of looping", async () => {
   await runner("POST", "/candidates", { kind: "watcher_event", ref: "lease:1", title: "lease one", url: null, score: null });
   const again = await runner("POST", "/candidates", { kind: "watcher_event", ref: "lease:1", title: "lease one", url: null, score: null });
@@ -145,7 +207,7 @@ test("candidates: an expired lease is reclaimed, a stale owner gets 409, and a c
   const [b] = await claim("runner-b", 0.5);
   assert.equal(b.id, a.id);
   assert.equal(b.attempts, 2);
-  const stale = await s.call("POST", `/candidates/${a.id}/complete`, { owner: "runner-a", state: "done" }, { raw: true, token: "runner" });
+  const stale = await s.call("POST", `/candidates/${a.id}/complete`, { owner: "runner-a", lease_token: a.lease_token, state: "done" }, { raw: true, token: "runner" });
   assert.equal(stale.status, 409);
 
   await wait(700);
@@ -158,9 +220,29 @@ test("candidates: an expired lease is reclaimed, a stale owner gets 409, and a c
 
   await runner("POST", "/candidates", { kind: "watcher_event", ref: "lease:2", title: "lease two" });
   const [d] = await claim("runner-e", 60, "lease:2");
-  const done = await runner("POST", `/candidates/${d.id}/complete`, { owner: "runner-e", state: "proposed", note: "p_1" });
+  const done = await runner("POST", `/candidates/${d.id}/complete`, { owner: "runner-e", lease_token: d.lease_token, state: "proposed", note: "p_1" });
   assert.equal(done.state, "proposed");
   assert.deepEqual(await claim("runner-f", 60, "lease:2"), [], "a completed candidate is never handed out again");
+});
+
+test("lease tokens: completing needs the current claim's token, so a reclaim under the same owner name strands the old one", async () => {
+  await runner("POST", "/candidates", { kind: "watcher_event", ref: "token:1", title: "token one" });
+  const claim = async (owner, ttl_s) => (await runner("POST", "/candidates/claim", { owner, ttl_s, limit: 10 })).candidates.find((c) => c.ref === "token:1");
+  const complete = (id, body) => s.call("POST", `/candidates/${id}/complete`, { state: "done", ...body }, { raw: true, token: "runner" });
+
+  const first = await claim("runner-same", 0.5);
+  assert.match(first.lease_token, /^[0-9a-f]{32}$/);
+  assert.equal((await complete(first.id, { owner: "runner-same" })).status, 400, "lease_token is required");
+  assert.equal((await complete(first.id, { owner: "runner-same", lease_token: "0".repeat(32) })).status, 409);
+  assert.ok(!("lease_token" in (await runner("GET", "/candidates?state=claimed")).candidates.find((c) => c.ref === "token:1")), "only the claimant sees its token");
+
+  // A second process with the same owner name reclaims after expiry.
+  await new Promise((r) => setTimeout(r, 700));
+  const second = await claim("runner-same", 60);
+  assert.equal(second.id, first.id);
+  assert.notEqual(second.lease_token, first.lease_token);
+  assert.equal((await complete(first.id, { owner: "runner-same", lease_token: first.lease_token })).status, 409, "the reclaimed lease's token must no longer complete");
+  assert.equal((await complete(second.id, { owner: "runner-same", lease_token: second.lease_token })).status, 200);
 });
 
 // ---- proposals and approval links ----
@@ -246,6 +328,31 @@ test("an approval link is single-use, bound to the inputs_hash it showed, escape
   }
 });
 
+test("the card shows every input the hash binds, and a decision resolves its link before reading a body capped at 4 KB", async () => {
+  await s.call("POST", "/admin/notifications/pause", { paused: true });
+  try {
+    const inputs = { to: "alice@example.com", body: "Hi <b>Bob</b>,\n  see the branch", branch: "release/1.2", count: 42, count_text: "42", dry_run: false, cc: null, attachments: ["cv.pdf", "letter.pdf"], repo: { owner: "sam", name: "discovery" } };
+    const r = await runner("POST", "/proposals", proposal("inputs", { inputs }));
+    const path = linkPath(r.approve_url);
+    const html = await (await fetch(s.base + path)).text();
+    for (const shown of ["alice@example.com", "Hi &lt;b&gt;Bob&lt;/b&gt;,\n  see the branch", "release/1.2", ">42<", "false", "null", "cv.pdf", "letter.pdf", "sam", "discovery"]) {
+      assert.ok(html.includes(shown), `card must show ${shown}`);
+    }
+    for (const key of ["to", "body", "branch", "count", "count_text", "dry_run", "cc", "attachments", "repo", "owner", "name"]) assert.ok(html.includes(`<dt>${key}</dt>`), `card must label ${key}`);
+    assert.ok(!html.includes("<b>Bob</b>"), "input values are escaped");
+
+    // An unknown link is refused without reading its (large) body.
+    const junk = await fetch(`${s.base}/a/${"e".repeat(64)}`, { method: "POST", headers: { "content-type": "application/json" }, body: "x".repeat(1024 * 1024) });
+    assert.equal(junk.status, 404);
+    const big = await decideForm(path, { decision: "skip", pad: "p".repeat(5000) });
+    assert.equal(big.status, 413);
+    assert.equal((await proposalById(r.id)).state, "awaiting_approval", "an oversized body records nothing");
+    assert.equal((await decideForm(path, { decision: "skip" })).status, 200);
+  } finally {
+    await s.call("POST", "/admin/notifications/pause", { paused: false });
+  }
+});
+
 test("at most 3 approval notifications go out per UTC day, and a retried proposal never notifies twice", async () => {
   const made = [];
   for (const n of [1, 2, 3, 4]) made.push(await runner("POST", "/proposals", proposal(`cap-${n}`)));
@@ -262,4 +369,36 @@ test("at most 3 approval notifications go out per UTC day, and a retried proposa
   await runner("POST", "/proposals", proposal("cap-1"));
   bodies = await webhookBodies();
   assert.equal(bodies.length, 3, "a retried proposal must not notify again");
+});
+
+test("a lost creation response is recovered by rotating the token, which keeps expiry and inputs_hash and kills the old link", async () => {
+  await s.call("POST", "/admin/notifications/pause", { paused: true });
+  try {
+    const original = await runner("POST", "/proposals", proposal("rotate"));
+    const retry = await runner("POST", "/proposals", proposal("rotate"));
+    assert.equal(retry.approve_url, undefined);
+
+    const rotate = (id, body, token = "runner") => s.call("POST", `/proposals/${id}/rotate-token`, body, { raw: true, token });
+    assert.equal((await rotate(original.id, {}, "ingest")).status, 403);
+    const res = await rotate(original.id, {});
+    assert.equal(res.status, 200);
+    const rotated = await res.json();
+    assert.notEqual(rotated.approve_url, original.approve_url);
+    assert.equal(rotated.expires_at, original.expires_at);
+    assert.equal(rotated.inputs_hash, (await proposalById(original.id)).inputs_hash);
+    assert.equal((await fetch(s.base + linkPath(original.approve_url))).status, 404, "the old link stops working");
+    assert.equal((await fetch(s.base + linkPath(rotated.approve_url))).status, 200);
+
+    assert.equal((await decideForm(linkPath(rotated.approve_url), { decision: "later" })).status, 200);
+    assert.equal((await rotate(original.id, {})).status, 409, "a spent link can't be rotated back to life");
+  } finally {
+    await s.call("POST", "/admin/notifications/pause", { paused: false });
+  }
+
+  // A link already sent to T3 is the one in Sam's question card.
+  const sent = (await runner("GET", "/proposals?state=awaiting_approval&limit=200")).proposals.find((p) => p.notify_state === "sent");
+  const refused = await s.call("POST", `/proposals/${sent.id}/rotate-token`, {}, { raw: true, token: "runner" });
+  assert.equal(refused.status, 409);
+  assert.match(await refused.text(), /force/);
+  assert.equal((await s.call("POST", `/proposals/${sent.id}/rotate-token`, { force: true }, { raw: true, token: "runner" })).status, 200);
 });

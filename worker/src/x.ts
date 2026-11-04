@@ -8,7 +8,9 @@
 import type { Env } from "./check";
 import { fail, HttpError, intParam, isStr, oneOf, optStr, readJson, str } from "./http";
 
-export const INGEST_MAX_BYTES = 256 * 1024;
+// docs/CONTRACT.md: at most 128 KB. A 245 KB ingest took 15 to 17 ms of CPU
+// on a cold request in production, over the Free plan's 10 ms.
+export const INGEST_MAX_BYTES = 128 * 1024;
 const PAUSE_MS = 24 * 3600 * 1000;
 const DETAIL_QUEUE_SIZE = 5;
 
@@ -102,18 +104,24 @@ export async function ingest(env: Env, req: Request) {
   // Last occurrence wins for the post's fields, so metrics end at the latest
   // values in the request. urls, media and metrics stay objects: SQLite's
   // json_extract returns them as JSON text, so they are serialized once.
-  const posts = new Map<string, Post & { sightings: number; bookmarked: number }>();
-  const sightings: unknown[] = [];
+  // batch_ids lists the batches a post was sighted in; only batches new to
+  // the Worker count toward seen_count (see ingestStatements).
+  const posts = new Map<string, Post & { batch_ids: string[]; bookmark_batch_ids: string[]; bookmarked: number }>();
+  const sightings: { batch_id: string; post_id: string; surface: string; position: unknown; metrics: unknown }[] = [];
   const threads: unknown[] = [];
+  const batchIds = new Set<string>();
   b.batches.forEach((batch: Record<string, unknown>, bi: number) => {
     const at = `batches[${bi}]`;
     if (typeof batch !== "object" || batch === null) fail(`${at} must be an object`);
+    const batchId = str(batch.batch_id, `${at}.batch_id`, 200);
+    if (batchIds.has(batchId)) fail(`${at}.batch_id ${JSON.stringify(batchId)} appears twice in this request`);
+    batchIds.add(batchId);
     const op = oneOf(batch.op, OPS, `${at}.op`);
     const surface = oneOf(batch.surface, SURFACES, `${at}.surface`);
     if (!Array.isArray(batch.posts)) fail(`${at}.posts must be an array`);
     // One sighting per post per batch: a post X lists twice in one response
     // keeps its first position and its last metrics.
-    const inBatch = new Map<string, { post_id: string; surface: string; position: unknown; metrics: unknown }>();
+    const inBatch = new Map<string, (typeof sightings)[number]>();
     batch.posts.forEach((raw: Record<string, unknown>, pi: number) => {
       const p = normalizePost(raw, `${at}.posts[${pi}]`);
       const position = raw.position === undefined || raw.position === null ? null : raw.position;
@@ -122,10 +130,16 @@ export async function ingest(env: Env, req: Request) {
       if (seen) {
         seen.metrics = p.metrics;
       } else {
-        inBatch.set(p.id, { post_id: p.id, surface, position, metrics: p.metrics });
+        inBatch.set(p.id, { batch_id: batchId, post_id: p.id, surface, position, metrics: p.metrics });
       }
       const prev = posts.get(p.id);
-      posts.set(p.id, { ...p, sightings: (prev?.sightings ?? 0) + (seen ? 0 : 1), bookmarked: prev?.bookmarked || (surface === "bookmarks" ? 1 : 0) });
+      const bookmark = surface === "bookmarks";
+      posts.set(p.id, {
+        ...p,
+        batch_ids: seen ? prev!.batch_ids : [...(prev?.batch_ids ?? []), batchId],
+        bookmark_batch_ids: bookmark && !seen ? [...(prev?.bookmark_batch_ids ?? []), batchId] : (prev?.bookmark_batch_ids ?? []),
+        bookmarked: prev?.bookmarked || (bookmark ? 1 : 0),
+      });
     });
     sightings.push(...inBatch.values());
     if (batch.thread !== undefined && batch.thread !== null) {
@@ -135,20 +149,40 @@ export async function ingest(env: Env, req: Request) {
         if (!Array.isArray(v)) fail(`${at}.thread.${f} must be an array of ids`);
         return v.map((x, i) => postId(x, `${at}.thread.${f}[${i}]`));
       };
-      threads.push({ root_id: postId(t.root_id, `${at}.thread.root_id`), op: ids(t.op_self_thread_ids, "op_self_thread_ids"), replies: ids(t.reply_ids, "reply_ids") });
+      threads.push({ batch_id: batchId, root_id: postId(t.root_id, `${at}.thread.root_id`), op: ids(t.op_self_thread_ids, "op_self_thread_ids"), replies: ids(t.reply_ids, "reply_ids") });
     }
   });
 
   const now = Date.now();
+  // Random per request. The batch-id insert stamps it on each batch it is
+  // the first to record, and every later statement keeps only those batches.
+  const requestId = crypto.randomUUID();
   const postList = [...posts.values()];
   const bookmarkList = postList
-    .filter((p) => p.bookmarked)
-    .map((p) => ({ id: p.id, title: clip(`@${p.author_handle}: ${p.text.replace(/\s+/g, " ")}`, 140), url: `https://x.com/${p.author_handle}/status/${p.id}` }));
+    .filter((p) => p.bookmark_batch_ids.length > 0)
+    .map((p) => ({ id: p.id, b: p.bookmark_batch_ids, title: clip(`@${p.author_handle}: ${p.text.replace(/\s+/g, " ")}`, 140), url: `https://x.com/${p.author_handle}/status/${p.id}` }));
   const db = env.DB;
-  // Each bound string is serialized to D1 and counted against the 10 ms CPU
-  // limit, so the full post list is bound once and the count gets ids only.
-  const results = await db.batch([
-    db.prepare("SELECT count(*) AS n FROM x_posts WHERE id IN (SELECT value FROM json_each(?1))").bind(JSON.stringify([...posts.keys()])),
+  const fresh = (expr: string, req: string) => `EXISTS (SELECT 1 FROM x_ingest_batches ib WHERE ib.batch_id = ${expr} AND ib.request_id = ${req})`;
+  // `arr` must name its outer row explicitly (src.value): inside this
+  // subquery an unqualified `value` means bj.value.
+  const freshCount = (arr: string, req: string) => `(SELECT count(*) FROM json_each(${arr}) bj WHERE ${fresh("bj.value", req)})`;
+  // One D1 batch is one transaction. Each bound string is serialized to D1
+  // and counted against the 10 ms CPU limit, so the full post list is bound
+  // once and the other statements get ids only.
+  const results = await db.batch<Record<string, unknown>>([
+    db
+      .prepare(
+        `INSERT OR IGNORE INTO x_ingest_batches (batch_id, request_id, account, session_id, received_at)
+         SELECT value, ?2, ?3, ?4, ?5 FROM json_each(?1) RETURNING batch_id`,
+      )
+      .bind(JSON.stringify([...batchIds]), requestId, account, sessionId, now),
+    db
+      .prepare(
+        `SELECT count(*) AS n FROM json_each(?1) AS src
+         WHERE ${freshCount("json_extract(src.value, '$.b')", "?2")} > 0
+           AND NOT EXISTS (SELECT 1 FROM x_posts WHERE id = json_extract(value, '$.id'))`,
+      )
+      .bind(JSON.stringify(postList.map((p) => ({ id: p.id, b: p.batch_ids }))), requestId),
     // UNIQUE (kind, ref) keeps a post that is bookmarked again from making a
     // second candidate. A post already among Sam's seeded past saves
     // (positives) is not new work.
@@ -157,21 +191,28 @@ export async function ingest(env: Env, req: Request) {
         `INSERT OR IGNORE INTO candidates (id, kind, ref, title, url, state, created_at, updated_at, origin)
          SELECT lower(hex(randomblob(16))), 'x_post', json_extract(value, '$.id'), json_extract(value, '$.title'),
                 json_extract(value, '$.url'), 'new', ?2, ?2, 'bookmark'
-         FROM json_each(?1)
-         WHERE NOT EXISTS (SELECT 1 FROM positives WHERE id = json_extract(value, '$.id'))
+         FROM json_each(?1) AS src
+         WHERE ${freshCount("json_extract(src.value, '$.b')", "?3")} > 0
+           AND NOT EXISTS (SELECT 1 FROM positives WHERE id = json_extract(value, '$.id'))
          RETURNING id`,
       )
-      .bind(JSON.stringify(bookmarkList), now),
+      .bind(JSON.stringify(bookmarkList), now, requestId),
     db
       .prepare(
         `INSERT INTO x_posts (id, author_handle, author_name, created_at, text, lang, conversation_id, in_reply_to_id,
            quoted_id, retweet_of_id, urls_json, media_json, metrics_json, first_seen_at, last_seen_at, seen_count, bookmarked)
-         SELECT json_extract(value, '$.id'), json_extract(value, '$.author_handle'), json_extract(value, '$.author_name'),
-                json_extract(value, '$.created_at'), json_extract(value, '$.text'), json_extract(value, '$.lang'),
-                json_extract(value, '$.conversation_id'), json_extract(value, '$.in_reply_to_id'), json_extract(value, '$.quoted_id'),
-                json_extract(value, '$.retweet_of_id'), json_extract(value, '$.urls'), json_extract(value, '$.media'),
-                json_extract(value, '$.metrics'), ?2, ?2, json_extract(value, '$.sightings'), json_extract(value, '$.bookmarked')
-         FROM json_each(?1) WHERE true
+         SELECT id, author_handle, author_name, created_at, text, lang, conversation_id, in_reply_to_id, quoted_id, retweet_of_id,
+                urls, media, metrics, ?2, ?2, fresh_batches, bookmarked
+         FROM (SELECT json_extract(value, '$.id') AS id, json_extract(value, '$.author_handle') AS author_handle,
+                      json_extract(value, '$.author_name') AS author_name, json_extract(value, '$.created_at') AS created_at,
+                      json_extract(value, '$.text') AS text, json_extract(value, '$.lang') AS lang,
+                      json_extract(value, '$.conversation_id') AS conversation_id, json_extract(value, '$.in_reply_to_id') AS in_reply_to_id,
+                      json_extract(value, '$.quoted_id') AS quoted_id, json_extract(value, '$.retweet_of_id') AS retweet_of_id,
+                      json_extract(value, '$.urls') AS urls, json_extract(value, '$.media') AS media, json_extract(value, '$.metrics') AS metrics,
+                      json_extract(value, '$.bookmarked') AS bookmarked,
+                      ${freshCount("json_extract(src.value, '$.batch_ids')", "?3")} AS fresh_batches
+               FROM json_each(?1) AS src)
+         WHERE fresh_batches > 0
          ON CONFLICT (id) DO UPDATE SET
            author_handle = excluded.author_handle, author_name = excluded.author_name, text = excluded.text, lang = excluded.lang,
            conversation_id = excluded.conversation_id, in_reply_to_id = excluded.in_reply_to_id, quoted_id = excluded.quoted_id,
@@ -179,37 +220,43 @@ export async function ingest(env: Env, req: Request) {
            metrics_json = excluded.metrics_json, last_seen_at = excluded.last_seen_at,
            seen_count = x_posts.seen_count + excluded.seen_count, bookmarked = max(x_posts.bookmarked, excluded.bookmarked)`,
       )
-      .bind(JSON.stringify(postList), now),
+      .bind(JSON.stringify(postList), now, requestId),
     db
       .prepare(
-        `INSERT INTO x_sightings (post_id, account, surface, position, session_id, mode, seen_at, metrics_json)
+        `INSERT INTO x_sightings (post_id, account, surface, position, session_id, mode, seen_at, metrics_json, batch_id)
          SELECT json_extract(value, '$.post_id'), ?2, json_extract(value, '$.surface'), json_extract(value, '$.position'),
-                ?3, ?4, ?5, json(json_extract(value, '$.metrics'))
-         FROM json_each(?1)`,
+                ?3, ?4, ?5, json(json_extract(value, '$.metrics')), json_extract(value, '$.batch_id')
+         FROM json_each(?1)
+         WHERE ${fresh("json_extract(value, '$.batch_id')", "?6")}`,
       )
-      .bind(JSON.stringify(sightings), account, sessionId, mode, now),
+      .bind(JSON.stringify(sightings), account, sessionId, mode, now, requestId),
     db
       .prepare(
         `INSERT INTO x_threads (root_id, captured_at, account, op_self_thread_ids_json, reply_ids_json)
          SELECT json_extract(value, '$.root_id'), ?2, ?3, json(json_extract(value, '$.op')), json(json_extract(value, '$.replies'))
-         FROM json_each(?1) WHERE true
+         FROM json_each(?1)
+         WHERE ${fresh("json_extract(value, '$.batch_id')", "?4")}
          ON CONFLICT (root_id) DO UPDATE SET captured_at = excluded.captured_at, account = excluded.account,
            op_self_thread_ids_json = excluded.op_self_thread_ids_json, reply_ids_json = excluded.reply_ids_json`,
       )
-      .bind(JSON.stringify(threads), now, account),
+      .bind(JSON.stringify(threads), now, account, requestId),
     db
       .prepare(
-        `INSERT INTO x_sessions (session_id, account, mode, started_at, posts) VALUES (?1, ?2, ?3, ?4, ?5)
+        `INSERT INTO x_sessions (session_id, account, mode, started_at, posts)
+         VALUES (?1, ?2, ?3, ?4, (SELECT count(*) FROM json_each(?5) WHERE ${fresh("value", "?6")}))
          ON CONFLICT (session_id) DO UPDATE SET posts = x_sessions.posts + excluded.posts`,
       )
-      .bind(sessionId, account, mode, now, sightings.length),
+      .bind(sessionId, account, mode, now, JSON.stringify(sightings.map((x) => x.batch_id)), requestId),
   ]);
-  const existing = (results[0].results[0] as { n: number }).n;
+  const recorded = new Set(results[0].results.map((r) => r.batch_id as string));
   return {
-    posts_upserted: postList.length,
-    sightings: sightings.length,
-    new_posts: postList.length - existing,
-    candidates_created: results[1].results.length,
+    posts_upserted: results[3].meta.changes,
+    sightings: results[4].meta.changes,
+    new_posts: results[1].results[0].n as number,
+    candidates_created: results[2].results.length,
+    // Not in the contract: batch_ids the Worker had already recorded, whose
+    // contents this request skipped.
+    duplicate_batch_ids: [...batchIds].filter((id) => !recorded.has(id)),
   };
 }
 
@@ -233,6 +280,14 @@ export async function ingestStatus(env: Env, req: Request) {
   return { session_id: sessionId, status, pause_until: status === "ok" ? null : new Date(now + PAUSE_MS).toISOString() };
 }
 
+// A capture covers a post when it was taken on that post's permalink (the
+// extension records the focal post as root_id), or when the post is one of
+// the conversation root's own self-thread posts. A reply by someone else that
+// merely appears in the root's replies is not covered: its permalink shows
+// its own ancestors and replies, which the root's capture does not.
+const capturedFor = (postId: string, conversationId: string) =>
+  `(t.root_id = ${postId} OR (t.root_id = ${conversationId} AND EXISTS (SELECT 1 FROM json_each(t.op_self_thread_ids_json) WHERE value = ${postId})))`;
+
 // Candidates whose thread has not been captured, among posts this account
 // has seen. A non-ok session status in the last 24 h pauses the account.
 export async function detailQueue(env: Env, url: URL) {
@@ -247,7 +302,7 @@ export async function detailQueue(env: Env, url: URL) {
       `SELECT c.ref FROM candidates c JOIN x_posts p ON p.id = c.ref
        WHERE c.kind = 'x_post' AND c.state IN ('new', 'claimed')
          AND EXISTS (SELECT 1 FROM x_sightings s WHERE s.account = ?1 AND s.post_id = c.ref)
-         AND NOT EXISTS (SELECT 1 FROM x_threads t WHERE t.root_id IN (c.ref, p.conversation_id))
+         AND NOT EXISTS (SELECT 1 FROM x_threads t WHERE ${capturedFor("c.ref", "p.conversation_id")})
        ORDER BY c.created_at, c.id LIMIT ?2`,
     ).bind(account, DETAIL_QUEUE_SIZE),
   ]);
@@ -334,10 +389,9 @@ export async function postContext(env: Env, id: string) {
   const db = env.DB;
   const post = await db.prepare(`${WITH_LATEST_SIGHTING} WHERE p.id = ?1`).bind(id).first<PostRow>();
   if (!post) throw new HttpError(404, `post ${id} not found`);
-  // The extension may record the thread under the opened post's id or under
-  // its conversation root; prefer the post's own.
+  // See capturedFor; a capture on the post's own permalink wins.
   const thread = await db
-    .prepare(`SELECT * FROM x_threads WHERE root_id IN (?1, ?2) ORDER BY root_id = ?1 DESC LIMIT 1`)
+    .prepare(`SELECT * FROM x_threads t WHERE ${capturedFor("?1", "?2")} ORDER BY t.root_id = ?1 DESC LIMIT 1`)
     .bind(id, post.conversation_id ?? id)
     .first<{ root_id: string; captured_at: number; account: string; op_self_thread_ids_json: string; reply_ids_json: string }>();
   const opIds: string[] = thread ? JSON.parse(thread.op_self_thread_ids_json) : [];

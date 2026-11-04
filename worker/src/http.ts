@@ -10,13 +10,40 @@ export class HttpError extends Error {
 export const json = (data: unknown, status = 200) =>
   new Response(JSON.stringify(data), { status, headers: { "content-type": "application/json" } });
 
-// Reads a JSON body, refusing anything over maxBytes before parsing it, so a
-// large request cannot spend the 10 ms CPU budget on JSON.parse.
-export async function readJson<T>(req: Request, maxBytes = 64 * 1024): Promise<T> {
+// Reads the body as text, counting bytes as they arrive and stopping at the
+// first byte over maxBytes. A declared Content-Length over the limit is
+// refused before reading; a chunked body without one is refused mid-stream,
+// so an oversized body is never buffered or parsed.
+export async function readText(req: Request, maxBytes: number): Promise<string> {
   const declared = Number(req.headers.get("content-length") ?? 0);
   if (declared > maxBytes) throw new HttpError(413, `body is ${declared} bytes; the limit is ${maxBytes}`);
-  const text = await req.text();
-  if (text.length > maxBytes) throw new HttpError(413, `body is over ${maxBytes} bytes`);
+  if (!req.body) return "";
+  const reader = req.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      await reader.cancel();
+      throw new HttpError(413, `body is over ${maxBytes} bytes`);
+    }
+    chunks.push(value);
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const c of chunks) {
+    bytes.set(c, offset);
+    offset += c.byteLength;
+  }
+  return new TextDecoder().decode(bytes);
+}
+
+// Reads a JSON object body under maxBytes (see readText), so a large request
+// cannot spend the 10 ms CPU budget on JSON.parse.
+export async function readJson<T>(req: Request, maxBytes = 64 * 1024): Promise<T> {
+  const text = await readText(req, maxBytes);
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);

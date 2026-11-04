@@ -14,8 +14,8 @@ Results and raw logs are in [EVIDENCE.md](EVIDENCE.md).
 
 ```sh
 npm install
-npm test                         # 15 tests against two real wrangler dev stacks and the fixture server, about 10 s
-python3 scripts/mutation-check.py # breaks the code 37 ways, one at a time; every break must fail a test, about 5 min
+npm test                         # 21 tests against two real wrangler dev stacks and the fixture server, about 12 s
+python3 scripts/mutation-check.py # breaks the code 49 ways, one at a time; every break must fail a test, about 8 min
 npm run evidence                 # live sources plus the fixture phases, about 2 min; writes evidence/<timestamp>/
 ```
 
@@ -57,19 +57,20 @@ No secret is printed. Then `node scripts/verify-production.mjs <base-url> ~/.age
 
 | Route | Notes |
 | --- | --- |
-| `POST /ingest/x` | At most 256 KB. Returns `posts_upserted`, `sightings`, `new_posts`, `candidates_created`. Fails with 400 naming the first bad field, such as `batches[0].posts[3].author_handle`. |
+| `POST /ingest/x` | At most 128 KB, counted in bytes as the body arrives, with or without a Content-Length. Every batch needs a `batch_id`. A `batch_id` the Worker has already recorded is skipped whole: no sightings, no counter changes. Returns `posts_upserted` (unique posts written), `sightings`, `new_posts`, `candidates_created`, and `duplicate_batch_ids` (the skipped ones). Fails with 400 naming the first bad field, such as `batches[0].posts[3].author_handle`. |
 | `POST /ingest/x/status` | A status other than `ok` pauses that account's detail queue for 24 hours. |
 | `GET /x/detail-queue?account=` | Up to 5 candidate post ids this account has seen whose thread isn't captured yet. |
 | `GET /x/posts?unscored=1&limit=` | At most 200 per page, oldest first, each with its latest `account`, `surface` and `session_id`. Without `unscored=1`, newest first. |
 | `POST /x/posts/scores` | Up to 1000 `{id, score, parts}`. |
-| `GET /x/posts/:id/context` | The post, its quoted post, and the captured thread in X's server order, plus `missing_ids` for thread ids never ingested. |
+| `GET /x/posts/:id/context` | The post, its quoted post, and the captured thread in X's server order, plus `missing_ids` for thread ids never ingested. A thread counts as captured for a post only when it was captured on that post's permalink, or when the post is one of the conversation root's own self-thread posts. A reply listed under someone else's root is not captured, and it stays in the detail queue. |
 | `POST /embed` | Up to 100 texts, each cut to 4000 characters. Returns `vectors` plus Workers AI's `shape`, `pooling` and `usage`. |
 | `POST /positives`, `GET /positives?limit=&offset=` | Insert is deduplicated by id. A list page is at most 5000. |
 | `POST /candidates` | Idempotent on `(kind, ref)`: 201 when created, 200 with `created: false` when it exists. An `x_post` ref must be an ingested post. 429 after 15 unbookmarked `x_post` candidates in a UTC day. |
 | `GET /candidates?state=&kind=` | The newest 500. |
-| `POST /candidates/claim` | `{owner, ttl_s, limit}`, with `ttl_s` up to 3600 and `limit` up to 10. Unscored candidates (bookmarks, watcher matches) come first, then by score. |
-| `POST /candidates/:id/complete` | `{owner, state, note}`. Only the current lease holder; anyone else gets 409. |
+| `POST /candidates/claim` | `{owner, ttl_s, limit}`, with `ttl_s` up to 3600 and `limit` up to 10. Each returned candidate carries a random `lease_token`, which appears only in this response. Unscored candidates (bookmarks, watcher matches) come first, then by score. |
+| `POST /candidates/:id/complete` | `{owner, lease_token, state, note}`. Succeeds only with the current claim's token; a reclaim replaces it, so the earlier claimant gets 409 even under the same owner name. An owner whose lease expired but was never reclaimed still completes. |
 | `POST /proposals`, `GET /proposals?state=&since=` | See below. |
+| `POST /proposals/:id/rotate-token` | Re-mints the approval link of an unspent proposal, keeping `expires_at` and `inputs_hash`; the old link stops working. Refused with 409 once the notification went to T3 unless the body is `{"force": true}`, because the old link is the one in Sam's question card. Not in the contract. |
 | `GET /admin/log?since=` | Admin only. Counts and rows since a time (default 24 h): sessions, candidates, proposals, watcher events, the last cron run. |
 
 **Candidates.** A candidate is `new`, then `claimed` under a lease, then `proposed`, `done`, `skipped` or `failed`. An expired lease can be claimed again. A candidate whose lease has expired 3 times is set to `failed` instead of being handed out a fourth time, so one input that crashes the runner can't loop forever. `origin` records who made it: `bookmark` (ingest), `watcher` (a rule match) or `runner`.
@@ -77,8 +78,9 @@ No secret is printed. Then `node scripts/verify-production.mjs <base-url> ~/.age
 **Proposals and approvals.**
 
 - A proposal with `final_step_kind: null` is stored as `done` and never notifies.
-- Otherwise the Worker mints a random approval token, stores only its SHA-256, and returns `approve_url` once. Sending the same proposal again returns the same `id` with `duplicate: true`, and mints no new link and sends no new notification.
-- `inputs_hash` is the SHA-256 of the canonical JSON of `{final_step_kind, final_step, inputs}`. The card carries it in its form. A decision whose `inputs_hash` doesn't match is refused with 409, and so is one whose stored inputs no longer hash to it.
+- Otherwise the Worker mints a random approval token, stores only its SHA-256, and returns `approve_url` once. Sending the same proposal again returns the same `id` with `duplicate: true`, and mints no new link and sends no new notification. A runner that lost the first response recovers the link with `rotate-token`.
+- `inputs_hash` is the SHA-256 of the canonical JSON of `{final_step_kind, final_step, inputs}`. The card shows every field of `inputs` under "Exactly these inputs", nested objects and lists included, and carries the hash in its form. A decision whose `inputs_hash` doesn't match is refused with 409, and so is one whose stored inputs no longer hash to it.
+- `POST /a/:token` resolves the token before reading any of the body, then reads at most 4 KB (413 over that). It takes a form or JSON body.
 - A link is single-use: the first decision wins and later ones get 409. After `expires_at` (7 days by default, or `expires_in_s`), the link returns 410, and the next cron sets the proposal to `expired`.
 - `notify_state` records what happened to the notification, checked in this order: `paused`, `no_webhook` (secret unset), `capped` (3 already went out that UTC day), else a POST to `T3_APPROVALS_WEBHOOK_URL` with `{event_id, title, why, final_step, approve_url}`, ending `sent` or `failed`. A failed POST counts toward the cap and is not retried, because a resend would need the token the Worker no longer has. The proposal still waits, and its link came back in the `POST /proposals` response.
 
@@ -159,9 +161,9 @@ The watcher layer was observed locally and then in production on 2026-11-04; v2 
 ## What is not proven
 
 - **No real approval notification yet.** `T3_APPROVALS_WEBHOOK_URL` is not set and notifications are paused, so no T3 thread has received an approval.
-- **The 256 KB ingest cap is near the CPU limit.** In production a 245 KB ingest used 15 to 17 ms of CPU on the first request after idle and 6 to 9 ms after that; 128 KB used 8 ms, then 3 to 5 ms. The Workers Free limit is 10 ms. Requests over it succeeded, but Cloudflare may stop them. See EVIDENCE.md.
+- **Ingest CPU at the cap.** The cap is 128 KB because a 245 KB ingest used 15 to 17 ms of CPU on a cold request in production, over the Workers Free limit of 10 ms. 128 KB used 8 ms cold and 3 to 5 ms warm, measured before `batch_id` added a lookup per statement; see EVIDENCE.md for the current numbers.
 - **No real WebSub delivery.** HMAC verification is proven only with locally signed bodies. Lease renewal by cron isn't built.
-- **Not built:** MCP, a watcher update route, a candidate lease renewal, and retries for a failed approval notification.
+- **Not built:** MCP, a watcher update route, a candidate lease renewal, and retries for a failed approval notification. `x_ingest_batches` grows by one row per batch and is never pruned.
 - **Known edge cases, left alone:**
   - YouTube videos-tab items have no titles, so their candidate title is the video URL.
   - When the Atom feed comes back after the fallback was in use, Shorts that the videos tab never listed can emit once.

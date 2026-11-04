@@ -1,7 +1,8 @@
-// Candidates are the runner's work queue. A claim leases rows the way jobs
-// are leased (src/index.ts claimJob): one UPDATE picks and takes them, an
-// expired lease can be taken by the next claimant, and only the current
-// lease holder can complete.
+// Candidates are the runner's work queue. One UPDATE picks and leases rows,
+// giving each a random lease_token. An expired lease can be taken by the next
+// claimant, which replaces the token, so completing needs the token of the
+// current lease (docs/CONTRACT.md as of 10b06ac). Owner names alone are not
+// enough: two runner processes can share one.
 
 import type { Env } from "./check";
 import { fail, HttpError, isStr, oneOf, optStr, str, utcDayStart } from "./http";
@@ -37,10 +38,12 @@ interface CandidateRow {
   updated_at: number;
   note: string | null;
   origin: string;
+  lease_token: string | null;
 }
 
+// The lease token goes only to the claimant, in the claim response.
 export function present(row: CandidateRow) {
-  const { score_parts_json, ...rest } = row;
+  const { score_parts_json, lease_token, ...rest } = row;
   return { ...rest, score_parts: score_parts_json ? JSON.parse(score_parts_json) : null };
 }
 
@@ -95,14 +98,15 @@ export async function claimCandidates(env: Env, b: Record<string, unknown>) {
   const [, claimed] = await db.batch<CandidateRow>([
     db
       .prepare(
-        `UPDATE candidates SET state = 'failed', owner = NULL, lease_until = NULL, updated_at = ?1,
+        `UPDATE candidates SET state = 'failed', owner = NULL, lease_until = NULL, lease_token = NULL, updated_at = ?1,
            note = 'lease expired after ' || attempts || ' attempts'
          WHERE state = 'claimed' AND lease_until < ?1 AND attempts >= ?2`,
       )
       .bind(now, MAX_ATTEMPTS),
     db
       .prepare(
-        `UPDATE candidates SET state = 'claimed', owner = ?1, lease_until = ?2, attempts = attempts + 1, updated_at = ?3
+        `UPDATE candidates SET state = 'claimed', owner = ?1, lease_until = ?2, attempts = attempts + 1, updated_at = ?3,
+           lease_token = lower(hex(randomblob(16)))
          WHERE id IN (
            SELECT id FROM candidates
            WHERE state = 'new' OR (state = 'claimed' AND lease_until < ?3)
@@ -112,24 +116,25 @@ export async function claimCandidates(env: Env, b: Record<string, unknown>) {
       )
       .bind(owner, now + ttl * 1000, now, Math.min(limit, MAX_LIMIT)),
   ]);
-  return { candidates: claimed.results.map(present) };
+  return { candidates: claimed.results.map((row) => ({ ...present(row), lease_token: row.lease_token })) };
 }
 
 export async function completeCandidate(env: Env, id: string, b: Record<string, unknown>) {
   const owner = str(b.owner, "owner", 200);
+  const leaseToken = str(b.lease_token, "lease_token", 64);
   const state = oneOf(b.state, FINAL_STATES, "state");
   const note = optStr(b.note, "note", 2000);
   const row = await env.DB.prepare(
-    `UPDATE candidates SET state = ?3, note = coalesce(?4, note), owner = ?2, lease_until = NULL, updated_at = ?5
-     WHERE id = ?1 AND owner = ?2 AND state = 'claimed'
+    `UPDATE candidates SET state = ?3, note = coalesce(?4, note), owner = ?2, lease_until = NULL, lease_token = NULL, updated_at = ?5
+     WHERE id = ?1 AND owner = ?2 AND lease_token = ?6 AND state = 'claimed'
      RETURNING *`,
   )
-    .bind(id, owner, state, note, Date.now())
+    .bind(id, owner, state, note, Date.now(), leaseToken)
     .first<CandidateRow>();
   if (row) return present(row);
   const exists = await env.DB.prepare("SELECT state, owner FROM candidates WHERE id = ?").bind(id).first<{ state: string; owner: string | null }>();
   if (!exists) throw new HttpError(404, `candidate ${id} not found`);
-  throw new HttpError(409, `candidate ${id} is not claimed by ${owner} (state ${exists.state}${exists.owner ? `, owner ${exists.owner}` : ""})`);
+  throw new HttpError(409, `candidate ${id} is not leased to ${owner} under that lease_token (state ${exists.state}${exists.owner ? `, owner ${exists.owner}` : ""})`);
 }
 
 export async function listCandidates(env: Env, url: URL) {
