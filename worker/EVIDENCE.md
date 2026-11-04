@@ -351,3 +351,29 @@ Everything else it checked passed, including the token matrix, the 256 KB bounda
 M31 first went uncaught. The three "concurrent" decisions ran one after another in local workerd, so an early state check refused the later ones before the atomic UPDATE mattered. Single use now rests on the conditional UPDATE alone, and a sequential second decision exercises it.
 
 `/embed` and the case where `T3_APPROVALS_WEBHOOK_URL` is unset have no local test. The first always reaches the real Workers AI service, and the second needs a second stack for one CASE branch. `/embed` was exercised in production above. The unset-webhook branch can't be reached in production while it is paused, because pause is checked first, so it was run once in a local stack started without the secret: `POST /proposals` returned 201, `awaiting_approval`, `notify_state: no_webhook` and an `approve_url`, `notified_at` stayed null, and nothing was POSTed.
+
+## Review fixes (contract 10b06ac)
+
+Two reviews of `worker/` at 191a188 found seven defects. Each fix has a test that fails on 191a188 (run against that commit's `src/` with the new tests) and a mutation that puts the defect back.
+
+| Defect | Fix | Test | Mutations |
+| --- | --- | --- | --- |
+| A replayed ingest wrote new sightings and bumped `seen_count` and session posts | `x_ingest_batches` records each `batch_id` with a random id for the request, first in the same D1 batch; every later statement keeps only batches this request recorded | replayed batch_id | M41 to M43 |
+| `complete` trusted the owner name | claims return a random `lease_token`; `complete` needs the current one; a reclaim replaces it | lease tokens | M44, M45 |
+| The card never showed `inputs` | every field, nested objects and lists included, under "Exactly these inputs" | card shows every input | M46 |
+| `POST /a/:token` parsed an unlimited body before checking the token | the token is resolved first, then at most 4 KB is read | same test | M47, M48 |
+| The ingest cap was 256 KB and counted characters without a Content-Length | 128 KB, counted in bytes while reading | ingest cap | M49, M50 |
+| A lost creation response stranded the approval link | `POST /proposals/:id/rotate-token`; needs `force` once the link went to T3 | rotate | M51, M52 |
+| `/context` and the detail queue treated a reply as captured by another author's root thread | captured means the post's own permalink, or the OP's self-thread inside the root capture | reply coverage | M53 |
+
+A second contract test (native Codex, `gpt-6.1-sol`, high, no prior context) then found one more defect. A request with a new batch followed by a replayed batch holding an older copy of the same post kept the replay's text and metrics. Ingest now upserts one version of each post per batch, in request order, from new batches only. The replay test covers this; it fails on 3435f21 with `actual: 'post r-1', expected: 'edited'`. The tester also noted that `duplicate_batch_ids` is a fifth response field the contract doesn't list.
+
+**Deploys.** `924b01bd` (with migration 0004, applied first) at 10:19 UTC, then `c5260b42` at 10:48 for the ordering fix.
+
+**Production checks on `c5260b42`.** A replay returned all zeros, with the batch in `duplicate_batch_ids`, and left session posts and `seen_count` unchanged. A new batch followed by a stale replay stored "edited" and 777 likes, with `seen_count` 2. A reply under another author's root capture returned `thread_captured: false`. A 140,487-byte body of 2-byte characters returned 413. A synthetic lease returned a 32-hex `lease_token`; a wrong token got 409, a missing one 400, and the right one 200. The card showed every input field, escaped. An unknown token with a 1 MB body returned 404, and a 5 KB decision on a real link returned 413 and recorded nothing. Rotation kept `expires_at`, killed the old link (404), and was refused (409) after a decision.
+
+**CPU.** A 128 KB ingest of 146 new posts used 3 to 6 ms (seven requests).
+
+**Synthetic data reached the live runner.** The runner scored the benchmark posts, made three of them candidates through `POST /candidates`, and claimed them. It also processed two synthetic candidates from the contract test. All synthetic rows were deleted. Production then held 0 posts, the 5 real candidates (all `skipped` by the runner), 0 proposals and 597 positives.
+
+**Tests and mutations.** 21 tests pass (`evidence/tests-v2.txt`). All 49 mutations fail at least one test (`evidence/mutation-check-v2.txt`). M24 (complete ignores owner) was retired: with lease tokens no test can fail on the owner check alone. M16 now targets the per-batch post version, because the old target became a no-op.

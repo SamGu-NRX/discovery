@@ -2,26 +2,32 @@
 > test
 > node --test test/
 
-✔ each token reaches only its own routes (1090.729584ms)
-✔ ingest upserts posts with the latest metrics, writes one sighting per post per batch, and makes one candidate per newly bookmarked post (41.827583ms)
-✔ a captured thread leaves the detail queue and reads back in server order; a non-ok session pauses the account (18.980125ms)
-✔ candidates: an expired lease is reclaimed, a stale owner gets 409, and a candidate that keeps expiring fails instead of looping (2168.060416ms)
-✔ a proposal with no irreversible step is done at once and never notifies (10.145ms)
-✔ an approval link is single-use, bound to the inputs_hash it showed, escapes proposal text, and dies at expiry (1175.129292ms)
-✔ at most 3 approval notifications go out per UTC day, and a retried proposal never notifies twice (22.971ms)
-✔ unchanged sources emit no events: 304, volatile JSON metadata, per-request page nonces (1116.106625ms)
-✔ a change emits exactly one event per new item, and seeded items never emit (28.065792ms)
-✔ duplicate WebSub delivery creates one event and one candidate, a bad signature none, and the poller agrees (33.000958ms)
-✔ an expired lease is reclaimed by a second claimant; a done job and a stale owner are refused (2434.317625ms)
-✔ a matching new item switches the watcher to the hot interval, and it returns to normal after the window (2250.211875ms)
-✔ a seeded rule match becomes one candidate per open item, never sets hot, later checks add only new matches, and nothing POSTs (41.714334ms)
-✔ the cron re-arms a watcher whose alarm was lost, and /health reports the run (386.641125ms)
-✔ a failing primary URL falls back without counting as a failure, and the switch emits nothing (17.357959ms)
-ℹ tests 15
+✔ each token reaches only its own routes (1130.276875ms)
+✔ ingest upserts posts with the latest metrics, writes one sighting per post per batch, and makes one candidate per newly bookmarked post (41.846833ms)
+✔ a replayed batch_id writes no sightings and moves no counter, and a partial replay counts only the new batch (32.160541ms)
+✔ the ingest cap is 128 KB of bytes, counted while reading, even without a Content-Length (9.395208ms)
+✔ a captured thread leaves the detail queue and reads back in server order; a non-ok session pauses the account (16.9775ms)
+✔ a reply is covered only by a capture of its own permalink, not by the root's capture listing it among replies (15.381333ms)
+✔ candidates: an expired lease is reclaimed, a stale owner gets 409, and a candidate that keeps expiring fails instead of looping (2159.478416ms)
+✔ lease tokens: completing needs the current claim's token, so a reclaim under the same owner name strands the old one (728.317958ms)
+✔ a proposal with no irreversible step is done at once and never notifies (8.000292ms)
+✔ an approval link is single-use, bound to the inputs_hash it showed, escapes proposal text, and dies at expiry (1190.237916ms)
+✔ the card shows every input the hash binds, and a decision resolves its link before reading a body capped at 4 KB (26.283125ms)
+✔ at most 3 approval notifications go out per UTC day, and a retried proposal never notifies twice (20.383ms)
+✔ a lost creation response is recovered by rotating the token, which keeps expiry and inputs_hash and kills the old link (25.580208ms)
+✔ unchanged sources emit no events: 304, volatile JSON metadata, per-request page nonces (1156.146458ms)
+✔ a change emits exactly one event per new item, and seeded items never emit (28.461959ms)
+✔ duplicate WebSub delivery creates one event and one candidate, a bad signature none, and the poller agrees (35.222833ms)
+✔ an expired lease is reclaimed by a second claimant; a done job and a stale owner are refused (2434.487625ms)
+✔ a matching new item switches the watcher to the hot interval, and it returns to normal after the window (2238.488875ms)
+✔ a seeded rule match becomes one candidate per open item, never sets hot, later checks add only new matches, and nothing POSTs (36.152875ms)
+✔ the cron re-arms a watcher whose alarm was lost, and /health reports the run (355.309708ms)
+✔ a failing primary URL falls back without counting as a failure, and the switch emits nothing (16.866833ms)
+ℹ tests 21
 ℹ suites 0
-ℹ pass 15
+ℹ pass 21
 ℹ fail 0
 ℹ cancelled 0
 ℹ skipped 0
 ℹ todo 0
-ℹ duration_ms 6408.311291
+ℹ duration_ms 6445.31775
