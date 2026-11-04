@@ -19,7 +19,7 @@ muts = [
  ("M14 seed match makes no candidates", "src/check.ts", "rows = matched.map((i) => ({ ref: `${w.id}:${i.id}`, title: itemTitle(i), url: i.url }));", "rows = matched.slice(0, 1).map((i) => ({ ref: `${w.id}:${i.id}`, title: itemTitle(i), url: i.url }));"),
  ("M15 ingest keeps old metrics", "src/x.ts", "metrics_json = excluded.metrics_json, last_seen_at", "last_seen_at"),
  ("M16 one sighting per post per request", "src/x.ts", "seen_count = x_posts.seen_count + excluded.seen_count", "seen_count = x_posts.seen_count + 1"),
- ("M17 every surface counts as a bookmark", "src/x.ts", 'if (surface === "bookmarks") bookmarkIds.add(p.id);', "bookmarkIds.add(p.id);"),
+ ("M17 every surface counts as a bookmark", "src/x.ts", 'bookmarked: prev?.bookmarked || (surface === "bookmarks" ? 1 : 0)', "bookmarked: 1"),
  ("M18 seeded past saves become candidates", "src/x.ts", "WHERE NOT EXISTS (SELECT 1 FROM positives WHERE id = json_extract(value, '$.id'))", ""),
  ("M19 unscored filter ignored", "src/x.ts", "WHERE p.score IS NULL ORDER BY", "WHERE 1 ORDER BY"),
  ("M20 thread replies in D1 order", "src/x.ts", "replies: inOrder(replyIds)", "replies: rows.filter((r) => replyIds.includes(r.id)).map(presentPost)"),
@@ -30,6 +30,17 @@ muts = [
  ("M25 no attempt cap on candidates", "src/candidates.ts", "AND attempts >= ?2`", "AND attempts >= ?2 AND 0`"),
  ("M26 route scopes not checked", "src/index.ts", 'if (scope !== "admin" && !found.route.scopes.includes(scope))', "if (false)"),
  ("M27 admin API open to any token", "src/index.ts", '  if (scope !== "admin") throw new HttpError(403, `the ${scope} token cannot call ${req.method} ${url.pathname}`);\n', ""),
+ # v2, slice 2
+ ("M28 approval daily cap ignored", "src/proposals.ts", "export const APPROVAL_DAILY_CAP = 3;", "export const APPROVAL_DAILY_CAP = 1000;"),
+ ("M29 pause ignored for approvals", "src/proposals.ts", "WHEN (SELECT value FROM settings WHERE key = 'notifications_paused') = '1' THEN 'paused'", "WHEN 0 THEN 'paused'"),
+ ("M30 no-final-step proposal asks anyway", "src/proposals.ts", "  if (!finalStepKind) {\n    const row", "  if (false) {\n    const row"),
+ ("M31 decision UPDATE not single-use", "src/proposals.ts", "WHERE id = ?1 AND state = 'awaiting_approval' AND expires_at > ?3 AND inputs_hash = ?5", "WHERE id = ?1 AND expires_at > ?3 AND inputs_hash = ?5"),
+ ("M32 card inputs_hash not checked", "src/proposals.ts", "boundHash !== p.inputs_hash", "false"),
+ ("M33 expiry ignored", "src/proposals.ts", '(p.state === "awaiting_approval" && p.expires_at !== null && p.expires_at <= now)', "false"),
+ ("M34 card text not escaped", "src/proposals.ts", "const esc = (s: string) => s.replace(", "const esc = (s: string) => s; const unused = (s: string) => s.replace("),
+ ("M35 retried proposal gets a new id", "src/proposals.ts", 'const id = "p_" + (await sha256Hex(canonicalJson({ candidate_ids: candidateIds, kind, title, inputs_hash: hash }))).slice(0, 24);', 'const id = "p_" + randomHex(12);'),
+ ("M36 cron never expires proposals", "src/index.ts", "const expired = await expireProposals(env, now);", "const expired = 0;"),
+ ("M37 malformed prepared URL breaks the card", "src/proposals.ts", "  } catch {\n    return null;\n  }\n}\n\nfunction preparedItem", "  } finally {\n  }\n}\n\nfunction preparedItem"),
 ]
 for name, path, old, new in muts:
     if only and name.split()[0] not in only:

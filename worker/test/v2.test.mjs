@@ -45,7 +45,10 @@ test("each token reaches only its own routes", async () => {
   for (const [method, path] of [["GET", "/x/posts"], ["POST", "/candidates/claim"], ["POST", "/embed"], ["GET", "/positives"], ["GET", "/admin/watchers"], ["POST", "/jobs/claim"]]) {
     assert.equal(await status(method, path, "ingest"), 403, `ingest token on ${method} ${path}`);
   }
-  for (const [method, path] of [["POST", "/ingest/x"], ["POST", "/ingest/x/status"], ["GET", "/x/detail-queue?account=a"], ["GET", "/admin/events"], ["POST", "/admin/watchers"], ["GET", "/jobs/1"]]) {
+  for (const [method, path] of [["GET", "/proposals"], ["GET", "/admin/log"]]) {
+    assert.equal(await status(method, path, "ingest"), 403, `ingest token on ${method} ${path}`);
+  }
+  for (const [method, path] of [["POST", "/ingest/x"], ["POST", "/ingest/x/status"], ["GET", "/x/detail-queue?account=a"], ["GET", "/admin/events"], ["POST", "/admin/watchers"], ["GET", "/jobs/1"], ["GET", "/admin/log"]]) {
     assert.equal(await status(method, path, "runner"), 403, `runner token on ${method} ${path}`);
   }
   assert.equal(await status("GET", "/x/posts", "none"), 401);
@@ -145,4 +148,105 @@ test("candidates: an expired lease is reclaimed, a stale owner gets 409, and a c
   const done = await runner("POST", `/candidates/${d.id}/complete`, { owner: "runner-e", state: "proposed", note: "p_1" });
   assert.equal(done.state, "proposed");
   assert.deepEqual(await claim("runner-f", 60, "lease:2"), [], "a completed candidate is never handed out again");
+});
+
+// ---- proposals and approval links ----
+
+const proposal = (n, extra = {}) => ({
+  candidate_ids: [`cand-${n}`],
+  kind: "apply_or_attend",
+  title: `Proposal ${n}`,
+  why: "Matches what you saved.",
+  evidence: [{ quote: "applications open", where: "op" }],
+  prepared: [{ type: "draft", ref: "https://example.com/draft", summary: "Draft answers" }],
+  final_step_kind: "submit",
+  final_step: "Submit the application form",
+  inputs: { form: "https://example.com/apply", answers: { n } },
+  ...extra,
+});
+const webhookBodies = async () => (await s.control("webhooks")).map((w) => w.body);
+const linkPath = (approveUrl) => new URL(approveUrl).pathname;
+const decideForm = (path, fields) =>
+  fetch(s.base + path, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams(fields).toString() });
+const proposalById = async (id) => (await runner("GET", "/proposals?limit=200")).proposals.find((p) => p.id === id);
+
+test("a proposal with no irreversible step is done at once and never notifies", async () => {
+  const r = await runner("POST", "/proposals", proposal("done", { final_step_kind: null, final_step: null }));
+  assert.equal(r.state, "done");
+  assert.equal(r.approve_url, undefined);
+  assert.deepEqual((await webhookBodies()).filter((b) => b.event_id === r.id), []);
+  const stored = await proposalById(r.id);
+  assert.equal(stored.notify_state, null);
+  assert.equal(stored.approval_token_hash, undefined, "the token hash is never returned");
+});
+
+test("an approval link is single-use, bound to the inputs_hash it showed, escapes proposal text, and dies at expiry", async () => {
+  await s.call("POST", "/admin/notifications/pause", { paused: true });
+  try {
+    const odd = { title: 'Apply <script>alert("x")</script>', prepared: [{ type: "file", ref: "https://bad host/x", summary: "A ref that is not a valid URL" }] };
+    const a = await runner("POST", "/proposals", proposal("link", odd));
+    assert.equal(a.state, "awaiting_approval");
+    assert.equal(a.notify_state, "paused");
+    assert.deepEqual(await webhookBodies(), [], "a paused proposal must not be sent");
+    const path = linkPath(a.approve_url);
+
+    const card = await fetch(s.base + path);
+    assert.equal(card.status, 200);
+    const html = await card.text();
+    assert.ok(!html.includes("<script>alert"), "proposal text must be escaped");
+    assert.ok(html.includes("Apply &lt;script&gt;"));
+    assert.ok(html.includes('value="approve"'), "a malformed prepared ref must not stop the card from rendering its buttons");
+    const shown = html.match(/name="inputs_hash" value="([0-9a-f]{64})"/)[1];
+
+    const stale = await decideForm(path, { decision: "approve", inputs_hash: "0".repeat(64) });
+    assert.equal(stale.status, 409, "a card rendered for other inputs must not approve these");
+    assert.equal((await proposalById(a.id)).state, "awaiting_approval");
+
+    // Three decisions sent together: exactly one is recorded. Local workerd
+    // may run them one after another, so the later sequential decision is
+    // what proves the UPDATE itself refuses a spent link (mutation M31).
+    const raced = await Promise.all([
+      decideForm(path, { decision: "approve", inputs_hash: shown }),
+      fetch(s.base + path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ decision: "skip" }) }),
+      decideForm(path, { decision: "later", inputs_hash: shown }),
+    ]);
+    assert.deepEqual(raced.map((r) => r.status).sort(), [200, 409, 409]);
+    const decided = await proposalById(a.id);
+    assert.ok(["approved", "skipped", "later"].includes(decided.state));
+    assert.equal(decided.result.inputs_hash, shown);
+    assert.equal((await decideForm(path, { decision: "approve", inputs_hash: shown })).status, 409);
+
+    const retry = await runner("POST", "/proposals", proposal("link", odd));
+    assert.equal(retry.id, a.id);
+    assert.equal(retry.duplicate, true);
+    assert.equal(retry.approve_url, undefined, "a retry must not mint a second link");
+
+    const b = await runner("POST", "/proposals", proposal("expiring", { expires_in_s: 1 }));
+    await new Promise((r) => setTimeout(r, 1100));
+    assert.equal((await fetch(s.base + linkPath(b.approve_url))).status, 410);
+    assert.equal((await decideForm(linkPath(b.approve_url), { decision: "approve" })).status, 410);
+    assert.equal((await fetch(`${s.base}/__scheduled?cron=*/15+*+*+*+*`)).status, 200);
+    assert.equal((await proposalById(b.id)).state, "expired");
+    assert.equal((await fetch(s.base + "/a/" + "f".repeat(64))).status, 404);
+  } finally {
+    await s.call("POST", "/admin/notifications/pause", { paused: false });
+  }
+});
+
+test("at most 3 approval notifications go out per UTC day, and a retried proposal never notifies twice", async () => {
+  const made = [];
+  for (const n of [1, 2, 3, 4]) made.push(await runner("POST", "/proposals", proposal(`cap-${n}`)));
+  assert.deepEqual(made.map((m) => m.notify_state), ["sent", "sent", "sent", "capped"]);
+  let bodies = await webhookBodies();
+  assert.deepEqual(bodies.map((b) => b.event_id), made.slice(0, 3).map((m) => m.id));
+  for (const [i, b] of bodies.entries()) {
+    assert.deepEqual(Object.keys(b).sort(), ["approve_url", "event_id", "final_step", "title", "why"]);
+    assert.equal(b.approve_url, made[i].approve_url);
+  }
+  assert.ok((await proposalById(made[0].id)).notified_at > 0);
+  assert.equal((await proposalById(made[3].id)).notified_at, null);
+
+  await runner("POST", "/proposals", proposal("cap-1"));
+  bodies = await webhookBodies();
+  assert.equal(bodies.length, 3, "a retried proposal must not notify again");
 });

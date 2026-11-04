@@ -82,10 +82,10 @@ export async function ingest(env: Env, req: Request) {
   if (!Array.isArray(b.batches)) fail("batches must be an array");
 
   // Last occurrence wins for the post's fields, so metrics end at the latest
-  // values in the request.
-  const posts = new Map<string, Post & { sightings: number }>();
+  // values in the request. urls, media and metrics stay objects: SQLite's
+  // json_extract returns them as JSON text, so they are serialized once.
+  const posts = new Map<string, Post & { sightings: number; bookmarked: number }>();
   const sightings: unknown[] = [];
-  const bookmarkIds = new Set<string>();
   const threads: unknown[] = [];
   b.batches.forEach((batch: Record<string, unknown>, bi: number) => {
     const at = `batches[${bi}]`;
@@ -97,9 +97,9 @@ export async function ingest(env: Env, req: Request) {
       const p = normalizePost(raw, `${at}.posts[${pi}]`);
       const position = raw.position === undefined || raw.position === null ? null : raw.position;
       if (position !== null && !Number.isInteger(position)) fail(`${at}.posts[${pi}].position must be an integer`);
-      posts.set(p.id, { ...p, sightings: (posts.get(p.id)?.sightings ?? 0) + 1 });
+      const prev = posts.get(p.id);
+      posts.set(p.id, { ...p, sightings: (prev?.sightings ?? 0) + 1, bookmarked: prev?.bookmarked || (surface === "bookmarks" ? 1 : 0) });
       sightings.push({ post_id: p.id, surface, position, metrics: p.metrics });
-      if (surface === "bookmarks") bookmarkIds.add(p.id);
     });
     if (batch.thread !== undefined && batch.thread !== null) {
       const t = batch.thread as Record<string, unknown>;
@@ -112,19 +112,15 @@ export async function ingest(env: Env, req: Request) {
   });
 
   const now = Date.now();
-  const postList = [...posts.values()].map((p) => ({
-    ...p,
-    urls: JSON.stringify(p.urls),
-    media: JSON.stringify(p.media),
-    metrics: JSON.stringify(p.metrics),
-    bookmarked: bookmarkIds.has(p.id) ? 1 : 0,
-  }));
+  const postList = [...posts.values()];
   const bookmarkList = postList
     .filter((p) => p.bookmarked)
     .map((p) => ({ id: p.id, title: clip(`@${p.author_handle}: ${p.text.replace(/\s+/g, " ")}`, 140), url: `https://x.com/${p.author_handle}/status/${p.id}` }));
   const db = env.DB;
+  // Each bound string is serialized to D1 and counted against the 10 ms CPU
+  // limit, so the full post list is bound once and the count gets ids only.
   const results = await db.batch([
-    db.prepare("SELECT count(*) AS n FROM x_posts WHERE id IN (SELECT json_extract(value, '$.id') FROM json_each(?1))").bind(JSON.stringify(postList)),
+    db.prepare("SELECT count(*) AS n FROM x_posts WHERE id IN (SELECT value FROM json_each(?1))").bind(JSON.stringify([...posts.keys()])),
     // UNIQUE (kind, ref) keeps a post that is bookmarked again from making a
     // second candidate. A post already among Sam's seeded past saves
     // (positives) is not new work.
@@ -273,9 +269,11 @@ const WITH_LATEST_SIGHTING = `
   SELECT p.*, s.account, s.surface, s.session_id FROM x_posts p
   LEFT JOIN x_sightings s ON s.id = (SELECT max(id) FROM x_sightings WHERE post_id = p.id)`;
 
+// 500 rows took 11 ms of CPU in production on 2026-11-04, so a page is at
+// most 200, the contract's example size.
 export async function listPosts(env: Env, url: URL) {
   const unscored = url.searchParams.get("unscored") === "1";
-  const limit = intParam(url, "limit", 200, 500);
+  const limit = intParam(url, "limit", 200, 200);
   // Separate statements so the unscored read can use the partial index
   // x_posts_unscored instead of scanning every post.
   const sql = unscored
@@ -338,16 +336,58 @@ const EMBED_MAX_TEXTS = 100;
 // bge-base-en-v1.5 reads at most 512 tokens; longer text only costs bytes.
 const EMBED_MAX_CHARS = 4000;
 
-export async function embed(env: Env, req: Request) {
+// Workers AI answers {"data":[[...768 floats]...],"shape":[n,768],...}.
+// Parsing and re-serializing 100 vectors (about 1.6 MB of JSON) took 8 to
+// 11 ms of CPU in production on 2026-11-04, over the Free plan's 10 ms. So
+// the body streams through unparsed, with only its leading `{"data":`
+// renamed to the contract's `vectors`. The shape, pooling and usage fields
+// pass through as extra fields.
+const RAW_PREFIX = new TextEncoder().encode('{"data":');
+
+// A JS ReadableStream that re-enqueued each chunk cost 30 to 35 ms of CPU for
+// 100 vectors (production, 2026-11-04). IdentityTransformStream lets the
+// runtime pipe the rest of the body without running JS per chunk.
+export async function embed(env: Env, req: Request, ctx: ExecutionContext): Promise<Response> {
   const b = await readJson<{ texts: unknown }>(req, 512 * 1024);
   if (!Array.isArray(b.texts) || b.texts.length === 0 || b.texts.length > EMBED_MAX_TEXTS) fail(`texts must be an array of 1 to ${EMBED_MAX_TEXTS} strings`);
   const texts = b.texts.map((t, i) => {
     if (typeof t !== "string" || t.trim() === "") fail(`texts[${i}] must be a non-empty string`);
     return t.length > EMBED_MAX_CHARS ? t.slice(0, EMBED_MAX_CHARS) : t;
   });
-  const out = (await env.AI.run(EMBED_MODEL, { text: texts })) as { data?: number[][] };
-  if (!Array.isArray(out.data) || out.data.length !== texts.length) throw new HttpError(502, `Workers AI returned ${out.data?.length ?? "no"} vectors for ${texts.length} texts`);
-  return { model: EMBED_MODEL, vectors: out.data };
+  const raw = (await env.AI.run(EMBED_MODEL, { text: texts }, { returnRawResponse: true })) as unknown as Response;
+  if (!raw.ok || !raw.body) throw new HttpError(502, `Workers AI returned HTTP ${raw.status}: ${(await raw.text()).slice(0, 300)}`);
+
+  const reader = raw.body.getReader();
+  let head = new Uint8Array(0);
+  while (head.length < RAW_PREFIX.length) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    const next = new Uint8Array(head.length + value.length);
+    next.set(head);
+    next.set(value, head.length);
+    head = next;
+  }
+  if (!RAW_PREFIX.every((byte, i) => head[i] === byte)) {
+    await reader.cancel();
+    throw new HttpError(502, `Workers AI response does not start with {"data": (got ${JSON.stringify(new TextDecoder().decode(head.slice(0, 40)))})`);
+  }
+  reader.releaseLock();
+  const prefix = new TextEncoder().encode(`{"model":${JSON.stringify(EMBED_MODEL)},"vectors":`);
+  const first = new Uint8Array(prefix.length + head.length - RAW_PREFIX.length);
+  first.set(prefix);
+  first.set(head.subarray(RAW_PREFIX.length), prefix.length);
+  const { readable, writable } = new IdentityTransformStream();
+  const writer = writable.getWriter();
+  // The write resolves only once the client reads it, so it runs alongside
+  // the response instead of before it.
+  ctx.waitUntil(
+    (async () => {
+      await writer.write(first);
+      writer.releaseLock();
+      await raw.body!.pipeTo(writable);
+    })(),
+  );
+  return new Response(readable, { headers: { "content-type": "application/json" } });
 }
 
 export async function addPositives(env: Env, req: Request) {
