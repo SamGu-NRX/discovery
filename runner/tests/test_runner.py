@@ -584,6 +584,60 @@ class Allocation(Home):
         self.assertEqual(p["final_step_kind"], "open_pr")
 
 
+class PrepProcesses(Home):
+    """Stopping preps ends only processes this runner started, by recorded pid and group, never by pattern."""
+
+    def setUp(self):
+        super().setUp()
+        self._path = os.environ["PATH"]
+        os.environ["PATH"] = f"{BIN}:{self._path}"
+
+    def tearDown(self):
+        os.environ.pop("FAKE_CODEX_SLEEP", None)
+        os.environ["PATH"] = self._path
+        super().tearDown()
+
+    def test_stop_preps_ends_a_running_prep_and_clears_its_record(self):
+        # fails if a running prep cannot be stopped without pkill, or its record outlives it
+        import threading
+        import time
+        from discovery_runner import pipeline
+        cfg = self.cfg()
+        done = pipeline.run_codex(config.path("work", "p0", "x").parent, cfg, "k", log=lambda m: None)
+        self.assertEqual((done["verdict"], pipeline._registry()), ("ready", {}))  # a finished prep clears its record
+        os.environ["FAKE_CODEX_SLEEP"] = "60"
+        work = config.path("work", "p1", "x").parent
+        result = {}
+        t = threading.Thread(target=lambda: result.update(pipeline.run_codex(work, cfg, "k", log=lambda m: None)))
+        t.start()
+        for _ in range(100):
+            if pipeline._registry():
+                break
+            time.sleep(0.05)
+        self.assertEqual(len(pipeline._registry()), 1)
+        out = pipeline.stop_preps(log=lambda m: None)
+        t.join(10)
+        self.assertFalse(t.is_alive())
+        self.assertEqual(len(out["stopped"]), 1)
+        self.assertEqual(pipeline._registry(), {})
+
+    def test_a_recorded_pid_that_is_no_longer_our_prep_is_left_alone(self):
+        # fails if a reused pid (any process that is not this prep's codex exec) would be signaled
+        import subprocess
+        from discovery_runner import pipeline
+        self.cfg()
+        bystander = subprocess.Popen(["sleep", "30"], start_new_session=True)
+        try:
+            pipeline._registry(lambda reg: reg.update({str(bystander.pid): {"pgid": bystander.pid,
+                                                                             "workdir": "/nonexistent/prep"}}))
+            out = pipeline.stop_preps(log=lambda m: None)
+            self.assertEqual(out["stopped"], [])
+            self.assertIsNone(bystander.poll())
+        finally:
+            bystander.kill()
+            bystander.wait()
+
+
 class Scoring(Home):
     def test_score_is_top5_positive_mean_minus_top5_skipped_plus_author_prior(self):
         # fails if the contract's scoring formula changes (k, sign of skipped, or the prior)

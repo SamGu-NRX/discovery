@@ -8,6 +8,9 @@ args = sys.argv[1:]
 assert args[:1] == ["exec"], args
 assert not any("dangerously" in a for a in args), "bypass flag passed to codex"
 d = Path(args[args.index("-C") + 1])
+import os, time
+if os.environ.get("FAKE_CODEX_SLEEP"):
+    time.sleep(float(os.environ["FAKE_CODEX_SLEEP"]))
 (d / "patches").mkdir(exist_ok=True)
 (d / "patches" / "0001-change.patch").write_text("--- a/x\n+++ b/x\n@@\n-old\n+new\n")
 (d / "PREP.md").write_text("Prepared a patch.\n")

@@ -795,6 +795,45 @@ def codex_command(workdir, cfg):
             "--ephemeral", "-o", str(workdir / "last-message.md"), prompts.PREP]
 
 
+PREPS = "preps.json"
+
+
+def _registry(update=None):
+    """Running preps this runner started: {pid: {pgid, workdir, started}}. The only processes it ever stops."""
+    f = config.path("state", PREPS)
+    reg = json.loads(f.read_text()) if f.exists() else {}
+    if update:
+        update(reg)
+        f.write_text(json.dumps(reg, indent=1))
+    return reg
+
+
+def _is_our_prep(pid, workdir):
+    """The pid still runs `codex exec` in this prep's own folder. A reused pid fails this check."""
+    out = subprocess.run(["ps", "-o", "command=", "-p", str(pid)], capture_output=True, text=True,
+                         stdin=subprocess.DEVNULL).stdout
+    return "codex" in out and " exec " in f" {out} " and str(workdir) in out
+
+
+def stop_preps(log=print):
+    """End every prep this runner started and recorded, by process group, after checking each is still ours.
+
+    Never matches processes by pattern: an operator or a stopped round calls this instead of pkill."""
+    stopped, gone = [], []
+    for pid, e in list(_registry().items()):
+        if _is_our_prep(int(pid), e["workdir"]):
+            try:
+                os.killpg(e["pgid"], signal.SIGTERM)
+                stopped.append(int(pid))
+            except ProcessLookupError:
+                gone.append(int(pid))
+        else:
+            gone.append(int(pid))
+    _registry(lambda reg: [reg.pop(str(p), None) for p in stopped + gone])
+    log(f"stop-preps: stopped {stopped}, already gone or not ours {gone}")
+    return {"stopped": stopped, "gone": gone}
+
+
 def run_codex(workdir, cfg, gateway_key, log=print):
     """The gateway key reaches codex only through its environment (the provider's env_key), never argv or logs."""
     cmd = codex_command(workdir, cfg)
@@ -803,6 +842,8 @@ def run_codex(workdir, cfg, gateway_key, log=print):
     with open(workdir / "codex.log", "w") as out:
         proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT, cwd=workdir,
                                 start_new_session=True, env=env)
+        _registry(lambda reg: reg.update({str(proc.pid): {"pgid": os.getpgid(proc.pid), "workdir": str(workdir),
+                                                            "started": config.now_iso()}}))
         try:
             code = proc.wait(timeout=cfg["prep_timeout_s"])
             timed_out = False
@@ -814,6 +855,8 @@ def run_codex(workdir, cfg, gateway_key, log=print):
                 os.killpg(proc.pid, signal.SIGKILL)
                 proc.wait()
             code, timed_out = None, True
+        finally:
+            _registry(lambda reg: reg.pop(str(proc.pid), None))
     secs = (dt.datetime.now(dt.timezone.utc) - t0).total_seconds()
     m = re.findall(r"tokens used\s*\n\s*([\d,]+)", (workdir / "codex.log").read_text(errors="replace"))
     tokens = int(m[-1].replace(",", "")) if m else None

@@ -12,10 +12,14 @@ It uses only the Python 3 standard library, plus the `gh`, `curl`, `codex` and `
 ## Stop it
 
 ```sh
-runner/discovery-runner stop      # writes ~/.discovery/STOP; work halts at the next step
-runner/discovery-runner resume    # removes it
+runner/discovery-runner stop                # writes ~/.discovery/STOP; work halts at the next step
+runner/discovery-runner stop --kill-preps   # also ends running codex preps now
+runner/discovery-runner stop-preps          # ends running codex preps only
+runner/discovery-runner resume              # removes STOP
 launchctl bootout gui/$(id -u)/com.samgu.discovery-runner   # unload the daemon entirely
 ```
+
+Running preps are ended only through `stop-preps`. Each `codex exec` the runner starts is recorded in `~/.discovery/state/preps.json` with its pid and process group, and the record is removed when it exits. `stop-preps` signals a recorded group only after `ps` confirms the pid is still that prep's `codex exec`, so a reused pid is never touched. Never stop preps with `pkill` or any pattern match: it would hit other sessions' processes. For an eval round, run it with that round's home: `DISCOVERY_HOME=~/.discovery-eval/round-N runner/discovery-runner stop-preps`.
 
 The runner checks STOP before it claims work and between steps (each model call, each prep). If STOP appears in the middle of a candidate, that candidate goes back to the queue. An in-flight model call or `codex exec` is allowed to finish. While STOP exists, the loop writes `stopped` to its heartbeat once a minute and does nothing else.
 

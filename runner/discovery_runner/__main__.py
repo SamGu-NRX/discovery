@@ -7,7 +7,7 @@ import traceback
 
 from . import config
 from .llm import Gateway, summarize_calls
-from .pipeline import Runner
+from .pipeline import Runner, stop_preps
 from .scoring import calibrate, run_score
 from .worker import Worker, WorkerUnavailable, flush_outbox
 
@@ -77,13 +77,20 @@ def main(argv=None):
     sp = sub.add_parser("seed-positives", help="POST Sam's saves from an x-bookmarks-eval archive to /positives")
     sp.add_argument("archive")
     sub.add_parser("status")
-    sub.add_parser("stop")
+    st = sub.add_parser("stop")
+    st.add_argument("--kill-preps", action="store_true", help="also end running codex preps this runner started")
+    sub.add_parser("stop-preps", help="end running codex preps this runner started (recorded pids only)")
     sub.add_parser("resume")
     a = ap.parse_args(argv)
     cfg = config.load()
     if a.cmd == "stop":
         config.path("STOP").write_text(f"stopped at {config.now_iso()}\n")
-        return print(f"wrote {config.path('STOP')}; the loop halts at its next step")
+        print(f"wrote {config.path('STOP')}; the loop halts at its next step")
+        if a.kill_preps:
+            stop_preps()
+        return
+    if a.cmd == "stop-preps":
+        return print(json.dumps(stop_preps()))
     if a.cmd == "resume":
         config.path("STOP").unlink(missing_ok=True)
         return print("removed STOP")
