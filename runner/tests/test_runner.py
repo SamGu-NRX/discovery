@@ -428,11 +428,11 @@ class OpenApplications(Home):
         return self.mock.state.add_candidate("watcher_event", "acme:42", "Acme Fellows, ML Systems", self.URL)
 
     def test_open_rolling_posting_becomes_a_package_not_a_skip(self):
-        # fails if a listed rolling posting is dropped as expired at triage, or declined over Sam's availability
-        # (both happened to Anthropic's Fellows postings on Nov 4)
+        # fails if a listed rolling posting is dropped as expired at triage, declined over Sam's availability
+        # (both happened to Anthropic's Fellows postings on Nov 4), or posted without its submit step (round 5)
         package = {"decline": False, "kind": "apply_or_attend", "title": "Acme Fellows application", "why": "w",
                    "target": "acme.com:fellows", "prep": {"needs_tools": False}, "evidence": [],
-                   "final_step_kind": "submit", "final_step": "submit after writing the essay",
+                   "final_step_kind": None, "final_step": None,
                    "application": {"employer": "Acme", "employer_domain": "acme.com", "fields": [
                        {"name": "Why Acme?", "kind": "essay", "value": "drafted by a model", "highlight": ["CogPortal"]},
                        {"name": "Graduation", "kind": "fact", "value": "May 2028", "source": "facts"}]}}

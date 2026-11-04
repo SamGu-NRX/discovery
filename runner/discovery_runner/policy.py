@@ -214,9 +214,10 @@ def specific_target(t, roots=()):
     if not n:
         return False
     if n.startswith("/"):
-        p = Path(n)
-        broad = {Path.home(), *[Path(os.path.expanduser(r)) for r in roots]}
-        return p not in broad and not (p / ".git").exists()
+        # A path on Sam's machine is never specific enough: many different changes touch one file (round 5
+        # merged statechart saves into a policy-gate patch because both named pipeline.py). Local work merges
+        # only on cosine.
+        return False
     if "/" not in n:
         return ":" in n  # "anthropic.com:fellows program" names one program; a bare domain or repo name does not
     # A URL with a path: an external repo or page is the thing acted on (trying that tool, that posting).

@@ -124,6 +124,9 @@ class Runner:
                 self.log(f"work: {kind} budget used up for today; nothing claimed")
                 return []
         cands = self.worker.claim(self.owner, self.cfg["claim_ttl_s"], self.cfg["claim_limit"])
+        # Watcher events (job postings, mostly) first within a batch: they carry deadlines and the prep budget
+        # favors them (round 4 and 5 left application postings unreached).
+        cands.sort(key=lambda c: c["kind"] != "watcher_event")
         out = []
         for c in cands:
             try:
@@ -326,8 +329,10 @@ class Runner:
                     prop["why"] = (prop.get("why") or "") + f" Not finished: {prep.get('summary')}"
                     prop["final_step_kind"] = prop.get("final_step_kind") if is_app else None
                 made_items = made["verified"]
+                # Prep may name the final step for what it built; it may not erase one. Round 5's preps returned
+                # null and every proposal, the application included, lost its ask.
                 for k in ("approval_line", "final_step_kind", "final_step"):
-                    if k in prep and (prep[k] or k != "approval_line"):
+                    if prep.get(k):
                         prop[k] = prep[k]
             config.check_stop()
             verdict = self.judge(cand, b, prop, workdir, items + made_items, run)
@@ -346,6 +351,9 @@ class Runner:
             if prep_infra_failure(run):
                 return self.complete(cand, "new", "prep hit a gateway or network failure; retry later", run)
             return self.complete(cand, "skipped", f"not finished after rework: {rework}"[:1900], run)
+        if is_app and not prop.get("final_step_kind"):
+            prop["final_step_kind"] = "submit"
+            prop["final_step"] = prop.get("final_step") or "Submit the application after Sam writes the essays"
         if verdict["verdict"] == "maybe":
             items += made_items
             prop["why"] = (prop.get("why") or "") + f" Reviewer's concern: {verdict.get('reason')}"
