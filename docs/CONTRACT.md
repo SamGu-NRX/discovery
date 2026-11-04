@@ -52,7 +52,7 @@ The extension normalizes X GraphQL into this shape. JSON paths are listed in the
 
 ## `POST /ingest/x`
 
-Request body, at most 256 KB (the extension splits larger captures, so a request stays inside the free plan's 10 ms CPU limit):
+Request body, at most 128 KB. The extension splits larger captures. In production a 245 KB ingest took 15–17 ms of CPU on a cold request, over the free plan's 10 ms limit, and 128 KB took 3–8 ms.
 
 ```json
 {
@@ -105,7 +105,7 @@ proposals(id TEXT PRIMARY KEY, candidate_ids_json, kind, title, why, evidence_js
 
 Scoring runs in the runner, because cosine similarity over hundreds of saves would exceed the Worker's CPU limit. The Worker only creates candidates that need no score.
 
-- The Worker creates a candidate on ingest for every post first seen on the `bookmarks` surface, because a save is Sam's explicit signal. Watcher rule matches become candidates of kind `watcher_event` and no longer post to T3.
+- The Worker creates a candidate on ingest for every post first seen on the `bookmarks` surface, except posts already in `positives` (seeded past saves), because a save is Sam's explicit signal. Watcher rule matches become candidates of kind `watcher_event` and no longer post to T3.
 - The runner pulls unscored posts and embeds them through `POST /embed`, using the post text, quoted text and link domains. It caches embeddings locally under `~/.discovery/cache/`.
 - A post's score is the mean of its top-5 cosine similarities to positives, minus the mean of its top-5 similarities to skipped proposals, plus a small author prior (author saved or approved before).
 - A post becomes a candidate when it ranks in the top 2% of its session or scores at least the threshold in the runner config (start at 0.75, measured on Sam's saves). Unbookmarked candidates are capped at 15 a day.
@@ -116,7 +116,7 @@ Scoring runs in the runner, because cosine similarity over hundreds of saves wou
 - `POST /embed { texts: [up to 100] }` returns `{ vectors: [[768 floats]] }` from Workers AI `@cf/baai/bge-base-en-v1.5`.
 - `GET /x/posts?unscored=1&limit=200` returns normalized posts with `account`, `bookmarked` and latest `surface` and `session_id`.
 - `POST /x/posts/scores { scores: [{ id, score, parts }] }`
-- `POST /candidates { kind, ref, title, url, score, score_parts }` is idempotent on `(kind, ref)`.
+- `POST /candidates { kind, ref, title, url, score, score_parts }` is idempotent on `(kind, ref)`. It returns 429 after the 15th unbookmarked candidate of the UTC day.
 - `POST /candidates/claim { owner, ttl_s, limit }` returns leased candidates. An expired lease can be reclaimed. Completing with a stale owner returns 409.
 - `POST /candidates/:id/complete { owner, state, note }`
 - `GET /x/posts/:id/context` returns the post, its quoted post, the captured thread (`op_self_thread` and `replies` in server order, each a normalized post) and `thread_captured: true|false`.
