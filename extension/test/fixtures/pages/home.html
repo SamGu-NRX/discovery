@@ -1,0 +1,25 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Home / X</title><script src="/__fixture/shared.js"></script></head>
+<body style="margin:0">
+  <nav><a data-testid="AppTabBar_Profile_Link" href="/fixtureuser">Profile</a></nav>
+  <main data-testid="primaryColumn">
+    <div role="tablist">
+      <a href="/home" role="tab" aria-selected="false" data-name="for-you">For you</a>
+      <a href="/home" role="tab" aria-selected="true" data-name="following">Following</a>
+    </div>
+    <article>
+      <div role="group"><button data-testid="like" data-name="like">Like</button><button data-testid="retweet" data-name="retweet">Repost</button></div>
+    </article>
+    <div style="height:6000px"></div>
+  </main>
+  <script>
+    document.querySelector('[data-name="for-you"]').addEventListener("click", (e) => {
+      e.preventDefault();
+      selectTab(e.currentTarget);
+      graphql("HomeTimeline", { cursor: "page2" }, true);
+    });
+    graphql("HomeTimeline", {}, false);
+  </script>
+</body>
+</html>

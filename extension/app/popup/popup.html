@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>X capture</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header>
+      <h1>X capture</h1>
+      <span id="account" class="value muted"></span>
+    </header>
+
+    <div class="segmented" role="radiogroup" aria-label="Capture mode">
+      <span class="thumb" aria-hidden="true"></span>
+      <button type="button" role="radio" data-mode="off">Off</button>
+      <button type="button" role="radio" data-mode="passive">Passive</button>
+      <button type="button" role="radio" data-mode="active">Active</button>
+    </div>
+    <p id="mode-help" class="help"></p>
+
+    <div class="today">
+      <span id="posts-today" class="figure value">0</span>
+      <span class="muted">posts sent today</span>
+    </div>
+
+    <dl class="facts">
+      <div id="row-running" hidden><dt>Running</dt><dd id="running" class="value"></dd></div>
+      <div><dt>Last session</dt><dd id="last-session"></dd></div>
+      <div id="row-next" hidden><dt>Next</dt><dd id="next-session" class="value"></dd></div>
+      <div id="row-pause" hidden><dt>Paused until</dt><dd id="pause" class="value warn"></dd></div>
+      <div id="row-problem" hidden><dt>Problem</dt><dd id="problem" class="problem"></dd></div>
+    </dl>
+
+    <button type="button" id="run" class="primary">Run session now</button>
+    <p id="run-note" class="help" role="status"></p>
+
+    <details id="connection">
+      <summary>Connection</summary>
+      <form id="connection-form" autocomplete="off">
+        <label for="worker-url">Worker URL</label>
+        <input id="worker-url" type="url" placeholder="https://discovery-watcher….workers.dev" spellcheck="false" />
+        <label for="token">Ingest token</label>
+        <input id="token" type="password" spellcheck="false" />
+        <div class="form-row">
+          <button type="submit" class="secondary">Save</button>
+          <span id="save-note" class="help" role="status"></span>
+        </div>
+      </form>
+    </details>
+
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>
