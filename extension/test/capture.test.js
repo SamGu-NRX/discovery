@@ -215,3 +215,17 @@ test("an impossible date, a missing count or a malformed list fails loudly", () 
     assert.throws(() => home(json), (err) => err instanceof ParseError && err.message.includes(field), field);
   }
 });
+
+test("an empty Tweet result with no legacy is skipped; the rest of the response is kept", () => {
+  const json = homeResponse();
+  const entries = json.data.home.home_timeline_urt.instructions[1].entries;
+  entries.push(itemEntry({ __typename: "Tweet", rest_id: "777" }, "1750"));
+  const { batch } = home(json);
+  assert.equal(byId(batch, "777"), undefined);
+  assert.ok(byId(batch, "101"));
+});
+
+test("a response whose every tweet lacks legacy fails loudly", () => {
+  const json = { data: { home: { home_timeline_urt: { instructions: [addEntries([itemEntry({ __typename: "Tweet", rest_id: "777" }, "1")])] } } } };
+  assert.throws(() => home(json), (err) => err instanceof ParseError && /lack legacy/.test(err.message));
+});

@@ -32,7 +32,7 @@ let context;
 let worker;
 let mock;
 let extensionId;
-const site = { homeIsLoginWall: false, graphqlStatus: 200, clicks: [], pages: [] };
+const site = { homeIsLoginWall: false, homeRedirect: null, graphqlStatus: 200, clicks: [], pages: [] };
 
 let fakeX;
 
@@ -109,7 +109,7 @@ test("passive capture: X's own fetch and XHR responses reach the Worker as norma
   await page.close();
 });
 
-test("an active session reads home, bookmarks and one permalink, clicks only allowlisted tabs, and reports ok", async () => {
+test("an active session reads home, bookmarks and one permalink by navigation alone, clicks nothing, and reports ok", async () => {
   await configure();
   const popup = await context.newPage();
   await popup.goto(`chrome-extension://${extensionId}/popup/popup.html`);
@@ -135,9 +135,10 @@ test("an active session reads home, bookmarks and one permalink, clicks only all
     reply_ids: ["203", "204", "205", "208"],
   });
 
-  assert.deepEqual(site.pages, ["/home", "/i/bookmarks", "/i/status/200"]);
-  const clicked = site.clicks.map((c) => c.click);
-  assert.deepEqual(clicked, ["for-you", "bookmarks-tab"]);
+  assert.deepEqual(site.pages, ["/home", "/i/bookmarks", "/i/history/bookmarks", "/i/status/200"]);
+  assert.deepEqual(site.clicks, []);
+  // Every piece carries an idempotency key of the form <capture uuid>:<index>.
+  assert.ok(batches.every((b) => /^[0-9a-f-]{36}:\d+$/.test(b.batch_id)), "batch_id on every batch");
   await popup.close();
 });
 
@@ -182,6 +183,39 @@ test("a GraphQL 429 during a session stops it and reports rate_limited", async (
   }
 });
 
+test("a session sent somewhere it did not open stops before reading it", async () => {
+  await configure();
+  site.homeRedirect = "/settings/account";
+  try {
+    const popup = await context.newPage();
+    await popup.goto(`chrome-extension://${extensionId}/popup/popup.html`);
+    const startedAt = mock.requests.length;
+    await popup.click("#run");
+    const status = await mock.waitFor((r) => r.path === "/ingest/x/status", { after: startedAt, timeoutMs: 60_000 });
+    assert.equal(status.body.status, "error");
+    assert.match(status.body.detail, /unexpected page \/settings\/account after opening https:\/\/x\.com\/home/);
+    assert.equal(status.body.detail.match(/screens=(\d+)/)[1], "0");
+    await popup.close();
+  } finally {
+    site.homeRedirect = null;
+  }
+});
+
+test("two starts at once run one session", async () => {
+  await configure();
+  const popup = await context.newPage();
+  await popup.goto(`chrome-extension://${extensionId}/popup/popup.html`);
+  const startedAt = mock.requests.length;
+  const replies = await popup.evaluate(() =>
+    Promise.all([chrome.runtime.sendMessage({ type: "runSession" }), chrome.runtime.sendMessage({ type: "runSession" })]),
+  );
+  assert.deepEqual(replies.map((r) => r.started).sort(), [false, true]);
+  await popup.evaluate(() => chrome.runtime.sendMessage({ type: "stopSession" }));
+  const status = await mock.waitFor((r) => r.path === "/ingest/x/status", { after: startedAt, timeoutMs: 60_000 });
+  assert.match(status.body.detail, /^stopped_by_user/);
+  await popup.close();
+});
+
 async function startFakeX(dir) {
   const key = join(dir, "key.pem");
   const cert = join(dir, "cert.pem");
@@ -224,9 +258,11 @@ async function serveX(req, res) {
   }
   if (url.pathname === "/home") {
     if (site.homeIsLoginWall) return res.writeHead(302, { location: "https://x.com/i/flow/login" }).end();
+    if (site.homeRedirect) return res.writeHead(302, { location: `https://x.com${site.homeRedirect}` }).end();
     return html("home.html");
   }
   if (url.pathname === "/i/flow/login") return html("login.html");
+  if (url.pathname === "/settings/account") return html("settings.html");
   if (url.pathname === "/i/bookmarks" || url.pathname.startsWith("/i/history")) return html("history.html");
   if (/^\/i\/status\/\d+$/.test(url.pathname)) return html("status.html");
   return send("text/plain", "", 404);

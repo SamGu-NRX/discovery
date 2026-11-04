@@ -36,14 +36,27 @@
   // One message in flight at a time keeps captures in the order X sent them,
   // which the service worker relies on for positions and thread pages.
   let queue = Promise.resolve();
-  function onData(event) {
-    let message;
-    try {
-      message = JSON.parse(event.detail);
-    } catch {
-      return;
+  // hook.js sends "dx1", kind, operation, status, url and body joined by NUL;
+  // the body is last and may itself contain NUL.
+  function decode(detail) {
+    if (typeof detail !== "string") return null;
+    const fields = [];
+    let start = 0;
+    for (let i = 0; i < 5; i += 1) {
+      const end = detail.indexOf("\u0000", start);
+      if (end < 0) return null;
+      fields.push(detail.slice(start, end));
+      start = end + 1;
     }
-    if (message?.kind !== "response" && message?.kind !== "status") return;
+    const [version, kind, operation, status, url] = fields;
+    if (version !== "dx1" || (kind !== "response" && kind !== "status")) return null;
+    if (!/^[A-Za-z]+$/.test(operation) || !/^\d{3}$/.test(status)) return null;
+    return { kind, operation, status: Number(status), url, body: detail.slice(start) };
+  }
+
+  function onData(event) {
+    const message = decode(event.detail);
+    if (!message) return;
     queue = queue
       .then(() =>
         chrome.runtime.sendMessage({
@@ -51,7 +64,7 @@
           operation: message.operation,
           url: message.url,
           status: message.status,
-          body: message.body,
+          body: message.kind === "response" ? message.body : undefined,
           pageLoadId,
           account: account(),
         }),

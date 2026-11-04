@@ -1,100 +1,12 @@
 // Injected by the service worker into its own session window only (never
 // into tabs Sam uses). It is the session's only way to touch a page, and it
-// can do three things: read the page (inspect), scroll the window, and click
-// one of two tabs named in CLICK_TARGETS below. It has no command that types,
-// submits, or clicks anything else, and the target list is a frozen constant:
-// nothing from the page or the Worker reaches it.
+// can do two things: read the page (inspect) and scroll the window. It has
+// no command that clicks, types, focuses or submits anything. A click would
+// run the page's own handlers on the clicked element and its ancestors, so
+// sessions reach every page by navigating to URLs the extension built.
 
 (() => {
   if (globalThis.__dxAgent) return;
-
-  const isTab = (el) =>
-    el.getAttribute("role") === "tab" && el.closest('[role="tablist"]') !== null && /^(A|DIV|SPAN)$/.test(el.tagName);
-
-  const label = (el) => (el.textContent || "").replace(/\s+/g, " ").trim();
-
-  // An anchor's resolved path, or null for an element without href.
-  const hrefPath = (el) => {
-    if (!el.hasAttribute("href")) return null;
-    try {
-      const url = new URL(el.getAttribute("href"), location.href);
-      return url.origin === "https://x.com" ? url.pathname : "offsite";
-    } catch {
-      return "offsite";
-    }
-  };
-
-  const CLICK_TARGETS = Object.freeze({
-    // Home's "For you" tab. Both home tabs link to /home and differ only by label.
-    for_you: Object.freeze({
-      page: (path) => path === "/home",
-      matches: (el) => isTab(el) && label(el) === "For you" && [null, "/home"].includes(hrefPath(el)),
-    }),
-    // The Bookmarks tab, when X shows bookmarks as a tab of /i/history.
-    bookmarks: Object.freeze({
-      page: (path) => path.startsWith("/i/history") || path.startsWith("/i/bookmarks"),
-      matches: (el) =>
-        isTab(el) &&
-        [null, "/i/bookmarks", "/i/history/bookmarks"].includes(hrefPath(el)) &&
-        (label(el) === "Bookmarks" || hrefPath(el) !== null),
-    }),
-  });
-
-  // Checked for every click on top of the target's own match. A click event
-  // bubbles through every ancestor, and clicking inside a link, button, label
-  // or summary activates that ancestor. So the tab may sit only in plain
-  // wrappers: no ancestor may be a control or look like one, and nothing on
-  // the path may carry a post-action test id (like, repost, reply, bookmark,
-  // follow, the "..." caret, compose, login), in any variant such as
-  // "123-follow".
-  const CONTROL_TAGS = new Set(["A", "BUTTON", "LABEL", "FORM", "ARTICLE", "SUMMARY", "DETAILS", "SELECT", "OPTION", "INPUT", "TEXTAREA"]);
-  const CONTROL_ROLES = new Set([
-    "button", "link", "menuitem", "menuitemcheckbox", "menuitemradio", "checkbox", "switch", "radio", "option",
-    "menu", "menubar", "dialog", "alertdialog", "combobox", "textbox", "listbox", "slider", "spinbutton",
-    "treeitem", "gridcell", "row", "article",
-  ]);
-  const ACTION_TESTID = /like|retweet|repost|reply|bookmark|caret|follow|block|mute|share|report|delete|tweetbutton|newtweet|senddm|confirmationsheet|login|signup|logout/i;
-
-  function refuseReason(el) {
-    if (!(el instanceof HTMLElement) || !el.isConnected) return "not an element in the page";
-    for (let node = el; node && node !== document.body; node = node.parentElement) {
-      const testid = node.getAttribute("data-testid");
-      if (testid && ACTION_TESTID.test(testid)) return `action control ${testid}`;
-      if (node === el) continue;
-      const role = node.getAttribute("role");
-      if (CONTROL_TAGS.has(node.tagName)) return `inside a ${node.tagName.toLowerCase()} element`;
-      if (role && CONTROL_ROLES.has(role)) return `inside role=${role}`;
-      if (node.isContentEditable || node.hasAttribute("onclick") || node.hasAttribute("aria-haspopup")) {
-        return "inside an interactive element";
-      }
-      const tabindex = node.getAttribute("tabindex");
-      if (role !== "tablist" && tabindex !== null && Number(tabindex) >= 0) return "inside a focusable element";
-    }
-    if (el.querySelector("a, button, input, textarea, select, form, label, [role='button'], [role='link'], [role='menuitem']")) {
-      return "contains a control";
-    }
-    const box = el.getBoundingClientRect();
-    if (box.width === 0 || box.height === 0) return "not visible";
-    return null;
-  }
-
-  // A refusal clicks nothing and is not an error: the session notes it and
-  // carries on reading whatever tab is selected.
-  function clickTarget(id) {
-    if (typeof id !== "string" || !Object.hasOwn(CLICK_TARGETS, id)) {
-      throw new Error(`click refused: ${JSON.stringify(id)} is not an allowed target`);
-    }
-    const target = CLICK_TARGETS[id];
-    if (!target.page(location.pathname)) return { found: false, reason: `not on the page for ${id}` };
-    const candidates = [...document.querySelectorAll('[role="tab"]')].filter(target.matches);
-    if (candidates.length !== 1) return { found: false, reason: `${candidates.length} elements match ${id}` };
-    const el = candidates[0];
-    if (el.getAttribute("aria-selected") === "true") return { found: true, selected: true, clicked: false };
-    const refused = refuseReason(el);
-    if (refused) return { found: false, refused: `click refused on ${id}: ${refused}` };
-    el.click();
-    return { found: true, selected: false, clicked: true };
-  }
 
   // Text the page shows outside posts, bios, user cells and the trends
   // sidebar, so a post that merely says "rate limit" cannot stop a session.
@@ -189,7 +101,6 @@
   const COMMANDS = Object.freeze({
     inspect: () => inspect(),
     scroll: (arg) => scroll(arg),
-    click: (arg) => clickTarget(arg),
   });
 
   Object.defineProperty(globalThis, "__dxAgent", {

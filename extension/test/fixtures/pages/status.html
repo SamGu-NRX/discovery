@@ -6,6 +6,8 @@
   <main data-testid="primaryColumn"><div style="height:6000px"></div></main>
   <script>
     const focalTweetId = location.pathname.split("/").pop();
+    // X rewrites /i/status/<id> to the author's canonical path.
+    history.replaceState(null, "", `/op/status/${focalTweetId}`);
     graphql("TweetDetail", { focalTweetId }, true);
     let more = false;
     addEventListener("scroll", () => {

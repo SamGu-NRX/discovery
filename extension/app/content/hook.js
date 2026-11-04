@@ -13,6 +13,12 @@
 // keep the element and the response bodies out of their reach, this script
 // keeps its own references to every built-in it calls, taken before any page
 // script exists, and only reads XHR results from trusted load events.
+//
+// A message is one string joined with NUL separators, built by string
+// concatenation of primitives, never by JSON.stringify: stringify calls any
+// toJSON a page script puts on Object.prototype, which could replace the
+// whole message. Event init dictionaries have a null prototype, so getters a
+// page adds to Object.prototype are not consulted either.
 
 (() => {
   const apply = Reflect.apply;
@@ -24,7 +30,6 @@
   const MouseEventCtor = MouseEvent;
   const CustomEventCtor = CustomEvent;
   const URLCtor = URL;
-  const stringify = JSON.stringify;
   const then = Promise.prototype.then;
   const exec = RegExp.prototype.exec;
   const includes = String.prototype.includes;
@@ -33,10 +38,11 @@
   const xhrStatus = getter(XMLHttpRequest.prototype, "status");
   const xhrResponseType = getter(XMLHttpRequest.prototype, "responseType");
   const xhrResponseText = getter(XMLHttpRequest.prototype, "responseText");
-  const xhrResponse = getter(XMLHttpRequest.prototype, "response");
   const resStatus = getter(Response.prototype, "status");
   const resClone = Response.prototype.clone;
   const resText = Response.prototype.text;
+  const urlHref = getter(URL.prototype, "href");
+  const urlPathname = getter(URL.prototype, "pathname");
   const realFetch = window.fetch;
 
   // Keep in sync with OPS in lib/ops.js.
@@ -56,7 +62,7 @@
   // The bridge calls preventDefault() on the hello it accepts.
   const announce = () => {
     if (connected) return;
-    const hello = new MouseEventCtor(HELLO, { relatedTarget: channel, cancelable: true });
+    const hello = new MouseEventCtor(HELLO, { __proto__: null, relatedTarget: channel, cancelable: true });
     connected = !apply(dispatch, document, [hello]);
     if (connected) apply(unlisten, document, [READY, announce, true]);
   };
@@ -66,19 +72,26 @@
   // Page scripts start after document_start; stop answering by then.
   setTimeout(() => apply(unlisten, document, [READY, announce, true]), 0);
 
-  const send = (message) => {
+  // Format read by bridge.js: "dx1", kind, operation, status, url, body.
+  // Only the body, which comes last, may contain NUL.
+  const SEP = "\u0000";
+  const send = (kind, operation, status, url, body) => {
     if (!connected) return;
     try {
-      apply(dispatch, channel, [new CustomEventCtor(DATA, { detail: stringify(message) })]);
+      const detail = "dx1" + SEP + kind + SEP + operation + SEP + status + SEP + url + SEP + body;
+      apply(dispatch, channel, [new CustomEventCtor(DATA, { __proto__: null, detail })]);
     } catch {
       // Never let capture break X.
     }
   };
 
-  const operationOf = (url) => {
+  // The absolute URL and operation name, or null for anything that is not a
+  // GraphQL operation URL.
+  const parseGraphql = (url) => {
     try {
-      const m = apply(exec, OPERATION, [new URLCtor(url, location.href).pathname]);
-      return m ? m[1] : null;
+      const parsed = new URLCtor(url, location.href);
+      const m = apply(exec, OPERATION, [apply(urlPathname, parsed, [])]);
+      return m ? { href: apply(urlHref, parsed, []), operation: m[1] } : null;
     } catch {
       return null;
     }
@@ -87,12 +100,13 @@
   // Every GraphQL failure status is reported (a 429 stops a session); bodies
   // only for the captured operations. `body` is a string or a promise of one.
   const report = (url, operation, status, body) => {
+    if (typeof status !== "number") return;
     if (status < 200 || status > 299) {
-      send({ kind: "status", operation, status });
+      send("status", operation, status, url, "");
       return;
     }
     const deliver = (text) => {
-      if (typeof text === "string" && text) send({ kind: "response", operation, url, status, body: text });
+      if (typeof text === "string" && text) send("response", operation, status, url, text);
     };
     if (typeof body === "string") deliver(body);
     else if (body) apply(then, body, [deliver, () => {}]);
@@ -100,18 +114,20 @@
 
   XMLHttpRequest.prototype.open = function (method, url) {
     try {
-      const href = `${url}`;
-      const operation = apply(includes, href, ["/graphql/"]) ? operationOf(href) : null;
-      if (operation) {
+      const target = `${url}`;
+      const graphql = apply(includes, target, ["/graphql/"]) ? parseGraphql(target) : null;
+      if (graphql) {
+        const { href, operation } = graphql;
         const xhr = this;
         apply(listen, xhr, ["load", (event) => {
           if (!isTrusted(event)) return;
           const status = apply(xhrStatus, xhr, []);
           let body = null;
+          // X reads GraphQL as text. A "json" responseType has no raw text
+          // to copy, and re-serializing it would run page code (toJSON).
           if (captured(operation)) {
             const type = apply(xhrResponseType, xhr, []);
             if (type === "" || type === "text") body = apply(xhrResponseText, xhr, []);
-            else if (type === "json") body = stringify(apply(xhrResponse, xhr, []));
           }
           report(href, operation, status, body);
         }]);
@@ -125,9 +141,10 @@
   window.fetch = function (input, init) {
     const pending = apply(realFetch, this, arguments);
     try {
-      const href = typeof input === "string" ? input : input instanceof URLCtor ? input.href : input?.url;
-      const operation = typeof href === "string" && apply(includes, href, ["/graphql/"]) ? operationOf(href) : null;
-      if (operation) {
+      const target = typeof input === "string" ? input : input instanceof URLCtor ? apply(urlHref, input, []) : input?.url;
+      const graphql = typeof target === "string" && apply(includes, target, ["/graphql/"]) ? parseGraphql(target) : null;
+      if (graphql) {
+        const { href, operation } = graphql;
         // This callback runs before the page's own, because it was attached
         // before the page got the promise. Clone here: by the next microtask
         // the page may have read the body, and a used body cannot be cloned.

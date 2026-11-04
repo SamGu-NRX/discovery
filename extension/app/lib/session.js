@@ -1,20 +1,23 @@
 // Active sessions: a short read-only visit to x.com in an unfocused window,
-// scrolling at a human pace. A session can do three things to X: open a URL
-// minted by xurl.js, scroll, and click one of the two tabs page-agent.js
-// allows. Everything it learns arrives through the same capture path as
-// passive browsing.
+// scrolling at a human pace. A session can do two things to X: open a URL
+// minted by xurl.js and scroll. It clicks nothing. After every load it checks
+// that the tab is on a path the minted URL expects and stops otherwise.
+// Everything it learns arrives through the same capture path as passive
+// browsing.
 
 import { flush } from "./outbox.js";
 import { scheduleNext } from "./schedule.js";
 import { getLocal, getPauseUntil, loadConfig, recordProblem, setLocal } from "./store.js";
 import { getDetailQueue, postStatus } from "./worker-api.js";
-import { bookmarksUrl, homeUrl, isMintedXUrl, isXPage, permalinkUrl } from "./xurl.js";
+import { bookmarksUrl, historyBookmarksUrl, homeUrl, isMintedXUrl, permalinkUrl, xPath } from "./xurl.js";
 
 const PAUSE_MS = 24 * 3600_000;
 const LOAD_TIMEOUT_MS = 30_000;
-// Stop reasons that are X telling the account to back off. Each pauses
-// sessions for 24 hours and is reported as that status. Every other ending
-// (finished, stopped by Sam, window closed, extension restarted) is "ok".
+// Stop reasons reported as that status, each pausing sessions for 24 hours:
+// X telling the account to back off, or an error. A session interrupted by
+// a service worker restart is reported as "error" too, because whatever
+// stopped it was not recorded. Finishing, a stop from the popup, a closed
+// window and a pause set by the Worker are "ok".
 const BLOCKING = new Set(["login_wall", "rate_limited", "challenge", "error"]);
 
 let current = null;
@@ -38,48 +41,72 @@ export function sessionInfo() {
   return current ? { id: current.id, account: current.account } : null;
 }
 
+// The stop is written to session storage at once, so a service worker that
+// dies before the session tears down still reports why it stopped.
 export function requestStop(reason, detail) {
-  if (current && !current.stop) current.stop = { reason, detail };
+  const s = current;
+  // Once teardown starts the outcome is fixed; a late write would recreate
+  // the record teardown removes.
+  if (!s || s.stop || s.finishing) return;
+  s.stop = { reason, detail };
+  publish(s).catch(() => {});
 }
 
 // Called for every capture from the session tab.
 export function noteSessionCapture({ operation, postIds }) {
-  if (!current) return;
-  current.posts += postIds.length;
-  if (operation === "Bookmarks" && postIds.some((id) => current.knownBookmarks.has(id))) {
-    current.reachedKnownBookmark = true;
+  const s = current;
+  if (!s) return;
+  s.posts += postIds.length;
+  s.operations.add(operation);
+  if (operation === "Bookmarks" && postIds.some((id) => s.knownBookmarks.has(id))) {
+    s.reachedKnownBookmark = true;
   }
 }
 
 export async function startSession(trigger) {
   if (current) return { started: false, reason: "A session is already running." };
-  const config = await loadConfig();
-  if (!config.workerUrl || !config.ingestToken) return { started: false, reason: "Add the Worker URL and token first." };
-  if (config.mode === "off") return { started: false, reason: "Capture is off." };
-  if (trigger === "alarm" && config.mode !== "active") return { started: false, reason: "Sessions are off." };
-  const pause = await getPauseUntil();
-  if (pause) return { started: false, reason: `Paused until ${new Date(pause).toLocaleString()}.` };
-
-  current = {
+  // Reserve before the first await, so a second start (an alarm and the
+  // popup at once) sees this one and refuses.
+  const s = {
     id: crypto.randomUUID(),
     trigger,
     startedAt: new Date().toISOString(),
-    config,
+    config: null,
     windowId: null,
     tabId: null,
-    phase: "home",
+    phase: "starting",
+    expects: () => false,
     screens: 0,
     posts: 0,
+    operations: new Set(),
     stop: null,
+    completed: false,
+    finishing: false,
     notes: [],
     errorPages: 0,
     account: null,
-    knownBookmarks: new Set(await getLocal("sentBookmarkIds", [])),
+    knownBookmarks: new Set(),
     reachedKnownBookmark: false,
   };
-  await publish();
-  run(current);
-  return { started: true, id: current.id };
+  current = s;
+  const refuse = (reason) => {
+    if (current === s) current = null;
+    return { started: false, reason };
+  };
+  try {
+    s.config = await loadConfig();
+    if (!s.config.workerUrl || !s.config.ingestToken) return refuse("Add the Worker URL and token first.");
+    if (s.config.mode === "off") return refuse("Capture is off.");
+    if (trigger === "alarm" && s.config.mode !== "active") return refuse("Sessions are off.");
+    const pause = await getPauseUntil();
+    if (pause) return refuse(`Paused until ${new Date(pause).toLocaleString()}.`);
+    s.knownBookmarks = new Set(await getLocal("sentBookmarkIds", []));
+    await publish(s);
+  } catch (err) {
+    return refuse(`Could not start: ${err.message}`);
+  }
+  run(s);
+  return { started: true, id: s.id };
 }
 
 async function run(s) {
@@ -99,6 +126,7 @@ async function run(s) {
     await visitHome(s);
     await visitBookmarks(s);
     await visitPermalinks(s);
+    s.completed = true;
   } catch (err) {
     outcome = err instanceof StopSession ? { reason: err.reason, detail: err.detail } : { reason: "error", detail: err.message };
   }
@@ -107,16 +135,19 @@ async function run(s) {
 
   clearInterval(keepAlive);
   chrome.windows.onRemoved.removeListener(onRemoved);
+  s.finishing = true;
   try {
     await finish(s, outcome);
   } finally {
-    current = null;
+    if (current === s) current = null;
     await chrome.storage.session.remove("activeSession");
   }
   await scheduleNext();
 }
 
 async function finish(s, outcome) {
+  // Recorded before any teardown step that could be cut short.
+  await publish(s, outcome);
   if (!s.windowClosed && s.windowId !== null) {
     // Let captures already in flight from the closing page reach the worker.
     await sleep(1000);
@@ -129,11 +160,7 @@ async function finish(s, outcome) {
     ...s.notes,
   ].join("; ").slice(0, 1000);
 
-  if (status !== "ok") {
-    const until = new Date(Date.now() + PAUSE_MS).toISOString();
-    const existing = await getPauseUntil();
-    if (!existing || Date.parse(existing) < Date.parse(until)) await setLocal({ pauseUntil: until });
-  }
+  if (status !== "ok") await extendPause();
 
   await flush().catch((err) => recordProblem("worker", err.message));
   const account = s.account ?? (await getLocal("lastAccount", null)) ?? s.config.account;
@@ -161,27 +188,43 @@ async function finish(s, outcome) {
 }
 
 // Called when the service worker starts. A session record without a running
-// session means the worker was stopped mid-session: close its window and
-// record the interruption.
+// session means the worker stopped mid-session. It is reported with the
+// outcome or stop it recorded; with neither and no completion checkpoint, it
+// is reported as interrupted, status "error", because a login wall, challenge
+// or rate limit may have stopped it before it could say so.
 export async function recoverInterruptedSession() {
   const { activeSession } = await chrome.storage.session.get("activeSession");
   if (!activeSession || current) return;
   await chrome.storage.session.remove("activeSession");
   if (activeSession.windowId != null) await chrome.windows.remove(activeSession.windowId).catch(() => {});
+  const outcome =
+    activeSession.outcome ??
+    activeSession.stop ??
+    (activeSession.completed
+      ? { reason: "completed", detail: "finished before the service worker restarted" }
+      : { reason: "interrupted", detail: "the extension's service worker restarted mid-session" });
+  const status = BLOCKING.has(outcome.reason) ? outcome.reason : outcome.reason === "interrupted" ? "error" : "ok";
+  const detail = `${outcome.reason}: ${outcome.detail}`.slice(0, 1000);
+  if (status !== "ok") await extendPause();
   const config = await loadConfig();
-  const detail = "interrupted: the extension's service worker restarted mid-session";
   const account = activeSession.account ?? (await getLocal("lastAccount", null)) ?? config.account;
-  const reported = await postStatus(config, { account, session_id: activeSession.id, status: "ok", detail })
-    .then(() => true, () => false);
+  const reported = await postStatus(config, { account, session_id: activeSession.id, status, detail }).then(
+    () => true,
+    () => false,
+  );
   await setLocal({
-    lastSession: { ...activeSession, endedAt: new Date().toISOString(), status: "ok", reason: "interrupted", detail, reported },
+    lastSession: { ...activeSession, endedAt: new Date().toISOString(), status, reason: outcome.reason, detail, reported },
   });
 }
 
-// Progress the popup shows while a session runs; also what recovery reads.
-function publish() {
-  const s = current;
-  if (!s) return;
+async function extendPause() {
+  const until = new Date(Date.now() + PAUSE_MS).toISOString();
+  const existing = await getPauseUntil();
+  if (!existing || Date.parse(existing) < Date.parse(until)) await setLocal({ pauseUntil: until });
+}
+
+// Progress the popup shows while a session runs, and what recovery reads.
+function publish(s, outcome = null) {
   return chrome.storage.session.set({
     activeSession: {
       id: s.id,
@@ -192,6 +235,9 @@ function publish() {
       phase: s.phase,
       screens: s.screens,
       posts: s.posts,
+      stop: s.stop,
+      completed: s.completed,
+      outcome,
     },
   });
 }
@@ -207,22 +253,41 @@ async function pause(s, min, max) {
 
 async function openWindow(s) {
   const url = homeUrl();
+  const href = checkedHref(s, url);
   await loadAndWait(s, async () => {
-    const win = await chrome.windows.create({ url: checkedHref(url), focused: false, type: "normal", width: 1200, height: 900 });
+    const win = await chrome.windows.create({ url: href, focused: false, type: "normal", width: 1200, height: 900 });
     s.windowId = win.id;
     s.tabId = win.tabs[0].id;
-    await publish();
+    await publish(s);
   });
 }
 
 async function navigate(s, url) {
-  const href = checkedHref(url);
+  const href = checkedHref(s, url);
   await loadAndWait(s, () => chrome.tabs.update(s.tabId, { url: href }));
 }
 
-function checkedHref(url) {
+// Also records which paths the new page may be on; see onExpectedPage().
+function checkedHref(s, url) {
   if (!isMintedXUrl(url)) throw new Error("refusing to open a URL that xurl.js did not build");
+  s.expects = url.expects;
+  s.opened = url.href;
   return url.href;
+}
+
+async function currentPath(s) {
+  const tab = await chrome.tabs.get(s.tabId);
+  const path = xPath(tab.url ?? "");
+  if (path === null) throw new StopSession("error", `the session tab left x.com (${tab.url ?? "unknown url"})`);
+  return path;
+}
+
+// Anything but the expected page (X's own redirects included) ends the
+// session; it never reads or scrolls a page it did not mean to open.
+async function onExpectedPage(s) {
+  const path = await currentPath(s);
+  if (!s.expects(path)) throw new StopSession("error", `unexpected page ${path} after opening ${s.opened}`);
+  return path;
 }
 
 // Waits for the navigation started by `start` to finish loading. The listener
@@ -250,8 +315,10 @@ async function loadAndWait(s, start) {
 
 async function agent(s, name, arg) {
   checkpoint(s);
-  const tab = await chrome.tabs.get(s.tabId);
-  if (!isXPage(tab.url ?? "")) throw new StopSession("error", `the session tab left x.com (${tab.url ?? "unknown url"})`);
+  // Inspect runs on any x.com page, so a login or challenge page is reported
+  // as such; scrolling happens only on the expected page.
+  if (name === "inspect") await currentPath(s);
+  else await onExpectedPage(s);
   const target = { tabId: s.tabId };
   await chrome.scripting.executeScript({ target, files: ["content/page-agent.js"] });
   const [injection] = await chrome.scripting.executeScript({
@@ -275,30 +342,14 @@ async function inspect(s) {
   if (seen.account && !s.account) {
     s.account = seen.account;
     await setLocal({ lastAccount: seen.account });
-    await publish();
+    await publish(s);
   }
   if (seen.blocker) throw new StopSession(seen.blocker, `${seen.evidence} at ${seen.path}`);
+  await onExpectedPage(s);
   // X's generic error page often means throttling; three in a row ends the visit.
   s.errorPages = seen.errorPage ? s.errorPages + 1 : 0;
   if (s.errorPages >= 3) throw new StopSession("error", `X kept showing "Something went wrong" at ${seen.path}`);
   return seen;
-}
-
-async function clickTab(s, target) {
-  for (let attempt = 0; attempt < 8; attempt += 1) {
-    const result = await agent(s, "click", target);
-    if (result.found) {
-      if (result.clicked) await pause(s, 1500, 2500);
-      return true;
-    }
-    if (result.refused) {
-      s.notes.push(result.refused);
-      return false;
-    }
-    await pause(s, 900, 1300);
-  }
-  s.notes.push(`${target} tab not found`);
-  return false;
 }
 
 async function scrollScreens(s, { screens, ms, done = () => false }) {
@@ -308,7 +359,7 @@ async function scrollScreens(s, { screens, ms, done = () => false }) {
     await pause(s, 2000, 4000);
     const { atBottom } = await agent(s, "scroll", random(0.75, 0.95));
     s.screens += 1;
-    await publish();
+    await publish(s);
     await inspect(s);
     bottoms = atBottom ? bottoms + 1 : 0;
     if (bottoms >= 3) break;
@@ -330,26 +381,35 @@ async function checkWorkerPause(s, account) {
   return queue;
 }
 
+// X opens home on the tab last used in this browser, For You or Following,
+// and no URL selects one. Selecting it would take a click, so a home that
+// opens on Following is read as it is (its batches are labeled
+// home_following) and the session says so.
 async function visitHome(s) {
   s.phase = "home";
-  await publish();
+  await publish(s);
   await inspect(s);
   const account = s.account ?? s.config.account;
   if (account) await checkWorkerPause(s, account);
-  await clickTab(s, "for_you");
-  await inspect(s);
+  if (s.operations.has("HomeLatestTimeline") && !s.operations.has("HomeTimeline")) {
+    s.notes.push("home opened on Following; choose For you once in this browser and X keeps it");
+  }
   await scrollScreens(s, { screens: s.config.homeMaxScreens, ms: s.config.homeMaxMinutes * 60_000 });
 }
 
 async function visitBookmarks(s) {
   s.phase = "bookmarks";
-  await publish();
+  await publish(s);
   await navigate(s, bookmarksUrl());
   await inspect(s);
-  const tab = await chrome.tabs.get(s.tabId);
-  if (new URL(tab.url).pathname.startsWith("/i/history")) {
-    await clickTab(s, "bookmarks");
+  // Moved under /i/history, bookmarks may not be the tab that opens.
+  if (!s.operations.has("Bookmarks")) {
+    await navigate(s, historyBookmarksUrl());
     await inspect(s);
+  }
+  if (!s.operations.has("Bookmarks")) {
+    s.notes.push(`no bookmarks loaded at ${await currentPath(s)}`);
+    return;
   }
   await scrollScreens(s, {
     screens: s.config.bookmarksMaxScreens,
@@ -360,7 +420,7 @@ async function visitBookmarks(s) {
 
 async function visitPermalinks(s) {
   s.phase = "permalinks";
-  await publish();
+  await publish(s);
   const account = s.account ?? s.config.account;
   if (!account) {
     s.notes.push("detail queue skipped: logged-in account unknown");

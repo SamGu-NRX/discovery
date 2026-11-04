@@ -5,20 +5,16 @@
   <nav><a data-testid="AppTabBar_Profile_Link" href="/fixtureuser">Profile</a></nav>
   <main data-testid="primaryColumn">
     <div role="tablist">
-      <a href="/i/history/likes" role="tab" aria-selected="true" data-name="likes-tab">Likes</a>
-      <a href="/i/history/bookmarks" role="tab" aria-selected="false" data-name="bookmarks-tab">Bookmarks</a>
+      <a href="/i/history/likes" role="tab" aria-selected="true">Likes</a>
+      <a href="/i/history/bookmarks" role="tab" aria-selected="false">Bookmarks</a>
     </div>
     <div style="height:6000px"></div>
   </main>
   <script>
-    // X moves /i/bookmarks under /i/history client-side.
-    history.replaceState(null, "", "/i/history");
-    document.querySelector('[data-name="bookmarks-tab"]').addEventListener("click", (e) => {
-      e.preventDefault();
-      selectTab(e.currentTarget);
-      history.replaceState(null, "", "/i/history/bookmarks");
-      graphql("Bookmarks", {}, false);
-    });
+    // X moves /i/bookmarks under /i/history client-side and opens another
+    // history tab; /i/history/bookmarks opens the bookmarks.
+    if (location.pathname === "/i/bookmarks") history.replaceState(null, "", "/i/history");
+    else if (location.pathname === "/i/history/bookmarks") graphql("Bookmarks", {}, false);
   </script>
 </body>
 </html>

@@ -57,7 +57,7 @@ export function parseResponse(operation, json, { focalId = null } = {}) {
     throw new ParseError(`${operation}: no instructions array at ${path.join(".")}${why}`);
   }
 
-  const ctx = { operation, focalId, detail: operation === "TweetDetail" };
+  const ctx = { operation, focalId, detail: operation === "TweetDetail", emptyTweets: 0 };
   const primaries = [];
   for (const instruction of instructions) {
     if (!isObject(instruction) || typeof instruction.type !== "string") {
@@ -85,6 +85,11 @@ export function parseResponse(operation, json, { focalId = null } = {}) {
     }
   }
 
+  // Some empty results are normal, but a response where every tweet is
+  // empty means X moved `legacy`, not that the feed is empty.
+  if (ctx.emptyTweets > 0 && primaries.length === 0) {
+    throw new ParseError(`${operation}: all ${ctx.emptyTweets} tweet result(s) lack legacy`);
+  }
   return { items: assemble(ctx, primaries), rateLimited };
 }
 
@@ -183,23 +188,33 @@ function readItemContent(ctx, itemContent, place, entryId, out) {
 
 // T in the contract appendix: the tweet itself, or the .tweet inside a
 // TweetWithVisibilityResults wrapper. Deleted, protected or unavailable posts
-// are null.
+// are null, and so is a Tweet result without `legacy`: X sends those empty
+// results, and twitter-web-exporter's filterEmptyTweet skips them the same
+// way. A Tweet that has `legacy` gets the full checks in normalizeTweet.
 function unwrapTweet(ctx, result, where) {
   if (!isObject(result)) throw new ParseError(`${ctx.operation}: ${where} tweet result is not an object`);
+  let tweet;
   switch (result.__typename) {
     case "Tweet":
-      return result;
+      tweet = result;
+      break;
     case "TweetWithVisibilityResults":
       if (!isObject(result.tweet)) {
         throw new ParseError(`${ctx.operation}: ${where} TweetWithVisibilityResults without .tweet`);
       }
-      return result.tweet;
+      tweet = result.tweet;
+      break;
     case "TweetTombstone":
     case "TweetUnavailable":
       return null;
     default:
       throw new ParseError(`${ctx.operation}: ${where} has unknown tweet type ${String(result.__typename)}`);
   }
+  if (tweet.legacy === undefined || tweet.legacy === null) {
+    ctx.emptyTweets += 1;
+    return null;
+  }
+  return tweet;
 }
 
 // When one post appears in several places, the thread needs its strongest

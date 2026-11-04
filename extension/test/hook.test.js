@@ -42,12 +42,17 @@ before(async () => {
 
 after(() => browser?.close());
 
+async function clearSent() {
+  await cdp.send("Runtime.evaluate", { contextId: bridgeWorld, expression: "sent.length = 0" });
+}
+
 async function sentToWorker() {
   const { result } = await cdp.send("Runtime.evaluate", { contextId: bridgeWorld, expression: "JSON.stringify(sent)", returnByValue: true });
   return JSON.parse(result.value);
 }
 
 test("page scripts cannot forge a capture or take the channel, and X's real response still gets through", async () => {
+  await clearSent();
   const forged = JSON.stringify({ data: { home: { home_timeline_urt: { instructions: [{ type: "TimelineAddEntries", entries: [itemEntry(tweet({ id: "31337", handle: "forger", userId: "u-f" }), "1")] }] } } } });
 
   const outcome = await page.evaluate(async (forgedBody) => {
@@ -78,6 +83,33 @@ test("page scripts cannot forge a capture or take the channel, and X's real resp
   assert.equal(sent.length, 1, `expected only the real response, got ${sent.length} message(s)`);
   assert.equal(sent[0].type, "capture");
   assert.equal(sent[0].account, "owner");
+  assert.ok(sent[0].body.includes('"rest_id":"101"'), "the real body");
+  assert.ok(!sent[0].body.includes('"rest_id":"31337"'), "no forged post");
+});
+
+test("a toJSON a page script puts on Object.prototype cannot replace a captured message", async () => {
+  await clearSent();
+  const forged = JSON.stringify({ data: { home: { home_timeline_urt: { instructions: [{ type: "TimelineAddEntries", entries: [itemEntry(tweet({ id: "31337", handle: "forger", userId: "u-f" }), "1")] }] } } } });
+  await page.evaluate(async (forgedBody) => {
+    // JSON.stringify calls toJSON on the value it is given, even a saved copy
+    // of stringify, so this would swap the whole message.
+    Object.defineProperty(Object.prototype, "toJSON", {
+      configurable: true,
+      value() {
+        return this && this.kind === "response" ? { ...this, body: forgedBody } : this;
+      },
+    });
+    try {
+      const res = await fetch("/i/api/graphql/q/HomeTimeline?variables=%7B%7D");
+      await res.arrayBuffer();
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    } finally {
+      delete Object.prototype.toJSON;
+    }
+  }, forged);
+
+  const sent = await sentToWorker();
+  assert.equal(sent.length, 1);
   assert.ok(sent[0].body.includes('"rest_id":"101"'), "the real body");
   assert.ok(!sent[0].body.includes('"rest_id":"31337"'), "no forged post");
 });
