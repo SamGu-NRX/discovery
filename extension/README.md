@@ -30,7 +30,7 @@ The service worker turns each response into one contract batch:
 
 If a response lacks a field the contract needs, or has an entry type the parser does not know, the whole response is dropped and the popup shows the error. The parser never fills in a guess. X changes these payloads without notice, and a loud failure is easier to fix than months of wrong rows.
 
-Batches wait in `chrome.storage.local` until the Worker accepts them, so a closed browser or an offline Worker loses nothing. They are packed into requests of at most 256 KB. A larger batch is split by posts, and the thread goes on its last piece.
+Batches wait in `chrome.storage.local` until the Worker accepts them, so a closed browser or an offline Worker loses nothing. They are packed into requests of at most 128 KB, the contract's cap. A larger batch is split by posts, and the thread goes on its last piece.
 
 ## Modes
 
@@ -100,7 +100,7 @@ npm test
 ```
 
 - `test/capture.test.js` covers normalization, note tweets, the visibility wrapper, cursor and module entries, display order, quoted and reposted posts, the bookmark rule, loud failures, and self-thread versus replies across permalink pages.
-- `test/batch.test.js` covers the 256 KB split.
+- `test/batch.test.js` covers the 128 KB split.
 - `test/page-agent.test.js` runs the click allowlist against real Chromium DOM. It must refuse a like button, including one dressed as the For You tab.
 - `test/e2e.test.js` loads `app/` into a throwaway Chromium profile and deletes the profile afterward. Chromium resolves `x.com` to a local HTTPS server holding fixture pages and fails every other hostname, so the test cannot reach the real X. It checks passive capture through both `fetch` and XHR, a full session (pages visited, tabs clicked, thread sent, status `ok`), and that a login wall or a GraphQL 429 stops a session.
 

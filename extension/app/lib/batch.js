@@ -1,10 +1,12 @@
-// Splits captured batches into POST /ingest/x bodies of at most 256 KB, the
-// contract's cap that keeps each request inside the Worker's CPU limit.
+// Splits captured batches into POST /ingest/x bodies of at most 128 KB, the
+// contract's cap (docs/CONTRACT.md, POST /ingest/x): in production a 245 KB
+// ingest took 15-17 ms of CPU on a cold request, over the Worker's 10 ms
+// limit, and 128 KB took 3-8 ms.
 // A batch too large for one body is split by posts into several batches with
 // the same op and surface; a TweetDetail thread rides on the last piece, after
 // every post it names has been sent.
 
-export const MAX_BODY_BYTES = 256 * 1024;
+const MAX_BODY_BYTES = 128 * 1024;
 
 const encoder = new TextEncoder();
 const bytes = (value) => encoder.encode(JSON.stringify(value)).length;

@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { MAX_BODY_BYTES, packRequests } from "../app/lib/batch.js";
+import { packRequests } from "../app/lib/batch.js";
+
+// docs/CONTRACT.md, POST /ingest/x. Written out here, not imported, so the
+// test fails if the batcher's default drifts from the contract.
+const CONTRACT_CAP = 128 * 1024;
 
 const envelope = { account: "sdotgu", session_id: "s-1", mode: "active", captured_at: "2026-11-04T10:00:00Z" };
 const size = (body) => new TextEncoder().encode(JSON.stringify(body)).length;
@@ -26,7 +30,7 @@ function post(id, textBytes) {
   };
 }
 
-test("captures over 256 KB split into bodies under the cap, keeping every post once and in order", () => {
+test("captures over 128 KB split into bodies under the cap, keeping every post once and in order", () => {
   const home = { op: "HomeTimeline", surface: "home_for_you", posts: Array.from({ length: 300 }, (_, i) => post(i, 1500)) };
   const detail = {
     op: "TweetDetail",
@@ -38,7 +42,7 @@ test("captures over 256 KB split into bodies under the cap, keeping every post o
 
   assert.ok(bodies.length >= 3, `expected a split, got ${bodies.length} body`);
   for (const body of bodies) {
-    assert.ok(size(body) <= MAX_BODY_BYTES, `body of ${size(body)} bytes`);
+    assert.ok(size(body) <= CONTRACT_CAP, `body of ${size(body)} bytes`);
     assert.deepEqual({ ...body, batches: undefined }, { ...envelope, batches: undefined });
   }
   const sent = bodies.flatMap((b) => b.batches.flatMap((batch) => batch.posts.map((p) => p.id)));
@@ -53,7 +57,7 @@ test("captures over 256 KB split into bodies under the cap, keeping every post o
 });
 
 test("a post too large for any body is dropped and named, and the rest still go", () => {
-  const batch = { op: "HomeTimeline", surface: "home_for_you", posts: [post(1, 100), post(2, MAX_BODY_BYTES), post(3, 100)] };
+  const batch = { op: "HomeTimeline", surface: "home_for_you", posts: [post(1, 100), post(2, CONTRACT_CAP), post(3, 100)] };
   const { bodies, dropped } = packRequests(envelope, [batch]);
   assert.deepEqual(dropped, ["2"]);
   assert.deepEqual(bodies.flatMap((b) => b.batches.flatMap((x) => x.posts.map((p) => p.id))), ["1", "3"]);
