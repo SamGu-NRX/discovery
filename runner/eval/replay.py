@@ -36,6 +36,18 @@ def as_post(pid, author, text, urls=(), created="2026-10-20T00:00:00Z"):
             "quoted_id": None, "metrics": {}}
 
 
+def finished_refs(home):
+    """Candidates a stopped round already finished, so a rerun of the same round skips them."""
+    done = set()
+    for f in (home / "runs").rglob("*.json") if (home / "runs").exists() else []:
+        if f.name.endswith(".bundle.json"):
+            continue
+        r = json.loads(f.read_text())
+        if (r.get("complete") or {}).get("state") not in (None, "new"):
+            done.add(r["candidate"]["ref"])
+    return done
+
+
 def load_mock(state, saves, sample_saves, watchers, mock_mod):
     ms = mock_mod.ms
     old = mock_mod.now() - dt.timedelta(days=2)
@@ -166,6 +178,11 @@ def main():
 
     ids = [] if a.ids == "none" else ([i for i in a.ids.split(",") if i] or SAMPLE)
     watchers = [] if a.watchers == "none" else [w for w in WATCHERS if a.watchers == "all" or w["ref"] in a.watchers]
+    # Resume: a round longer than one 2-hour background run continues where it stopped.
+    skip = finished_refs(home)
+    ids = [i for i in ids if i not in skip]
+    watchers = [w for w in watchers if w["ref"] not in skip]
+    print(f"resuming: {len(skip)} finished, {len(ids) + len(watchers)} to go", flush=True)
     with mock_worker.MockWorker() as m:
         load_mock(m.state, load_saves(), ids, watchers, mock_worker)
         tok = home / "token"
@@ -184,6 +201,8 @@ def main():
                 break
             for r in runs:
                 print(r["candidate"]["ref"], json.dumps(r.get("complete"))[:240], flush=True)
+            if all((r.get("complete") or {}).get("state") == "new" for r in runs):
+                break  # only deferrals this cycle: the mock would hand them straight back
         text, summary = artifacts(home, m.state)
     (home / "artifacts.md").write_text(text)
     (home / "grokbot-section-2.md").write_text(grokbot_section_2())

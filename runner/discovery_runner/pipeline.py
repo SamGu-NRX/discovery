@@ -147,6 +147,11 @@ class Runner:
     def handle(self, cand):
         cfg = self.cfg
         run = {"candidate": cand, "started_at": config.now_iso(), "owner": self.owner}
+        held = deferred_today(cand["ref"])
+        if held and config.used("codex_preps") >= cfg["codex_preps_per_day"] - PREP_RESERVE:
+            # Already deep-read today and waiting for prep budget: no model calls until tomorrow (round 6 re-read
+            # the same deferred candidates every cycle).
+            return self.complete(cand, "new", held, run)
         hit = policy.coursework_hit([cand.get("title"), cand.get("url")], cfg)
         if hit:
             return self.complete(cand, "skipped", f"coursework excluded ({hit})", run)
@@ -285,7 +290,9 @@ class Runner:
                 return self.complete(cand, "skipped", f"value {value}/5 is below the bar for tool prep: "
                                                       f"{prop.get('value_reason')}", run)
             if config.used("codex_preps") >= cfg["codex_preps_per_day"] - PREP_RESERVE:
-                return self.complete(cand, "new", f"prep budget is reserved for applications today", run)
+                note = "prep budget is reserved for applications today"
+                defer_today(cand["ref"], note)
+                return self.complete(cand, "new", note, run)
         if not (prop.get("application") or (prop.get("draft") or {}).get("text") or needs_tools):
             if not prep_spec.get("task"):
                 return self.complete(cand, "skipped", "nothing to prepare: the deep read named no deliverable", run)
@@ -299,6 +306,9 @@ class Runner:
             # One rework at most: a blocked prep or a judge "maybe" gets a second pass told what to fix. Only a
             # ready prep the judge approves is posted (round 2: blocked and "maybe" cards misled Sam).
             made_items = []
+            if needs_tools and not is_app and attempt and \
+                    config.used("codex_preps") >= cfg["codex_preps_per_day"] - PREP_RESERVE:
+                break  # rework obeys the application reserve too (round 6: reworks of posts used it up)
             if needs_tools:
                 config.check_stop()
                 if not config.take("codex_preps", cfg["codex_preps_per_day"]):
@@ -372,7 +382,8 @@ class Runner:
             prop["final_step"] = (f"Apply the prepared patches to {run['snapshot']['repo']} on a new branch and open "
                                   f"a PR")
         findings = (run.get("prep") or {}).get("findings") or []
-        if not prop.get("final_step_kind") and not is_app and not findings and prop.get("kind") != "reference_note":
+        if not prop.get("final_step_kind") and not is_app and not findings and prop.get("kind") != "reference_note" \
+                and not has_artifact(items):
             # Nothing to approve and nothing found: a report of a negative result is not a proposal. Round 5 posted
             # a Railway scanner and a synthetic teaser this way; both graders called them busywork.
             return self.complete(cand, "skipped", f"checked, nothing to act on: {(run.get('prep') or {}).get('summary') or prop.get('why')}"[:1900], run)
@@ -578,6 +589,31 @@ def render_application(app):
             lines.append(f"- **{f['name']}**: {f.get('value') or '— left blank (no sourced fact)'}"
                          f"{' (' + f['source'] + ')' if f.get('value') and f.get('source') else ''}")
     return "\n".join(lines) + "\n"
+
+
+def deferred_today(ref):
+    f = config.path("state", "deferred.json")
+    d = json.loads(f.read_text()) if f.exists() else {}
+    e = d.get(ref)
+    return e["note"] if e and e["day"] == config.today() else None
+
+
+def defer_today(ref, note):
+    f = config.path("state", "deferred.json")
+    d = json.loads(f.read_text()) if f.exists() else {}
+    d = {k: v for k, v in d.items() if v["day"] == config.today()}
+    d[ref] = {"day": config.today(), "note": note}
+    f.write_text(json.dumps(d, indent=1))
+
+
+ARTIFACT_SUFFIXES = {".mp4", ".mov", ".webm", ".gif", ".png", ".jpg", ".jpeg", ".webp", ".pdf", ".html", ".patch"}
+
+
+def has_artifact(items):
+    """Finished work that stands on its own without an ask: media, a page, a branch or patches. A report or a
+    script alone does not (round 6 dropped a finished launch film by treating it as a report)."""
+    return any(i["type"] == "branch" or Path(i["ref"]).suffix.lower() in ARTIFACT_SUFFIXES or "/patches/" in i["ref"]
+               for i in items)
 
 
 def no_action_note(tri):
