@@ -161,6 +161,7 @@ If REWORK.md exists, an earlier attempt here was reviewed: address it first, reu
 
 Hard rules:
 - Write only inside this folder. Read anything else on the machine only to check facts; never modify it.
+  Do not read other runner folders (~/.discovery, ~/.discovery-eval): start from what is in this one.
 - Never push, open a PR, submit, send, post, pay, register, install into Sam's live setup, change his live
   config, or log in anywhere. Those steps are Sam's.
 - If ./src/<name> already exists, it is a snapshot of Sam's own local checkout, with his uncommitted work
