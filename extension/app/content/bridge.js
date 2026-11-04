@@ -48,8 +48,23 @@
   // else (a rejected send while the worker restarts, an { error } reply) is
   // tried again.
   const acknowledged = (reply) => reply?.ok === true;
+  // Each signal is also stored before it is sent, under a key of its own,
+  // so one the service worker never acknowledges is still paused on: the
+  // worker removes the key once paused, drains any left at startup and
+  // every minute, and starts no session while one is stored. Returns the
+  // key, or null if storage is unavailable (the extension was reloaded).
+  const store = async (payload) => {
+    const key = `pageSignal:${crypto.randomUUID()}`;
+    try {
+      await chrome.storage.local.set({ [key]: payload });
+      return key;
+    } catch {
+      return null;
+    }
+  };
   let shown = null; // { key, reportedAt } for the blocker on screen, once acknowledged
   let sendingBlocker = false;
+  let storedBlocker = null; // { key, signalKey } stored for the blocker on screen
   let lastHref = null;
   let lastCheck = 0;
   const checkForBlocker = () => {
@@ -63,12 +78,17 @@
     if (shown?.key === key && Date.now() - shown.reportedAt < REPEAT_MS) return;
     if (sendingBlocker) return;
     sendingBlocker = true;
-    // Not acknowledged: `shown` stays as it was, so the next check sends again.
-    chrome.runtime
-      .sendMessage({ type: "x-blocker", blocker: seen.blocker, evidence: seen.evidence, path: seen.path })
-      .then((reply) => {
-        if (acknowledged(reply)) shown = { key, reportedAt: Date.now() };
-      })
+    const payload = { type: "x-blocker", blocker: seen.blocker, evidence: seen.evidence, path: seen.path };
+    // Not acknowledged: `shown` stays as it was, so the next check sends
+    // again, under the key already stored for this blocker.
+    (async () => {
+      if (storedBlocker?.key !== key) storedBlocker = { key, signalKey: await store(payload) };
+      const reply = await chrome.runtime.sendMessage({ ...payload, signalKey: storedBlocker.signalKey });
+      if (acknowledged(reply)) {
+        shown = { key, reportedAt: Date.now() };
+        storedBlocker = null;
+      }
+    })()
       .catch(() => {})
       .finally(() => {
         sendingBlocker = false;
@@ -105,17 +125,28 @@
     return { kind, operation, status: Number(status), url, body: detail.slice(start) };
   }
 
-  // A 429, a 401 or an X error 88 is sent until acknowledged: every 2 s,
-  // up to 30 times, outside the capture queue so captures keep flowing.
+  // A 429, a 401 or an X error 88 is stored, then sent until acknowledged:
+  // every 2 s, up to 30 times, outside the capture queue so captures keep
+  // flowing. After that the stored copy waits for the worker. One of each
+  // kind is in flight per page at a time.
   const BACK_OFF_TRIES = 30;
+  const delivering = new Set();
   const deliverBackOff = async (payload) => {
-    for (let attempt = 0; attempt < BACK_OFF_TRIES; attempt += 1) {
-      try {
-        if (acknowledged(await chrome.runtime.sendMessage(payload))) return;
-      } catch {
-        // The worker is restarting; try again.
+    const kind = `${payload.type}:${payload.status}`;
+    if (delivering.has(kind)) return;
+    delivering.add(kind);
+    try {
+      const signalKey = await store(payload);
+      for (let attempt = 0; attempt < BACK_OFF_TRIES; attempt += 1) {
+        try {
+          if (acknowledged(await chrome.runtime.sendMessage({ ...payload, signalKey }))) return;
+        } catch {
+          // The worker is restarting; try again.
+        }
+        await new Promise((resolve) => setTimeout(resolve, 2000));
       }
-      await new Promise((resolve) => setTimeout(resolve, 2000));
+    } finally {
+      delivering.delete(kind);
     }
   };
 

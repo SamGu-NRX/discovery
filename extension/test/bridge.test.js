@@ -38,7 +38,8 @@ before(async () => {
     globalThis.tick = null; globalThis.timers = []; globalThis.sent = []; globalThis.workerUp = false; globalThis.failing = false;
     globalThis.setInterval = (f) => { tick = f; };
     globalThis.setTimeout = (f) => { timers.push(f); };
-    globalThis.chrome = { runtime: { sendMessage: async (m) => {
+    globalThis.stored = {};
+    globalThis.chrome = { storage: { local: { set: async (values) => void Object.assign(stored, values) } }, runtime: { sendMessage: async (m) => {
       sent.push(m);
       if (!workerUp) throw new Error("The message port closed before a response was received.");
       return failing ? { error: "could not store the pause" } : { ok: true };
@@ -86,4 +87,28 @@ test("a 429 from X is sent until the worker acknowledges it, through a rejected 
   await run("runTimers()");
   await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 50)));
   assert.equal(await statusSends(), 3, "nothing more once acknowledged");
+});
+
+// Found in a readiness review of 34aed35: after 30 unanswered sends the
+// signal was gone, so a worker down for a minute never paused on it.
+test("a 429 the worker never acknowledges stays stored for the worker to pause on", async () => {
+  await run("workerUp = false; sent.length = 0; for (const k of Object.keys(stored)) delete stored[k]");
+  await page.evaluate(async () => {
+    await (await fetch("/i/api/graphql/q/HomeTimeline")).text();
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  });
+  for (let i = 0; i < 31; i += 1) {
+    await run("runTimers()");
+    await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 10)));
+  }
+  const { sends, keys, signal, carried } = await run(`(() => {
+    const sends = sent.filter((m) => m.type === "x-status" && m.status === 429);
+    const keys = Object.keys(stored);
+    return { sends: sends.length, keys, signal: stored[keys[0]], carried: [...new Set(sends.map((m) => m.signalKey))] };
+  })()`);
+  assert.equal(sends, 30, "every try was sent");
+  assert.equal(keys.length, 1);
+  assert.match(keys[0], /^pageSignal:[0-9a-f-]{36}$/);
+  assert.deepEqual([signal.type, signal.status, signal.operation], ["x-status", 429, "HomeTimeline"]);
+  assert.deepEqual(carried, [keys[0]], "each send names the stored copy");
 });

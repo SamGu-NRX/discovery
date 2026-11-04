@@ -103,9 +103,23 @@ export function extendPause(until = new Date(Date.now() + PAUSE_MS).toISOString(
   });
 }
 
-// True while sessions are paused or a pause is being written.
+// Back-off signals an X page stored before sending them (bridge.js). Each
+// has its own key, so pages never overwrite each other's; the service worker
+// removes one once it has paused on it.
+export const PAGE_SIGNAL_PREFIX = "pageSignal:";
+export async function pendingPageSignals() {
+  const keys = chrome.storage.local.getKeys
+    ? await chrome.storage.local.getKeys()
+    : Object.keys(await chrome.storage.local.get(null));
+  const pending = keys.filter((key) => key.startsWith(PAGE_SIGNAL_PREFIX));
+  return pending.length ? chrome.storage.local.get(pending) : {};
+}
+
+// True while sessions are paused, a pause is being written, or a page has
+// stored a signal not yet paused on.
 export async function pausedOrPausing() {
-  return pausesInFlight > 0 || Boolean(await getPauseUntil());
+  if (pausesInFlight > 0 || (await getPauseUntil())) return true;
+  return Object.keys(await pendingPageSignals()).length > 0;
 }
 
 // Per-page capture state (feed offsets, permalink threads), kept in

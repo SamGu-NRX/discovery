@@ -39,7 +39,7 @@ before(async () => {
   await cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: await read("../app/content/hook.js") });
   await cdp.send("Page.addScriptToEvaluateOnNewDocument", {
     worldName: "bridge",
-    source: `globalThis.sent = []; globalThis.chrome = { runtime: { sendMessage: async (m) => { sent.push(m); } } };\n${await read("../app/content/bridge.js")}`,
+    source: `globalThis.sent = []; globalThis.chrome = { runtime: { sendMessage: async (m) => { sent.push(m); return { ok: true }; } } };\n${await read("../app/content/bridge.js")}`,
   });
   await page.goto("https://x.com/home");
 });

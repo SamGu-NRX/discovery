@@ -37,6 +37,9 @@ export function installFakeChrome() {
       if (usage(next) > quota) throw new Error("QUOTA_BYTES quota exceeded");
       for (const [key, value] of Object.entries(values)) store.set(key, next.get(key));
     },
+    async getKeys() {
+      return [...store.keys()];
+    },
     async getBytesInUse() {
       return usage(store);
     },

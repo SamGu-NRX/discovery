@@ -20,6 +20,8 @@ import {
   getLocal,
   loadConfig,
   localDay,
+  PAGE_SIGNAL_PREFIX,
+  pendingPageSignals,
   recordProblem,
   setLocal,
   updatePageState,
@@ -40,11 +42,14 @@ async function setUp() {
 
 // Serializes passive back-off reporting: one report per pause.
 const backOffLock = createLock();
+// Serializes draining the signals pages stored (drainPageSignals).
+const drainLock = createLock();
 
 recoverInterruptedSession().catch((err) => recordProblem("session", err.message));
 // Work a stopped worker may have left: a passive back-off report not yet
 // sent, and captures stored after capture was turned Off.
 backOffLock(sendPendingBackOff).catch((err) => recordProblem("worker", err.message));
+drainPageSignals().catch((err) => recordProblem("x", err.message));
 loadConfig()
   .then((config) => config.mode === "off" && config.modeChangedAt && dropStoredSince(config.modeChangedAt))
   .catch((err) => recordProblem("outbox", err.message));
@@ -52,6 +57,7 @@ loadConfig()
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name === FLUSH_ALARM) {
     await flush().catch((err) => recordProblem("worker", err.message));
+    await drainPageSignals().catch((err) => recordProblem("x", err.message));
     await backOffLock(sendPendingBackOff).catch((err) => recordProblem("worker", err.message));
   } else if (alarm.name === SESSION_ALARM) {
     const result = (await intervalElapsed()) ? await startSession("alarm") : { started: false };
@@ -93,13 +99,14 @@ async function handle(message, sender) {
         return { error: err.message };
       });
     case "x-status":
-      return fromXTab ? handleXStatus(message, sender.tab.id) : { error: "statuses come from x.com tabs" };
     case "x-limit":
-      if (!fromXTab) return { error: "limits come from x.com tabs" };
-      await onBackOff(sender.tab.id, "rate_limited", `${String(message.operation).slice(0, 60)} returned X error 88 (rate limit)`);
-      return { ok: true };
-    case "x-blocker":
-      return fromXTab ? handleXBlocker(message, sender.tab.id) : { error: "blockers come from x.com tabs" };
+    case "x-blocker": {
+      if (!fromXTab) return { error: "back-off signals come from x.com tabs" };
+      const reply = await handleSignal(message, sender.tab.id);
+      // Paused on: the page's stored copy is no longer needed.
+      if (isSignalKey(message.signalKey)) await chrome.storage.local.remove(message.signalKey);
+      return reply;
+    }
     case "runSession":
       return fromExtensionPage ? startSession("manual") : { error: "only the popup starts sessions" };
     case "stopSession":
@@ -176,6 +183,26 @@ async function handleCapture(message, tabId) {
   if (session) noteSessionCapture(session.id, { operation, postIds });
   scheduleFlush();
   return { posts: postIds.length };
+}
+
+function handleSignal(message, tabId) {
+  if (message.type === "x-status") return handleXStatus(message, tabId);
+  if (message.type === "x-blocker") return handleXBlocker(message, tabId);
+  return onBackOff(tabId, "rate_limited", `${String(message.operation).slice(0, 60)} returned X error 88 (rate limit)`).then(() => ({ ok: true }));
+}
+
+const isSignalKey = (key) => typeof key === "string" && new RegExp(`^${PAGE_SIGNAL_PREFIX}[0-9a-f-]{36}$`).test(key);
+
+// Signals a page stored but could not deliver, because this worker was
+// stopped or restarting: each is paused on as if it had just arrived, from
+// no particular tab, then removed. Runs at startup and every minute.
+function drainPageSignals() {
+  return drainLock(async () => {
+    for (const [key, signal] of Object.entries(await pendingPageSignals())) {
+      if (isSignalKey(key) && ["x-status", "x-limit", "x-blocker"].includes(signal?.type)) await handleSignal(signal, -1);
+      await chrome.storage.local.remove(key);
+    }
+  });
 }
 
 async function handleXStatus(message, tabId) {

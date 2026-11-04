@@ -155,6 +155,7 @@ async function reset() {
   fake.local.delete("backOffReportedUntil");
   fake.local.delete("pendingBackOff");
   fake.local.delete("outbox");
+  for (const key of fake.local.keys()) if (key.startsWith("pageSignal:")) fake.local.delete(key);
   fake.session.clear();
   log.length = 0;
   ingests.length = 0;
@@ -1126,4 +1127,30 @@ test("a session window that makes K requests without a timeline is closed and pa
   assert.match(report.detail, /50 requests without showing a timeline \(limit 50\); .*x_requests=50$/);
   assert.ok(Date.parse(fake.local.get("pauseUntil")) > Date.now());
   assert.ok(fake.removedWindows.length > 0);
+});
+
+// Found in a readiness review of 34aed35: a 429 whose sends the worker never
+// answered was lost. The page now stores it before sending.
+test("a signal a page stored holds sessions off until the worker pauses on it", async () => {
+  await reset();
+  const key = `pageSignal:${crypto.randomUUID()}`;
+  fake.local.set(key, { type: "x-status", operation: "HomeTimeline", status: 429, url: "https://x.com/i/api/graphql/q/HomeTimeline" });
+  const refused = await session.startSession("alarm");
+  assert.equal(refused.started, false);
+  assert.ok(!log.some((entry) => entry === "reserve" || entry.startsWith("open:")), log.join(" "));
+  // The minute alarm drains it into a stored pause and removes it.
+  chrome.alarms.onAlarm.fire({ name: "flush" });
+  while (fake.local.has(key)) await new Promise((resolve) => realSetTimeout(resolve, 1));
+  assert.ok(Date.parse(fake.local.get("pauseUntil")) > Date.now());
+});
+
+test("a delivered signal's stored copy is removed once the pause is stored", async () => {
+  await reset();
+  const key = `pageSignal:${crypto.randomUUID()}`;
+  const signal = { type: "x-status", operation: "HomeTimeline", status: 429, url: "https://x.com/i/api/graphql/q/HomeTimeline" };
+  fake.local.set(key, signal);
+  const reply = await fromTab(500, { ...signal, signalKey: key });
+  assert.deepEqual(reply, { ok: true });
+  assert.equal(fake.local.has(key), false);
+  assert.ok(Date.parse(fake.local.get("pauseUntil")) > Date.now());
 });
