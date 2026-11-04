@@ -80,6 +80,8 @@ Account `test` is reserved for synthetic checks. The Worker never lists its post
 
 `POST /ingest/x/status` takes `{ "account", "session_id", "status": "ok | login_wall | rate_limited | challenge | error", "detail" }`. For any status other than `ok`, `GET /x/detail-queue` returns `{ "pause_until": "<ISO time 24 h later>" }` and extension sessions stop until then.
 
+`POST /x/sessions/start { account, session_id }` (INGEST_TOKEN) reserves an active session. The extension must get 200 before it opens any X window; any other answer, including a network failure, means no session. The Worker answers 423 `{ "pause_until" }` when any status other than `ok` was reported for that account in the last 24 hours, or when an earlier reservation is more than 30 minutes old and never reported a status, which it treats as a crash. A reservation stays open until `POST /ingest/x/status` closes it. This guard makes the pause hold even if the extension loses its own state.
+
 `GET /x/detail-queue?account=` returns `{ "post_ids": [up to 5], "pause_until": null }`. These are candidates whose thread has not been captured yet. The extension opens each one's permalink during its next active session.
 
 ## Tables (additions)
