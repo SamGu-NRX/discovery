@@ -377,3 +377,9 @@ A second contract test (native Codex, `gpt-6.1-sol`, high, no prior context) the
 **Synthetic data reached the live runner.** The runner scored the benchmark posts, made three of them candidates through `POST /candidates`, and claimed them. It also processed two synthetic candidates from the contract test. All synthetic rows were deleted. Production then held 0 posts, the 5 real candidates (all `skipped` by the runner), 0 proposals and 597 positives.
 
 **Tests and mutations.** 21 tests pass (`evidence/tests-v2.txt`). All 49 mutations fail at least one test (`evidence/mutation-check-v2.txt`). M24 (complete ignores owner) was retired: with lease tokens no test can fail on the owner check alone. M16 now targets the per-batch post version, because the old target became a no-op.
+
+## Reserved test account (contract 7d502f0)
+
+Deployed as `326f7a9a`. `GET /x/posts` now lists only posts some account other than `test` has seen, with that account's latest sighting. Ingest makes no candidates for account `test`, and `POST /candidates` returns 422 for refs starting `test-` and for any post only `test` has seen. The test fails on 1a28c52 (`candidates_created` was 1 for a `test` bookmark). Mutations M54 to M57 put each rule back, and all 53 mutations are caught.
+
+In production, an ingest as `test` with a bookmarks batch returned `candidates_created: 0`. Neither list form showed the posts. `POST /candidates` returned 422 for a `test-` ref, and 422 with "only seen by the reserved \"test\" account" for an unprefixed post id ingested as `test`. The rows were deleted afterward.
