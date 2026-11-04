@@ -126,6 +126,25 @@ class Duplicates(unittest.TestCase):
             d = self.find({"text": "b", "target": repo}, [{"id": "p3", "text": "a", "target": repo, "created_at": iso(now())}])
         self.assertIsNone(d)
 
+    def test_same_employer_program_merges_but_a_hinted_theme_does_not(self):
+        # fails if tracks of one program become separate packages, or if the deep read's duplicate_of hint alone
+        # merges unrelated work (round 3: statechart saves vanished into a quote-test patch)
+        self.assertTrue(policy.same_program("anthropic.com:Anthropic Fellows Program, ML Systems",
+                                           "anthropic.com:anthropic fellows program"))
+        self.assertFalse(policy.same_program("anthropic.com:Anthropic Research Resident",
+                                            "anthropic.com:Anthropic Fellows Program"))
+        h = Home()
+        h.setUp()
+        try:
+            r = h.runner({})
+            dup = r.duplicate({"target": "~/proj/statechart.md", "title": "Model the lease lifecycle", "why": "x",
+                               "duplicate_of": "proposal:p1"},
+                              [{"id": "p1", "title": "Add quote regression tests", "why": "y",
+                                "target": "~/proj/tests", "created_at": iso(now())}])
+            self.assertIsNone(dup)
+        finally:
+            h.tearDown()
+
     def test_same_target_merges_even_when_wording_differs(self):
         # fails if URL spelling (scheme, www, trailing slash) hides that two proposals act on the same thing
         d = self.find({"text": "b", "target": "https://www.github.com/acme/tool/"},
@@ -349,15 +368,17 @@ class EndToEnd(Home):
         self.assertEqual(models["You deep-read"], "gpt-6.1-sol")
         self.assertEqual(models["independent"], "gpt-6-astra")
 
-    def test_unfinished_work_is_not_posted_and_keeps_the_review(self):
-        # fails if work the independent review calls unfinished ("maybe") reaches Sam as a card (round 2's
-        # graders: maybe and blocked cards promised work that did not exist), or the review is lost
+    def test_finished_work_rated_maybe_is_recorded_without_asking(self):
+        # fails if finished work the review rates "maybe" is dropped (round 3 lost a finished security audit) or
+        # asks Sam anyway (asks are for work the review approves), or loses the reviewer's concern
         r = self.runner({"You triage": TRIAGE_TRY, "You deep-read": deep_read("~/x"),
                          "independent": {"verdict": "maybe", "busywork": False, "reason": "needs a real baseline"}})
         self.captured_post()
-        run = r.work()[0]
-        self.assertEqual(self.mock.state.proposals, {})
-        self.assertIn("needs a real baseline", run["complete"]["note"])
+        r.work()
+        (p,) = self.mock.state.proposals.values()
+        self.assertIsNone(p["final_step_kind"])
+        self.assertEqual(p["state"], "done")
+        self.assertIn("needs a real baseline", p["why"])
 
     def test_plan_without_deliverable_is_never_posted(self):
         # fails if a proposal whose only output is a plan is recorded as finished work (round 1's main defect)

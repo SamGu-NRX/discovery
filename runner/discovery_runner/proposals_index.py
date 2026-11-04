@@ -42,7 +42,8 @@ def recent(worker, days):
         if isinstance(inputs, str):
             inputs = json.loads(inputs)
         out.append({"id": p["id"], "title": p.get("title", ""), "why": p.get("why", ""), "kind": p.get("kind"),
-                    "target": inputs.get("target"), "created_at": p.get("created_at", ""), "state": p.get("state"),
+                    "target": inputs.get("target"), "source": inputs.get("source") or inputs.get("candidate_url"),
+                    "created_at": p.get("created_at", ""), "state": p.get("state"),
                     "candidate_ids": p.get("candidate_ids") or json.loads(p.get("candidate_ids_json") or "[]")})
     return out
 

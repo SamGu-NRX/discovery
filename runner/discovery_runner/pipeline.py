@@ -262,7 +262,7 @@ class Runner:
         if prop.get("application"):
             prop["application"] = policy.apply_ai_policy(prop["application"], self.guidance(prop["application"], run))
 
-        dup = self.duplicate(prop, open_props)
+        dup = self.duplicate(prop, open_props, b)
         if dup:
             run["merged_into"] = dup
             adds = prop.get("adds_to_existing") or prop.get("why", "")[:300]
@@ -293,6 +293,7 @@ class Runner:
                 if rework:
                     (workdir / "REWORK.md").write_text(f"# The previous attempt was reviewed\n\n{rework}\n")
                 prep = run_codex(workdir, cfg, self.llm.key(), self.log)
+                run["prep_log_tail"] = (workdir / "codex.log").read_text(errors="replace")[-4000:]
                 run.setdefault("preps", []).append(prep)
                 run["prep"] = prep
                 if prep.get("verdict") == "premise_false":
@@ -319,9 +320,37 @@ class Runner:
             if not needs_tools:
                 break
         else:
-            verdict = None
-        if not verdict or verdict.get("verdict") != "approve":
+            verdict = verdict if made_items else None
+        if not verdict or verdict.get("verdict") not in ("approve", "maybe"):
+            if prep_infra_failure(run):
+                return self.complete(cand, "new", "prep hit a gateway or network failure; retry later", run)
             return self.complete(cand, "skipped", f"not finished after rework: {rework}"[:1900], run)
+        if verdict["verdict"] == "maybe":
+            # Finished, verified work the reviewer still calls "maybe" is recorded (no ask) with the concern in
+            # front of Sam. Round 3 dropped a finished security audit (firewall off, outdated macOS) this way.
+            items += made_items
+            prop["final_step_kind"] = None
+            prop["why"] = (prop.get("why") or "") + f" Reviewer's concern: {verdict.get('reason')}"
+        if run.get("snapshot") and any(i["type"] == "branch" or "/patches/" in i["ref"] for i in items) \
+                and prop.get("final_step_kind") not in ("push", "open_pr") and verdict["verdict"] == "approve":
+            # A change to Sam's repo ends in a PR from his checkout; asking him to approve a reversible local
+            # step, or calling it done in a scratch clone, left round 3's patches stranded.
+            prop["final_step_kind"] = "open_pr"
+            prop["final_step"] = (f"Apply the prepared patches to {run['snapshot']['repo']} on a new branch and open "
+                                  f"a PR")
+        app_file = workdir / "application.json"
+        if prop.get("application") and app_file.exists():
+            # Prep may complete the package; the card's count must describe the final file, not the first draft.
+            try:
+                app = json.loads(app_file.read_text())
+                fields = app.get("fields") or []
+                left = [f.get("name") for f in fields if not f.get("value")]
+                for i in items:
+                    if i["ref"].endswith("APPLICATION.md"):
+                        i["summary"] = (f"{len(fields) - len(left)} of {len(fields)} fields filled; left to Sam: "
+                                        f"{', '.join(map(str, left))[:300]}")
+            except (json.JSONDecodeError, AttributeError):
+                pass
         (workdir / "PROPOSAL.md").write_text(render_markdown(cand, prop, verdict, items, run.get("prep")))
         items.append({"type": "note", "ref": str(workdir / "PROPOSAL.md"), "summary": "the proposal, its evidence and checks"})
         body = self.proposal_body(client_id, cand, b, prop, verdict, items, run)
@@ -335,12 +364,19 @@ class Runner:
         return self.complete(cand, "proposed" if body["final_step_kind"] else "done",
                              f"proposal {res.get('id')} ({res.get('state')})", run)
 
-    def duplicate(self, prop, open_props):
-        """The deep read's own duplicate_of, when it names a listed open proposal, else the policy check."""
-        named = str(prop.get("duplicate_of") or "").removeprefix("proposal:")
+    def duplicate(self, prop, open_props, b=None):
+        """The open proposal this one belongs to, on a deterministic basis only.
+
+        The deep read's duplicate_of is a hint, not a decision: round 3 trusted it and three statechart saves
+        vanished into an unrelated quote-test patch. A merge needs the same program (sibling postings of one
+        job board family, or the same employer:program target) or the policy match (same specific target, or
+        cosine >= 0.85 within 14 days)."""
+        siblings = {B.norm_url(j["url"]) for j in (b or {}).get("sibling_postings") or [] if j.get("url")}
         for p in open_props:
-            if named and p["id"] == named:
-                return {**p, "match": "named by the deep read"}
+            if siblings and p.get("source") and B.norm_url(p["source"]) in siblings:
+                return {**p, "match": "sibling posting of the same program"}
+            if policy.same_program(prop.get("target"), p.get("target")):
+                return {**p, "match": "same employer program"}
         return policy.find_duplicate(
             {"target": prop.get("target"), "text": f"{prop.get('title')}\n{prop.get('why')}"},
             [{**p, "text": f"{p['title']}\n{p.get('why') or ''}"} for p in open_props],
@@ -504,6 +540,14 @@ def render_application(app):
             lines.append(f"- **{f['name']}**: {f.get('value') or '— left blank (no sourced fact)'}"
                          f"{' (' + f['source'] + ')' if f.get('value') and f.get('source') else ''}")
     return "\n".join(lines) + "\n"
+
+
+def prep_infra_failure(run):
+    """True when the last prep died of the gateway or network, not the task: such candidates are retried."""
+    prep = run.get("prep") or {}
+    log = run.get("prep_log_tail") or ""
+    return bool(prep.get("timed_out") or prep.get("exit")) and bool(
+        re.search(r"reconnect|stream disconnected|error sending request|\b(429|502|503|504)\b", log, re.I))
 
 
 def _git(*args, cwd=None, check=False, input=None):

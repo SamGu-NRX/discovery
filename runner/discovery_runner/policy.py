@@ -223,6 +223,19 @@ def specific_target(t, roots=()):
     return bool(n.partition("/")[2])
 
 
+def same_program(a, b):
+    """Both targets name one employer program ("anthropic.com:Anthropic Fellows Program, ML Systems" and
+    "anthropic.com:anthropic fellows program"): same domain and same program name before any comma or dash."""
+    def key(t):
+        t = (t or "").strip().lower()
+        if not re.match(r"^[a-z0-9.-]+\.[a-z]{2,}:", t) or t.startswith(("http:", "https:")):
+            return None
+        dom, _, prog = t.partition(":")
+        return dom.removeprefix("www."), re.split(r"\s*[,–—-]\s*|\s+\(", prog.strip())[0].strip()
+    ka, kb = key(a), key(b)
+    return bool(ka and kb and ka == kb and ka[1])
+
+
 def find_duplicate(new, existing, vec_of, days, threshold, roots=()):
     """The existing proposal this one duplicates, or None.
 
