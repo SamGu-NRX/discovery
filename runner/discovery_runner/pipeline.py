@@ -118,11 +118,12 @@ class Runner:
     def work(self):
         """Claim up to claim_limit candidates and handle each. Returns the run records."""
         config.check_stop()
-        for kind, key in (("deep_reads", "deep_reads_per_day"), ("codex_preps", "codex_preps_per_day")):
-            if config.used(kind) >= self.cfg[key]:
-                # Without prep a proposal would be a plan, which is never posted; candidates wait for tomorrow.
-                self.log(f"work: {kind} budget used up for today; nothing claimed")
-                return []
+        # Only the deep-read budget stops claiming. An exhausted prep budget is handled per candidate: applications
+        # still post their package built from the facts, and other work returns to the queue (rounds 4 and 5 left
+        # application postings with no outcome behind a spent prep budget).
+        if config.used("deep_reads") >= self.cfg["deep_reads_per_day"]:
+            self.log("work: deep_reads budget used up for today; nothing claimed")
+            return []
         cands = self.worker.claim(self.owner, self.cfg["claim_ttl_s"], self.cfg["claim_limit"])
         # Watcher events (job postings, mostly) first within a batch: they carry deadlines and the prep budget
         # favors them (round 4 and 5 left application postings unreached).
@@ -180,7 +181,7 @@ class Runner:
             tri["overridden"] = f"triage said {tri['action_type']}: {tri.get('why_it_matters')}"
             tri["action_type"] = "apply_or_attend"
         if tri["action_type"] == "no_action":
-            return self.complete(cand, "skipped", f"no_action: {tri.get('why_it_matters')}", run)
+            return self.complete(cand, "skipped", no_action_note(tri), run)
         if tri["action_type"] == "reference_note":
             if len(tri.get("related_save_ids") or []) < 2:
                 return self.reference_note(cand, b, tri, run)
@@ -301,8 +302,13 @@ class Runner:
             if needs_tools:
                 config.check_stop()
                 if not config.take("codex_preps", cfg["codex_preps_per_day"]):
-                    return self.complete(cand, "skipped" if attempt else "new",
-                                         f"codex prep budget used up{'; last review: ' + rework if rework else ''}", run)
+                    if not (is_app and items):
+                        return self.complete(cand, "skipped" if attempt else "new",
+                                             f"codex prep budget used up{'; last review: ' + rework if rework else ''}", run)
+                    needs_tools = False
+                    prop["why"] = (prop.get("why") or "") + " Prep not run today (budget); the package is built " \
+                                                            "from the facts and the posting."
+            if needs_tools:
                 if attempt == 0:
                     run["snapshot"] = local_snapshot(prop.get("target"), workdir, cfg)
                 if rework:
@@ -365,6 +371,11 @@ class Runner:
             prop["final_step_kind"] = "open_pr"
             prop["final_step"] = (f"Apply the prepared patches to {run['snapshot']['repo']} on a new branch and open "
                                   f"a PR")
+        findings = (run.get("prep") or {}).get("findings") or []
+        if not prop.get("final_step_kind") and not is_app and not findings and prop.get("kind") != "reference_note":
+            # Nothing to approve and nothing found: a report of a negative result is not a proposal. Round 5 posted
+            # a Railway scanner and a synthetic teaser this way; both graders called them busywork.
+            return self.complete(cand, "skipped", f"checked, nothing to act on: {(run.get('prep') or {}).get('summary') or prop.get('why')}"[:1900], run)
         app_file = workdir / "application.json"
         if prop.get("application") and app_file.exists():
             # Prep may complete the package; the card's count must describe the final file, not the first draft.
@@ -567,6 +578,14 @@ def render_application(app):
             lines.append(f"- **{f['name']}**: {f.get('value') or '— left blank (no sourced fact)'}"
                          f"{' (' + f['source'] + ')' if f.get('value') and f.get('source') else ''}")
     return "\n".join(lines) + "\n"
+
+
+def no_action_note(tri):
+    """The skip note Sam reads. An expired item states its deadline; round 5 explained a closed fellowship
+    by "it doesn't change AgentSetup", which both graders preferred less than naming the date."""
+    if tri.get("expired") and tri.get("deadline"):
+        return f"closed: the deadline ({tri['deadline']}) has passed. {tri.get('gist') or ''}".strip()
+    return f"no_action: {tri.get('why_it_matters')}"
 
 
 def prep_infra_failure(run):

@@ -460,6 +460,55 @@ class OpenApplications(Home):
         self.assertEqual([c["stage"] for c in self.gw.calls].count("You deep-read"), 1)
 
 
+class RegressionClasses(Home):
+    """One test per loss class found by the regression gate (runner/README.md, Grading)."""
+    URL = OpenApplications.URL
+
+    def test_spent_prep_budget_still_posts_the_application_package(self):
+        # class: budget. Fails if an application gets "prep budget used up" instead of its package (round 5,
+        # both Research Resident postings; the gate confirmed it as a regression)
+        package = {"decline": False, "kind": "apply_or_attend", "title": "Acme Fellows application", "why": "w",
+                   "target": "acme.com:fellows", "prep": {"needs_tools": True, "task": "read the live form"},
+                   "evidence": [], "application": {"employer": "Acme", "employer_domain": "acme.com",
+                   "fields": [{"name": "Graduation", "kind": "fact", "value": "May 2028", "source": "facts"}]}}
+        r = self.runner({"You triage": {"action_type": "apply_or_attend", "why_it_matters": "w"},
+                         "You deep-read": package, "independent": JUDGE_OK}, codex_preps_per_day=0)
+        OpenApplications.seed_posting(self)
+        run = r.work()[0]
+        (p,) = self.mock.state.proposals.values()
+        self.assertEqual(p["final_step_kind"], "submit")
+        self.assertIn("Prep not run today", p["why"])
+        self.assertNotIn("preps", run)
+
+    def test_spent_prep_budget_requeues_other_tool_work(self):
+        # class: budget. Fails if non-application tool work runs past the share reserved for applications
+        dr = deep_read("~/x", draft=None, prep={"needs_tools": True, "task": "build it"}, value=5)
+        r = self.runner({"You triage": TRIAGE_TRY, "You deep-read": dr, "independent": JUDGE_OK}, codex_preps_per_day=2)
+        self.captured_post()
+        run = r.work()[0]
+        self.assertIn("reserved for applications", run["complete"]["note"])
+        self.assertEqual(config.used("codex_preps"), 0)
+
+    def test_nothing_to_ask_and_nothing_found_is_not_a_proposal(self):
+        # class: busywork. Fails if a negative result (no final step, no finding) is posted as a proposal
+        # (round 5's Railway scanner)
+        dr = deep_read("~/x", final_step_kind=None, final_step=None)
+        r = self.runner({"You triage": TRIAGE_TRY, "You deep-read": dr, "independent": JUDGE_OK})
+        self.captured_post()
+        run = r.work()[0]
+        self.assertEqual(self.mock.state.proposals, {})
+        self.assertIn("nothing to act on", run["complete"]["note"])
+
+    def test_expired_item_names_its_deadline(self):
+        # class: decline reason. Fails if a closed item is explained by anything but its passed deadline
+        # (round 5: "doesn't change AgentSetup" for a fellowship that closed Oct 28)
+        r = self.runner({"You triage": {"action_type": "no_action", "expired": True, "deadline": "2026-10-28",
+                                        "why_it_matters": "does not change AgentSetup", "gist": "two fellowships"}})
+        self.captured_post()
+        run = r.work()[0]
+        self.assertTrue(run["complete"]["note"].startswith("closed: the deadline (2026-10-28) has passed"))
+
+
 class Scoring(Home):
     def test_score_is_top5_positive_mean_minus_top5_skipped_plus_author_prior(self):
         # fails if the contract's scoring formula changes (k, sign of skipped, or the prior)

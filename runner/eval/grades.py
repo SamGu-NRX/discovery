@@ -9,6 +9,8 @@ because graders merge them). Grade files are JSON: {"round", "grader", "overall"
   grades.py pairs <old-round> <new-round> <out-dir> blinded pairwise file for a fresh grader, plus its key
   grades.py pairwise <out-dir>/key.json G.json      win/tie/loss for the newer round from a pairwise verdict
   grades.py deltas OLD.json NEW.json [--noise N]    per-item change, flagged when larger than the noise
+  grades.py gate <round>                            the round against each item's best so far (see gate())
+  grades.py gate-resolve <round> <verdict.json>...  confirm or accept flagged drops from blinded pairwise verdicts
 """
 import json
 import random
@@ -133,6 +135,105 @@ def deltas(old, new, noise_band=0.0):
     return out
 
 
+GRADES = EVAL / "grades"
+DROP = 3  # the measured noise band: a fresh re-grade of unchanged artifacts moved no item more than 2 points
+LEDGER = EVAL / "best.json"
+
+
+def combined(rnd):
+    """Per item: both graders' scores and their mean, for one round."""
+    c = load(GRADES / f"round-{rnd}-claude.json")["scores"]
+    s = load(GRADES / f"round-{rnd}-sam.json")["scores"]
+    return {k: {"claude": c.get(k), "sam": s.get(k),
+                "combined": statistics.mean(x for x in (c.get(k), s.get(k)) if x is not None)}
+            for k in set(c) | set(s)}
+
+
+def ledger():
+    return json.loads(LEDGER.read_text()) if LEDGER.exists() else {"items": {}, "rounds": [], "accepted": [], "causes": []}
+
+
+def gate(rnd):
+    """Each item's combined score this round against its best before this round.
+
+    An item is flagged when it falls DROP or more below its best. A flagged drop is not yet a regression:
+    absolute scores come from graders who each saw one round, so the drop goes to a blinded pairwise check
+    of the best output against this round's (pairs file written here). gate-resolve records the outcome.
+    Rounds already in the ledger are rebuilt from grade files when the ledger is missing them."""
+    led = ledger()
+    for r in range(1, int(rnd)):
+        if r not in led["rounds"] and (GRADES / f"round-{r}-claude.json").exists():
+            _update(led, r, set())
+    now = combined(rnd)
+    flagged = []
+    for k, v in sorted(now.items()):
+        best = led["items"].get(k)
+        if best and best["combined"] - v["combined"] >= DROP:
+            flagged.append({"key": k, "best_round": best["round"], "best": best["combined"], "now": v["combined"],
+                            "now_claude": v["claude"], "now_sam": v["sam"]})
+    out = EVAL / f"gate-{rnd}"
+    out.mkdir(exist_ok=True)
+    if flagged:
+        _pairs_vs_best(flagged, rnd, out)
+    (out / "flagged.json").write_text(json.dumps(flagged, indent=1))
+    LEDGER.write_text(json.dumps(led, indent=1))
+    return {"round": int(rnd), "flagged": flagged, "pairs": str(out / "pairs.md") if flagged else None}
+
+
+def _pairs_vs_best(flagged, rnd, out, seed=7):
+    rng = random.Random(seed)
+    key, lines = {}, ["# Paired outputs", "", "Each item is one thing Sam saved or was alerted to. Two versions of the "
+                      "system handled it, labeled Option 1 and Option 2 in random order.", ""]
+    for i, f in enumerate(flagged, 1):
+        best = sections(EVAL / f"round-{f['best_round']}").get(f["key"], "## (no outcome)")
+        new = sections(EVAL / f"round-{rnd}").get(f["key"], "## (no outcome: the system never reached this item)")
+        flip = rng.random() < 0.5
+        key[f"item-{i}"] = {"key": f["key"], "option_1": "new" if flip else "old"}
+        o1, o2 = (new, best) if flip else (best, new)
+        lines += [f"# item-{i}", "", "## Option 1", "", o1.replace("## Candidate:", "### Candidate:"), "",
+                  "## Option 2", "", o2.replace("## Candidate:", "### Candidate:"), "", "---", ""]
+    (out / "pairs.md").write_text("\n".join(lines))
+    (out / "key.json").write_text(json.dumps(key, indent=1))
+
+
+def gate_resolve(rnd, *verdict_files):
+    """A flagged drop is a confirmed regression when the pairwise graders prefer the best output (any grader
+    preferring it and none preferring the new one); otherwise it is accepted, with the graders' verdicts as
+    the reason. The round passes only with no confirmed regression. The ledger then takes every item where
+    this round beats the best, and keeps the best where it does not."""
+    out = EVAL / f"gate-{rnd}"
+    led = ledger()
+    flagged = json.loads((out / "flagged.json").read_text())
+    verdicts = [pairwise(out / "key.json", v)["per_item"] for v in verdict_files] if flagged else []
+    confirmed, accepted = [], []
+    for f in flagged:
+        votes = [v.get(f["key"]) for v in verdicts]
+        (confirmed if "old" in votes and "new" not in votes else accepted).append({**f, "pairwise": votes})
+    now = combined(rnd)
+    for a in accepted:
+        led["accepted"].append({"round": int(rnd), "key": a["key"], "reason": f"blinded pairwise vs best: {a['pairwise']}"})
+        if "new" in a["pairwise"] and "old" not in a["pairwise"]:
+            # The graders preferred this round's output to the stored best, whatever the absolute scores said,
+            # so it becomes the output later rounds are compared with.
+            led["items"][a["key"]] = {"round": int(rnd), **now[a["key"]], "replaced_by_pairwise": True}
+    for c in confirmed:
+        led["causes"].append({"round": int(rnd), "key": c["key"], "cause": None, "note": None})
+    _update(led, int(rnd), {c["key"] for c in confirmed} | {a["key"] for a in accepted})
+    LEDGER.write_text(json.dumps(led, indent=1))
+    return {"round": int(rnd), "passes": not confirmed, "confirmed_regressions": confirmed, "accepted_drops": accepted}
+
+
+def _update(led, rnd, skip):
+    for k, v in combined(rnd).items():
+        best = led["items"].get(k)
+        if k in skip:
+            continue
+        if not best or v["combined"] > best["combined"]:
+            led["items"][k] = {"round": rnd, **v}
+    if rnd not in led["rounds"]:
+        led["rounds"].append(rnd)
+
+
 if __name__ == "__main__":
     cmd, *args = sys.argv[1:]
     if cmd == "key-table":
@@ -143,6 +244,10 @@ if __name__ == "__main__":
         print(json.dumps(pairs(*args)))
     elif cmd == "pairwise":
         print(json.dumps(pairwise(*args), indent=1))
+    elif cmd == "gate":
+        print(json.dumps(gate(args[0]), indent=1))
+    elif cmd == "gate-resolve":
+        print(json.dumps(gate_resolve(*args), indent=1))
     elif cmd == "deltas":
         band = float(args[args.index("--noise") + 1]) if "--noise" in args else 0.0
         print(json.dumps(deltas(args[0], args[1], band), indent=1))
