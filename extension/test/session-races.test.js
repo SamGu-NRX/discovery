@@ -82,9 +82,16 @@ chrome.scripting = {
 };
 // Status reports fail with 503 while this is set.
 let statusDown = false;
+// The answer to POST /x/sessions/start: a status and body, or "network" to fail.
+let reservation = { status: 200, body: {} };
 const ingests = [];
 globalThis.fetch = async (url, init) => {
   const path = new URL(url).pathname;
+  if (path === "/x/sessions/start") {
+    log.push("reserve");
+    if (reservation === "network") throw new TypeError("Failed to fetch");
+    return new Response(JSON.stringify(reservation.body), { status: reservation.status });
+  }
   if (path === "/ingest/x/status") {
     const body = JSON.parse(init.body);
     log.push(`status:${body.session_id}:${body.status}`);
@@ -133,11 +140,14 @@ async function reset() {
   await chrome.storage.local.set({ config: CONFIG });
   await session.recoverInterruptedSession();
   fake.local.delete("pauseUntil");
+  fake.local.delete("backOffReportedUntil");
+  fake.local.delete("pendingBackOff");
   fake.local.delete("outbox");
   fake.session.clear();
   log.length = 0;
   ingests.length = 0;
   statusDown = false;
+  reservation = { status: 200, body: {} };
   ended = deferred();
 }
 
@@ -738,8 +748,11 @@ test("a challenge the page showed is on record before any other write, so a kill
     if (options.args?.[0]?.name !== "inspect") return execute(options);
     chrome.scripting.executeScript = execute;
     doomed.requestStop("stopped_by_user", "Sam pressed Stop");
-    // The worker stops after its next storage write.
-    kill.trigger(1);
+    // The worker stops after recording the challenge and its pause. (Not
+    // inside the pause write: the copies share store.js, so a write killed
+    // there would hold its lock for every later test, which a real restart
+    // would not.)
+    kill.trigger(2);
     return [{ result: { ok: { account: "someone_new", blocker: "challenge", evidence: "CAPTCHA", path: "/home" } } }];
   };
   doomed.startSession("manual");
@@ -866,3 +879,58 @@ test("a recovered status the Worker accepted is not sent again after a kill at t
   await restarted.recoverInterruptedSession();
   assert.deepEqual(statuses("old"), ["status:old:challenge"]);
 });
+
+// Found in an install-readiness review of faf97e1.
+
+test("a 429 a running session takes is a stored pause before the handler returns, so a browser restart starts no session", async () => {
+  await reset();
+  const opening = hold(chrome.windows, "create");
+  await session.startSession("alarm");
+  await opening.entered;
+  session.requestStop("stopped_by_user", "Sam pressed Stop");
+  await fromTab(500, { type: "x-status", operation: "HomeTimeline", status: 429 });
+  assert.ok(Date.parse(fake.local.get("pauseUntil")) > Date.now(), "pause stored when the handler returned");
+
+  // A browser restart clears session storage; local storage stays.
+  const sessionRecord = fake.session.get("activeSession");
+  fake.session.clear();
+  const restarted = await workerCopy();
+  const result = await restarted.startSession("alarm");
+  assert.equal(result.started, false);
+
+  fake.session.set("activeSession", sessionRecord);
+  opening.release();
+  await ended.promise;
+  await untilIdle();
+});
+
+test("X error 88 pauses sessions even when the parser rejects the rest of the response", async () => {
+  await reset();
+  const body = homeResponse();
+  body.errors = [{ code: 88, message: "Rate limit exceeded" }];
+  body.data.home.home_timeline_urt.instructions = [
+    { type: "TimelineAddEntries", entries: [{ entryId: "unknown", content: { entryType: "NewXEntryType" } }] },
+  ];
+  const answer = await fromTab(500, { ...capture(), body: JSON.stringify(body) });
+  assert.equal(answer.ignored, true);
+  assert.match(fake.local.get("lastProblem").message, /unknown entryType/);
+  assert.ok(Date.parse(fake.local.get("pauseUntil")) > Date.now());
+});
+
+for (const [name, answer, reasonPattern] of [
+  ["a 423 with pause_until", { status: 423, body: { pause_until: "2099-01-01T00:00:00.000Z" } }, /holding sessions/],
+  ["a 404 (no guard deployed yet)", { status: 404, body: {} }, /does not take session reservations/],
+  ["a network failure", "network", /could not be reached/],
+]) {
+  test(`a session the Worker does not reserve, on ${name}, opens no window and reports nothing`, async () => {
+    await reset();
+    reservation = answer;
+    const result = await session.startSession("alarm");
+    assert.equal(result.started, false);
+    assert.match(result.reason, reasonPattern);
+    assert.deepEqual(log, ["reserve"]);
+    assert.equal(session.sessionInfo(), null);
+    assert.equal(fake.session.get("activeSession"), undefined);
+    if (answer.body?.pause_until) assert.equal(fake.local.get("pauseUntil"), answer.body.pause_until);
+  });
+}

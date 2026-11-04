@@ -7,11 +7,10 @@
 
 import { flush } from "./outbox.js";
 import { scheduleNext } from "./schedule.js";
-import { getLocal, getPauseUntil, loadConfig, recordProblem, setLocal } from "./store.js";
-import { getDetailQueue, postStatus } from "./worker-api.js";
+import { extendPause, getLocal, getPauseUntil, loadConfig, recordProblem, setLocal } from "./store.js";
+import { getDetailQueue, postStatus, reserveSession } from "./worker-api.js";
 import { bookmarksUrl, historyBookmarksUrl, homeUrl, isMintedXUrl, permalinkUrl, xPath } from "./xurl.js";
 
-const PAUSE_MS = 24 * 3600_000;
 const LOAD_TIMEOUT_MS = 30_000;
 // Stop reasons reported as that status, each pausing sessions for 24 hours:
 // X telling the account to back off, or an error. A session interrupted by
@@ -162,11 +161,31 @@ export async function startSession(trigger) {
     const pause = await getPauseUntil();
     if (pause) return refuse(`Paused until ${new Date(pause).toLocaleString()}.`);
     s.knownBookmarks = new Set(await getLocal("sentBookmarkIds", []));
+    s.reservedAccount = (await getLocal("lastAccount", null)) ?? s.config.account;
+    if (!s.reservedAccount) return refuse("Open x.com once while logged in, so the session knows the account.");
     if (s.stop) return refuse("Stopped before it began.");
     await publish(s);
     s.recorded = true;
   } catch (err) {
     return refuse(`Could not start: ${err.message}`);
+  }
+  // The Worker's guard (docs/CONTRACT.md, POST /x/sessions/start): no X
+  // window opens without its 200. It refuses while a blocking status from
+  // the last 24 hours stands, which holds the pause even if this extension
+  // lost its own state. Anything but 200 means no session, a 404 from a
+  // Worker that does not offer the guard yet included. A refused session
+  // never reserved anything, so it reports no status; its record goes.
+  const reservation = await reserveSession(s.config, { account: s.reservedAccount, session_id: s.id });
+  if (!reservation.ok) {
+    s.finishing = true;
+    s.statusDecided = true;
+    if (reservation.pauseUntil) await extendPause(reservation.pauseUntil);
+    try {
+      await removeRecord(s.id);
+    } finally {
+      if (current === s) current = null;
+    }
+    return { started: false, reason: reservation.reason };
   }
   run(s);
   return { started: true, id: s.id };
@@ -339,7 +358,7 @@ async function recoverRecord(record) {
   const settled = { ...record, windowId: null, outcome, final: true };
   await chrome.storage.session.set({ activeSession: settled });
   const status = statusFor(outcome.reason);
-  const detail = `${outcome.reason}: ${outcome.detail}`.slice(0, 1000);
+  const detail = `${outcome.reason}: ${outcome.detail}; screens=${record.screens ?? 0} posts=${record.posts ?? 0}`.slice(0, 1000);
   if (status !== "ok") await extendPause();
   const config = await loadConfig();
   const account = record.account ?? (await getLocal("lastAccount", null)) ?? config.account;
@@ -364,12 +383,6 @@ async function hasRecordOtherThan(id) {
 async function removeRecord(id) {
   const { activeSession } = await chrome.storage.session.get("activeSession");
   if (activeSession?.id === id) await chrome.storage.session.remove("activeSession");
-}
-
-async function extendPause() {
-  const until = new Date(Date.now() + PAUSE_MS).toISOString();
-  const existing = await getPauseUntil();
-  if (!existing || Date.parse(existing) < Date.parse(until)) await setLocal({ pauseUntil: until });
 }
 
 // Progress the popup shows while a session runs, and what recovery reads.
@@ -501,6 +514,8 @@ async function inspect(s) {
     const blocker = { reason: seen.blocker, detail: `${seen.evidence} at ${seen.path}` };
     if (!BLOCKING.has(s.stop?.reason)) s.stop = blocker;
     await publish(s);
+    // Survives a browser restart, which clears the record above.
+    await extendPause();
     throw new StopSession(s.stop.reason, s.stop.detail);
   }
   if (seen.account && !s.account) {

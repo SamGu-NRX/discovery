@@ -32,6 +32,7 @@ test("a login wall recorded before the restart is reported as login_wall and pau
   const { status, paused, lastSession } = await recover({ stop: { reason: "login_wall", detail: "path /i/flow/login" }, completed: false });
   assert.equal(status.status, "login_wall");
   assert.equal(status.session_id, "s-1");
+  assert.match(status.detail, /screens=3 posts=20/);
   assert.equal(paused, true);
   assert.equal(lastSession.status, "login_wall");
   assert.deepEqual(fake.removedWindows, [7]);

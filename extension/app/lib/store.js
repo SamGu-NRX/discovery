@@ -80,6 +80,19 @@ export async function getPauseUntil() {
   return until && Date.parse(until) > Date.now() ? until : null;
 }
 
+// Pauses sessions until `until` (default 24 hours from now), never
+// shortening a later pause already stored. chrome.storage.local survives a
+// browser restart, so an awaited call here makes the pause hold whatever
+// happens next.
+const PAUSE_MS = 24 * 3600_000;
+const pauseLock = createLock();
+export function extendPause(until = new Date(Date.now() + PAUSE_MS).toISOString()) {
+  return pauseLock(async () => {
+    const existing = await getPauseUntil();
+    if (!existing || Date.parse(existing) < Date.parse(until)) await setLocal({ pauseUntil: until });
+  });
+}
+
 // Per-page capture state (feed offsets, permalink threads), kept in
 // chrome.storage.session so a service worker restart mid-scroll does not
 // restart positions at 0. Cleared when the browser closes.

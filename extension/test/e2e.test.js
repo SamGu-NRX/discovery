@@ -136,6 +136,8 @@ test("an active session reads home, bookmarks and one permalink by navigation al
   });
 
   assert.deepEqual(site.pages, ["/home", "/i/bookmarks", "/i/history/bookmarks", "/i/status/200"]);
+  const reservation = mock.requests.slice(startedAt).find((r) => r.path === "/x/sessions/start");
+  assert.deepEqual(reservation.body, { account: "fixtureuser", session_id: status.body.session_id });
   assert.deepEqual(site.clicks, []);
   // Every piece carries an idempotency key of the form <capture uuid>:<index>.
   assert.ok(batches.every((b) => /^[0-9a-f-]{36}:\d+$/.test(b.batch_id)), "batch_id on every batch");
@@ -291,6 +293,7 @@ function startMockWorker() {
       for (const waiter of waiters) waiter(record, requests.length - 1);
       res.setHeader("content-type", "application/json");
       if (req.url.startsWith("/x/detail-queue")) return res.end(JSON.stringify({ post_ids: ["200"], pause_until: null }));
+      if (req.url === "/x/sessions/start") return res.end("{}");
       if (req.url === "/ingest/x") return res.end(JSON.stringify({ posts_upserted: 0, sightings: 0, new_posts: 0, candidates_created: 0 }));
       return res.end("{}");
     });

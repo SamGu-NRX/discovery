@@ -16,8 +16,8 @@ import {
 } from "./lib/session.js";
 import {
   createLock,
+  extendPause,
   getLocal,
-  getPauseUntil,
   loadConfig,
   localDay,
   recordProblem,
@@ -27,6 +27,8 @@ import {
 import { postStatus } from "./lib/worker-api.js";
 
 const FLUSH_ALARM = "flush";
+// X's GraphQL error code for "Rate limit exceeded"; it can arrive with HTTP 200.
+const RATE_LIMIT_CODE = 88;
 
 chrome.runtime.onInstalled.addListener(() => setUp());
 chrome.runtime.onStartup.addListener(() => setUp());
@@ -114,8 +116,6 @@ async function handleCapture(message, tabId) {
   // and the capture still belongs to it.
   const session = tabId === sessionTabId() ? sessionInfo() : null;
   const inSession = session !== null;
-  const config = await loadConfig();
-  if (config.mode === "off") return { ignored: true };
 
   let json;
   try {
@@ -124,6 +124,14 @@ async function handleCapture(message, tabId) {
     await recordProblem("parse", `${operation}: response was not JSON`);
     return { ignored: true };
   }
+  // X's rate-limit error (code 88) is a back-off signal on its own, checked
+  // before the mode and before any parsing, so neither Off nor a response
+  // the parser rejects can hide it.
+  if (Array.isArray(json?.errors) && json.errors.some((e) => e?.code === RATE_LIMIT_CODE)) {
+    await onBackOff(tabId, "rate_limited", `${operation} returned X error 88 (rate limit)`);
+  }
+  const config = await loadConfig();
+  if (config.mode === "off") return { ignored: true };
 
   const focalId = operation === "TweetDetail" ? focalTweetIdFromUrl(url) : null;
   const key = [pageLoadId, operation, focalId ?? ""].join("|");
@@ -141,7 +149,6 @@ async function handleCapture(message, tabId) {
   if (!result) return { ignored: true };
   if (result.threadError) await recordProblem("parse", result.threadError);
 
-  if (result.rateLimited) await onBackOff(tabId, "rate_limited", `${operation} returned X error 88 (rate limit)`);
   if (!result.batch) return { posts: 0 };
 
   const handle = typeof message.account === "string" && /^[A-Za-z0-9_]{1,15}$/.test(message.account) ? message.account : null;
@@ -183,17 +190,23 @@ async function handleXStatus(message, tabId) {
 // session, once, and holds sessions off for the pause.
 async function onBackOff(tabId, reason, detail) {
   const fromSession = tabId === sessionTabId();
-  if (requestStop(reason, fromSession ? detail : `${detail} in another tab`)) return;
+  const accepted = requestStop(reason, fromSession ? detail : `${detail} in another tab`);
+  // Every X signal pauses sessions in chrome.storage.local before this
+  // returns. A session's own record of the signal lives in session storage,
+  // which a browser restart clears before the session could write its pause.
+  await extendPause();
+  if (accepted) return;
   await backOffLock(async () => {
     await recordProblem("x", detail);
-    // One report per pause: a second signal finds the pause and stops here.
-    if (await getPauseUntil()) return;
+    // One passive report per 24 hours: a second signal finds the stamp.
+    const reportedUntil = await getLocal("backOffReportedUntil", null);
+    if (reportedUntil && Date.parse(reportedUntil) > Date.now()) return;
     const config = await loadConfig();
     const account = (await getLocal("lastAccount", null)) ?? config.account;
     const report = account ? { account, session_id: await passiveSessionId(), status: reason, detail } : null;
-    // The pause and the report to send are one write, so a stopped worker
+    // The stamp and the report to send are one write, so a stopped worker
     // leaves either neither or both, and the next start sends the report.
-    await setLocal({ pauseUntil: new Date(Date.now() + 24 * 3600_000).toISOString(), pendingBackOff: report });
+    await setLocal({ pendingBackOff: report, backOffReportedUntil: new Date(Date.now() + 24 * 3600_000).toISOString() });
     await sendPendingBackOff();
   });
 }
