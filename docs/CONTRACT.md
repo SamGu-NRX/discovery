@@ -62,6 +62,7 @@ Request body, at most 128 KB. The extension splits larger captures. In productio
   "captured_at": "ISO time",
   "batches": [
     {
+      "batch_id": "stable id for this piece of a capture: <capture uuid>:<piece index>",
       "op": "HomeTimeline | HomeLatestTimeline | Bookmarks | TweetDetail | SearchTimeline | UserTweets | ListLatestTweetsTimeline",
       "surface": "home_for_you | home_following | bookmarks | detail | search | profile | list",
       "posts": [{ "...normalized post", "position": 0 }],
@@ -71,7 +72,7 @@ Request body, at most 128 KB. The extension splits larger captures. In productio
 }
 ```
 
-`thread` appears only on TweetDetail batches. The Worker upserts posts, always overwriting `metrics` with the latest values, and writes one sighting row per post per batch. A post first seen on the `bookmarks` surface sets `bookmarked = 1`.
+`thread` appears only on TweetDetail batches. `batch_id` is the idempotency key. The Worker records it with a uniqueness constraint in the same D1 batch as the writes, and a repeated `batch_id` writes no sightings and leaves counters unchanged, so retries and lost responses are safe. The Worker upserts posts, always overwriting `metrics` with the latest values, and writes one sighting row per post per batch. A post first seen on the `bookmarks` surface sets `bookmarked = 1`.
 
 The response is `{ "posts_upserted", "sightings", "new_posts", "candidates_created" }`.
 
@@ -117,8 +118,8 @@ Scoring runs in the runner, because cosine similarity over hundreds of saves wou
 - `GET /x/posts?unscored=1&limit=200` returns normalized posts with `account`, `bookmarked` and latest `surface` and `session_id`.
 - `POST /x/posts/scores { scores: [{ id, score, parts }] }`
 - `POST /candidates { kind, ref, title, url, score, score_parts }` is idempotent on `(kind, ref)`. It returns 429 after the 15th unbookmarked candidate of the UTC day.
-- `POST /candidates/claim { owner, ttl_s, limit }` returns leased candidates. An expired lease can be reclaimed. Completing with a stale owner returns 409.
-- `POST /candidates/:id/complete { owner, state, note }`
+- `POST /candidates/claim { owner, ttl_s, limit }` returns leased candidates, each with a random `lease_token`. `owner` is a random runner instance id generated at startup, not hostname and PID. An expired lease can be reclaimed. Completing with a stale owner returns 409.
+- `POST /candidates/:id/complete { owner, lease_token, state, note }` succeeds only when `lease_token` matches the current lease. A reclaimed lease invalidates the old token.
 - `GET /x/posts/:id/context` returns the post, its quoted post, the captured thread (`op_self_thread` and `replies` in server order, each a normalized post) and `thread_captured: true|false`.
 - `POST /proposals` takes
   ```
@@ -132,7 +133,7 @@ Scoring runs in the runner, because cosine similarity over hundreds of saves wou
 
 ## Approval
 
-- `GET /a/:token` renders one plain card: title, why, what is prepared (with links), the final step, and Approve, Skip and Later buttons.
+- `GET /a/:token` renders one plain card: title, why, what is prepared (with links), the final step, a human-readable rendering of every field in `inputs` (the exact values the hash binds), and Approve, Skip and Later buttons. The token is resolved before any request body is read, and bodies over 4 KB are refused.
 - `POST /a/:token { decision: "approve|skip|later" }` is single-use and returns 409 after the first decision. Skip and later are recorded as labels for the scorer.
 - Notification target: `T3_APPROVALS_WEBHOOK_URL` (secret), body `{ event_id: proposal id, title, why, final_step, approve_url }`. A T3 thread bound to that webhook shows Sam one question card and POSTs his answer to `approve_url`.
 
