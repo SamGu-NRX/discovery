@@ -420,3 +420,16 @@ In production with account `test` (times moved by updating only `test` rows):
 The `test` rows were deleted afterward.
 
 **Migrations.** `wrangler d1 migrations apply --remote` exited after printing only its banner for both 0005 and 0006, and a second run applied each. For 0006 I checked before deploying. `scripts/deploy-production.sh` now stops when a migration is still pending after the apply step.
+
+## One open reservation per account
+
+The extension's install-readiness check found that `POST /x/sessions/start` granted a second reservation while the first was still open. If the browser shut down mid-session, after X rate-limited it and before the extension wrote its local pause, the next session after the restart got 200. Deployed as `1cda0c96`. Start now answers 423 while another reservation for the account is open, with `pause_until` at that reservation's `reserved_at` plus 30 minutes; after that the crash rule applies. The same `session_id` again gets 200. The new test fails on 21c35a2 ("a second session while the first is open"). Mutations M66 and M67 put back each half, and all 63 mutations are caught. There are 25 tests.
+
+In production with account `test`, after confirming nobody else had an open `test` reservation or a recent non-ok status:
+
+- the first session got 200;
+- a second while the first was open got 423, with `pause_until` exactly the first's `reserved_at` plus 30 minutes, and wrote no row;
+- the same `session_id` again got 200;
+- after the first reported `ok`, the second got 200.
+
+The script deleted only its own two rows.

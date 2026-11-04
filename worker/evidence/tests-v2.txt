@@ -2,35 +2,36 @@
 > test
 > node --test test/
 
-✔ each token reaches only its own routes (1293.786208ms)
-✔ ingest upserts posts with the latest metrics, writes one sighting per post per batch, and makes one candidate per newly bookmarked post (44.648917ms)
-✔ a replayed batch_id writes no sightings and moves no counter, and a partial replay counts only the new batch (32.796208ms)
-✔ the ingest cap is 128 KB of bytes, counted while reading, even without a Content-Length (8.807ms)
-✔ account test is synthetic: its posts never reach GET /x/posts or become candidates, and test- refs are refused (25.097542ms)
-✔ a captured thread leaves the detail queue and reads back in server order; a non-ok session pauses the account (14.532916ms)
-✔ session reservations: a non-ok status or an unreported reservation pauses the account for 24 h, and replays neither extend nor clear it (2800.825292ms)
-✔ a reply is covered only by a capture of its own permalink, not by the root's capture listing it among replies (22.4355ms)
-✔ candidates: an expired lease is reclaimed, a stale owner gets 409, and a candidate that keeps expiring fails instead of looping (2141.779917ms)
-✔ lease tokens: completing needs the current claim's token, so a reclaim under the same owner name strands the old one (723.661791ms)
-✔ completing with state new defers: the lease is released, attempts and the note are kept, and never-tried candidates are claimed first (733.896625ms)
-✔ a proposal with no irreversible step is done at once and never notifies (8.899042ms)
-✔ an approval link is single-use, bound to the inputs_hash it showed, escapes proposal text, and dies at expiry (1173.231958ms)
-✔ the card shows every input the hash binds, and a decision resolves its link before reading a body capped at 4 KB (21.685708ms)
-✔ at most 3 approval notifications go out per UTC day, and a retried proposal never notifies twice (18.534334ms)
-✔ a lost creation response is recovered by rotating the token, which keeps expiry and inputs_hash and kills the old link (27.3925ms)
-✔ unchanged sources emit no events: 304, volatile JSON metadata, per-request page nonces (1334.745917ms)
-✔ a change emits exactly one event per new item, and seeded items never emit (25.587833ms)
-✔ duplicate WebSub delivery creates one event and one candidate, a bad signature none, and the poller agrees (33.799166ms)
-✔ an expired lease is reclaimed by a second claimant; a done job and a stale owner are refused (2426.092ms)
-✔ a matching new item switches the watcher to the hot interval, and it returns to normal after the window (2242.069083ms)
-✔ a seeded rule match becomes one candidate per open item, never sets hot, later checks add only new matches, and nothing POSTs (33.58275ms)
-✔ the cron re-arms a watcher whose alarm was lost, and /health reports the run (368.451959ms)
-✔ a failing primary URL falls back without counting as a failure, and the switch emits nothing (18.411625ms)
-ℹ tests 24
+✔ each token reaches only its own routes (1296.648167ms)
+✔ ingest upserts posts with the latest metrics, writes one sighting per post per batch, and makes one candidate per newly bookmarked post (38.614541ms)
+✔ a replayed batch_id writes no sightings and moves no counter, and a partial replay counts only the new batch (29.376916ms)
+✔ the ingest cap is 128 KB of bytes, counted while reading, even without a Content-Length (7.834209ms)
+✔ account test is synthetic: its posts never reach GET /x/posts or become candidates, and test- refs are refused (20.297167ms)
+✔ a captured thread leaves the detail queue and reads back in server order; a non-ok session pauses the account (17.093208ms)
+✔ session reservations: a non-ok status or an unreported reservation pauses the account for 24 h, and replays neither extend nor clear it (2732.265042ms)
+✔ a browser restart mid-session gets no new reservation until the open one reports or turns into a crash (694.083458ms)
+✔ a reply is covered only by a capture of its own permalink, not by the root's capture listing it among replies (18.940334ms)
+✔ candidates: an expired lease is reclaimed, a stale owner gets 409, and a candidate that keeps expiring fails instead of looping (2151.767541ms)
+✔ lease tokens: completing needs the current claim's token, so a reclaim under the same owner name strands the old one (734.884542ms)
+✔ completing with state new defers: the lease is released, attempts and the note are kept, and never-tried candidates are claimed first (739.212375ms)
+✔ a proposal with no irreversible step is done at once and never notifies (10.649333ms)
+✔ an approval link is single-use, bound to the inputs_hash it showed, escapes proposal text, and dies at expiry (1179.84775ms)
+✔ the card shows every input the hash binds, and a decision resolves its link before reading a body capped at 4 KB (23.678125ms)
+✔ at most 3 approval notifications go out per UTC day, and a retried proposal never notifies twice (19.558709ms)
+✔ a lost creation response is recovered by rotating the token, which keeps expiry and inputs_hash and kills the old link (27.886875ms)
+✔ unchanged sources emit no events: 304, volatile JSON metadata, per-request page nonces (1292.636ms)
+✔ a change emits exactly one event per new item, and seeded items never emit (27.600584ms)
+✔ duplicate WebSub delivery creates one event and one candidate, a bad signature none, and the poller agrees (33.778375ms)
+✔ an expired lease is reclaimed by a second claimant; a done job and a stale owner are refused (2423.6715ms)
+✔ a matching new item switches the watcher to the hot interval, and it returns to normal after the window (2237.892958ms)
+✔ a seeded rule match becomes one candidate per open item, never sets hot, later checks add only new matches, and nothing POSTs (37.178166ms)
+✔ the cron re-arms a watcher whose alarm was lost, and /health reports the run (368.653583ms)
+✔ a failing primary URL falls back without counting as a failure, and the switch emits nothing (17.68775ms)
+ℹ tests 25
 ℹ suites 0
-ℹ pass 24
+ℹ pass 25
 ℹ fail 0
 ℹ cancelled 0
 ℹ skipped 0
 ℹ todo 0
-ℹ duration_ms 9226.855584
+ℹ duration_ms 9885.254125
