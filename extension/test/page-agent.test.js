@@ -63,9 +63,20 @@ test("the agent cannot click, type or submit, even the For You tab", async () =>
 });
 
 test("reading and scrolling a page fire no clicks or input", async () => {
-  for (const command of [{ name: "inspect" }, { name: "scroll", arg: 0.8 }]) {
+  for (const command of [{ name: "inspect" }, { name: "scroll", arg: { fraction: 0.8, pathPattern: "^/home$" } }]) {
     const out = await runAgent(HOME_TABS, command);
     assert.equal(out.error, undefined, command.name);
     assert.deepEqual(out.events, [], command.name);
   }
+});
+
+// The service worker checks the tab's path before injecting the agent, but
+// the page can change its path in between. Found in review at 022960d.
+test("the agent scrolls only when the page is still on the expected path", async () => {
+  const moved = await page.evaluate(() => {
+    history.replaceState(null, "", "/settings");
+    return globalThis.__dxAgent.run({ name: "scroll", arg: { fraction: 0.8, pathPattern: "^/home$" } });
+  });
+  await page.evaluate(() => history.replaceState(null, "", "/home"));
+  assert.deepEqual(moved, { scrolled: false, path: "/settings" });
 });

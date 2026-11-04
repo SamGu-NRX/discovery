@@ -22,6 +22,7 @@ before(async () => {
   const context = await browser.newContext({ serviceWorkers: "block" });
   await context.route("https://x.com/**", (route) => {
     const url = route.request().url();
+    if (url.includes("/not-graphql")) return route.fulfill({ contentType: "application/json", body: '{"unrelated":true}' });
     if (url.includes("/graphql/")) return route.fulfill({ contentType: "application/json", body: JSON.stringify(homeResponse()) });
     return route.fulfill({ contentType: "text/html", body: '<!doctype html><a data-testid="AppTabBar_Profile_Link" href="/owner">me</a>' });
   });
@@ -112,4 +113,58 @@ test("a toJSON a page script puts on Object.prototype cannot replace a captured 
   assert.equal(sent.length, 1);
   assert.ok(sent[0].body.includes('"rest_id":"101"'), "the real body");
   assert.ok(!sent[0].body.includes('"rest_id":"31337"'), "no forged post");
+});
+
+// Each case makes the browser fetch one thing while the arguments, or the
+// promise's resolved value, claim another. Found in review at 022960d.
+const MISLABELED = {
+  "a Response substituted through a then getter": async () => {
+    Object.defineProperty(Response.prototype, "then", {
+      configurable: true,
+      get() {
+        delete Response.prototype.then;
+        return (resolve) => resolve(new Response('{"forged":true}', { status: 200 }));
+      },
+    });
+    await fetch("/i/api/graphql/q/HomeTimeline");
+  },
+  "a Request with its own url property": async () => {
+    const request = new Request("https://x.com/not-graphql");
+    Object.defineProperty(request, "url", { value: "https://x.com/i/api/graphql/q/HomeTimeline" });
+    await (await fetch(request)).arrayBuffer();
+  },
+  "an object whose url and toString disagree": async () => {
+    await (await fetch({ toString: () => "/not-graphql", url: "https://x.com/i/api/graphql/q/HomeTimeline" })).arrayBuffer();
+  },
+  "an XHR URL whose toString changes between calls": async () => {
+    let calls = 0;
+    const xhr = new XMLHttpRequest();
+    xhr.open("GET", { toString: () => (++calls === 1 ? "/i/api/graphql/q/HomeTimeline" : "/not-graphql") });
+    await new Promise((resolve) => {
+      xhr.onload = resolve;
+      xhr.send();
+    });
+  },
+  "an XHR opened for GraphQL, then reopened elsewhere": async () => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("GET", "/i/api/graphql/q/HomeTimeline");
+    xhr.open("GET", "/not-graphql");
+    await new Promise((resolve) => {
+      xhr.onload = resolve;
+      xhr.send();
+    });
+  },
+};
+
+test("a response is labeled by the URL the browser fetched, not the URL the page claimed", async () => {
+  for (const [name, scenario] of Object.entries(MISLABELED)) {
+    await clearSent();
+    await page.evaluate(`(${scenario})().then(() => new Promise((resolve) => setTimeout(resolve, 150)))`);
+    // Whatever is forwarded must be a GraphQL response the browser really
+    // fetched; here that can only be the home timeline fixture.
+    const sent = await sentToWorker();
+    for (const message of sent) {
+      assert.ok(message.body?.includes('"home_timeline_urt"'), `${name}: forwarded ${message.body?.slice(0, 40)}`);
+    }
+  }
 });

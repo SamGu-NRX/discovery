@@ -87,15 +87,22 @@
     return m ? m[1] : null;
   }
 
-  function scroll(fraction) {
+  // `pathPattern` is the regex source of the paths the session expects. It
+  // is checked here, in the same synchronous step as the scroll, because the
+  // page can change its path between the service worker's check and this
+  // script running.
+  function scroll({ fraction, pathPattern } = {}) {
     if (typeof fraction !== "number" || !(fraction >= 0.3 && fraction <= 1.2)) {
       throw new Error(`scroll refused: fraction ${fraction}`);
+    }
+    if (typeof pathPattern !== "string" || !new RegExp(pathPattern).test(location.pathname)) {
+      return { scrolled: false, path: location.pathname };
     }
     // Measured before scrolling: a smooth scroll has not moved yet on return.
     const root = document.scrollingElement ?? document.documentElement;
     const atBottom = window.scrollY + window.innerHeight >= root.scrollHeight - 8;
     window.scrollBy({ top: Math.round(window.innerHeight * fraction), behavior: "smooth" });
-    return { atBottom };
+    return { scrolled: true, atBottom };
   }
 
   const COMMANDS = Object.freeze({

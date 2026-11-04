@@ -7,22 +7,21 @@
 
 const minted = new WeakSet();
 
-function mint(href, expects) {
-  const url = Object.freeze({ href, expects });
+// `pathPattern` is regex source, so it can also travel to the page agent,
+// which checks the path again in the same step that scrolls.
+function mint(href, pathPattern) {
+  const regex = new RegExp(pathPattern);
+  const url = Object.freeze({ href, pathPattern, expects: (path) => regex.test(path) });
   minted.add(url);
   return url;
 }
 
-const HOME = mint("https://x.com/home", (path) => path === "/home");
+const HOME = mint("https://x.com/home", "^/home$");
 
 // X has moved bookmarks under /i/history. Opening /i/bookmarks may land on
 // /i/history (another history tab) or on /i/history/bookmarks.
-const BOOKMARKS = mint("https://x.com/i/bookmarks", (path) =>
-  ["/i/bookmarks", "/i/history", "/i/history/bookmarks"].includes(path),
-);
-const HISTORY_BOOKMARKS = mint("https://x.com/i/history/bookmarks", (path) =>
-  ["/i/history/bookmarks", "/i/bookmarks"].includes(path),
-);
+const BOOKMARKS = mint("https://x.com/i/bookmarks", "^/i/(bookmarks|history|history/bookmarks)$");
+const HISTORY_BOOKMARKS = mint("https://x.com/i/history/bookmarks", "^/i/(history/bookmarks|bookmarks)$");
 
 export function homeUrl() {
   return HOME;
@@ -41,8 +40,7 @@ export function permalinkUrl(postId) {
   if (typeof postId !== "string" || !/^\d{1,25}$/.test(postId)) {
     throw new Error(`refusing permalink for post id ${JSON.stringify(postId)}`);
   }
-  const canonical = new RegExp(`^/(i|[A-Za-z0-9_]{1,15})/status/${postId}$`);
-  return mint(`https://x.com/i/status/${postId}`, (path) => canonical.test(path));
+  return mint(`https://x.com/i/status/${postId}`, `^/(i|[A-Za-z0-9_]{1,15})/status/${postId}$`);
 }
 
 export function isMintedXUrl(value) {

@@ -21,6 +21,9 @@ const LOAD_TIMEOUT_MS = 30_000;
 const BLOCKING = new Set(["login_wall", "rate_limited", "challenge", "error"]);
 
 let current = null;
+// The restart recovery in progress, if any. A new session waits for it, so
+// the old session is reported before a new record replaces its record.
+let recovery = Promise.resolve();
 
 class StopSession extends Error {
   constructor(reason, detail) {
@@ -94,6 +97,7 @@ export async function startSession(trigger) {
     return { started: false, reason };
   };
   try {
+    await recovery;
     s.config = await loadConfig();
     if (!s.config.workerUrl || !s.config.ingestToken) return refuse("Add the Worker URL and token first.");
     if (s.config.mode === "off") return refuse("Capture is off.");
@@ -139,8 +143,13 @@ async function run(s) {
   try {
     await finish(s, outcome);
   } finally {
-    if (current === s) current = null;
-    await chrome.storage.session.remove("activeSession");
+    // Record first, then the slot: while `current` is still this session no
+    // other session can start and write a record this removal would delete.
+    try {
+      await removeRecord(s.id);
+    } finally {
+      if (current === s) current = null;
+    }
   }
   await scheduleNext();
 }
@@ -192,10 +201,14 @@ async function finish(s, outcome) {
 // outcome or stop it recorded; with neither and no completion checkpoint, it
 // is reported as interrupted, status "error", because a login wall, challenge
 // or rate limit may have stopped it before it could say so.
-export async function recoverInterruptedSession() {
+export function recoverInterruptedSession() {
+  recovery = recover().catch((err) => recordProblem("session", `recovery failed: ${err.message}`));
+  return recovery;
+}
+
+async function recover() {
   const { activeSession } = await chrome.storage.session.get("activeSession");
-  if (!activeSession || current) return;
-  await chrome.storage.session.remove("activeSession");
+  if (!activeSession || activeSession.id === current?.id) return;
   if (activeSession.windowId != null) await chrome.windows.remove(activeSession.windowId).catch(() => {});
   const outcome =
     activeSession.outcome ??
@@ -215,6 +228,14 @@ export async function recoverInterruptedSession() {
   await setLocal({
     lastSession: { ...activeSession, endedAt: new Date().toISOString(), status, reason: outcome.reason, detail, reported },
   });
+  // Removed only after it was reported, so a restart during recovery
+  // recovers it again.
+  await removeRecord(activeSession.id);
+}
+
+async function removeRecord(id) {
+  const { activeSession } = await chrome.storage.session.get("activeSession");
+  if (activeSession?.id === id) await chrome.storage.session.remove("activeSession");
 }
 
 async function extendPause() {
@@ -271,6 +292,7 @@ async function navigate(s, url) {
 function checkedHref(s, url) {
   if (!isMintedXUrl(url)) throw new Error("refusing to open a URL that xurl.js did not build");
   s.expects = url.expects;
+  s.pathPattern = url.pathPattern;
   s.opened = url.href;
   return url.href;
 }
@@ -357,7 +379,9 @@ async function scrollScreens(s, { screens, ms, done = () => false }) {
   let bottoms = 0;
   for (let i = 0; i < screens && Date.now() < end && !done(); i += 1) {
     await pause(s, 2000, 4000);
-    const { atBottom } = await agent(s, "scroll", random(0.75, 0.95));
+    const result = await agent(s, "scroll", { fraction: random(0.75, 0.95), pathPattern: s.pathPattern });
+    if (!result.scrolled) throw new StopSession("error", `unexpected page ${result.path} after opening ${s.opened}`);
+    const { atBottom } = result;
     s.screens += 1;
     await publish(s);
     await inspect(s);

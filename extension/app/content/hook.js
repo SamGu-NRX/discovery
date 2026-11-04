@@ -19,6 +19,14 @@
 // toJSON a page script puts on Object.prototype, which could replace the
 // whole message. Event init dictionaries have a null prototype, so getters a
 // page adds to Object.prototype are not consulted either.
+//
+// Which operation a response belongs to is read from the response itself
+// (Response.url, XMLHttpRequest.responseURL), never from the arguments the
+// page passed: a Request with its own `url` property, an object whose
+// toString changes between calls, or an XHR opened twice can all name one URL
+// while the browser fetches another. A Response a page substitutes through a
+// `then` getter has an empty url (constructed responses have none) and is
+// ignored.
 
 (() => {
   const apply = Reflect.apply;
@@ -32,13 +40,16 @@
   const URLCtor = URL;
   const then = Promise.prototype.then;
   const exec = RegExp.prototype.exec;
-  const includes = String.prototype.includes;
   const setHas = Set.prototype.has;
+  const weakHas = WeakSet.prototype.has;
+  const weakAdd = WeakSet.prototype.add;
   const xhrOpen = XMLHttpRequest.prototype.open;
   const xhrStatus = getter(XMLHttpRequest.prototype, "status");
   const xhrResponseType = getter(XMLHttpRequest.prototype, "responseType");
   const xhrResponseText = getter(XMLHttpRequest.prototype, "responseText");
+  const xhrResponseURL = getter(XMLHttpRequest.prototype, "responseURL");
   const resStatus = getter(Response.prototype, "status");
+  const resUrl = getter(Response.prototype, "url");
   const resClone = Response.prototype.clone;
   const resText = Response.prototype.text;
   const urlHref = getter(URL.prototype, "href");
@@ -88,8 +99,9 @@
   // The absolute URL and operation name, or null for anything that is not a
   // GraphQL operation URL.
   const parseGraphql = (url) => {
+    if (typeof url !== "string" || url === "") return null;
     try {
-      const parsed = new URLCtor(url, location.href);
+      const parsed = new URLCtor(url);
       const m = apply(exec, OPERATION, [apply(urlPathname, parsed, [])]);
       return m ? { href: apply(urlHref, parsed, []), operation: m[1] } : null;
     } catch {
@@ -112,25 +124,31 @@
     else if (body) apply(then, body, [deliver, () => {}]);
   };
 
-  XMLHttpRequest.prototype.open = function (method, url) {
+  // One load listener per XHR, however many times it is opened; at load it
+  // reads the URL the browser actually requested.
+  const watched = new WeakSet();
+  const onXhrLoad = (event) => {
+    if (!isTrusted(event)) return;
+    const xhr = event.target;
+    const graphql = parseGraphql(apply(xhrResponseURL, xhr, []));
+    if (!graphql) return;
+    const { href, operation } = graphql;
+    const status = apply(xhrStatus, xhr, []);
+    let body = null;
+    // X reads GraphQL as text. A "json" responseType has no raw text to
+    // copy, and re-serializing it would run page code (toJSON).
+    if (captured(operation)) {
+      const type = apply(xhrResponseType, xhr, []);
+      if (type === "" || type === "text") body = apply(xhrResponseText, xhr, []);
+    }
+    report(href, operation, status, body);
+  };
+
+  XMLHttpRequest.prototype.open = function () {
     try {
-      const target = `${url}`;
-      const graphql = apply(includes, target, ["/graphql/"]) ? parseGraphql(target) : null;
-      if (graphql) {
-        const { href, operation } = graphql;
-        const xhr = this;
-        apply(listen, xhr, ["load", (event) => {
-          if (!isTrusted(event)) return;
-          const status = apply(xhrStatus, xhr, []);
-          let body = null;
-          // X reads GraphQL as text. A "json" responseType has no raw text
-          // to copy, and re-serializing it would run page code (toJSON).
-          if (captured(operation)) {
-            const type = apply(xhrResponseType, xhr, []);
-            if (type === "" || type === "text") body = apply(xhrResponseText, xhr, []);
-          }
-          report(href, operation, status, body);
-        }]);
+      if (!apply(weakHas, watched, [this])) {
+        apply(weakAdd, watched, [this]);
+        apply(listen, this, ["load", onXhrLoad]);
       }
     } catch {
       // Fall through to the real open().
@@ -138,28 +156,26 @@
     return apply(xhrOpen, this, arguments);
   };
 
-  window.fetch = function (input, init) {
+  window.fetch = function () {
     const pending = apply(realFetch, this, arguments);
     try {
-      const target = typeof input === "string" ? input : input instanceof URLCtor ? apply(urlHref, input, []) : input?.url;
-      const graphql = typeof target === "string" && apply(includes, target, ["/graphql/"]) ? parseGraphql(target) : null;
-      if (graphql) {
-        const { href, operation } = graphql;
-        // This callback runs before the page's own, because it was attached
-        // before the page got the promise. Clone here: by the next microtask
-        // the page may have read the body, and a used body cannot be cloned.
-        // The saved getters throw on anything that is not a real Response.
-        apply(then, pending, [(res) => {
-          try {
-            const status = apply(resStatus, res, []);
-            const ok = status >= 200 && status <= 299;
-            const body = ok && captured(operation) ? apply(resText, apply(resClone, res, []), []) : null;
-            report(href, operation, status, body);
-          } catch {
-            // Not a real response.
-          }
-        }, () => {}]);
-      }
+      // This callback runs before the page's own, because it was attached
+      // before the page got the promise. Clone here: by the next microtask
+      // the page may have read the body, and a used body cannot be cloned.
+      // The saved getters throw on anything that is not a real Response.
+      apply(then, pending, [(res) => {
+        try {
+          const graphql = parseGraphql(apply(resUrl, res, []));
+          if (!graphql) return;
+          const { href, operation } = graphql;
+          const status = apply(resStatus, res, []);
+          const ok = status >= 200 && status <= 299;
+          const body = ok && captured(operation) ? apply(resText, apply(resClone, res, []), []) : null;
+          report(href, operation, status, body);
+        } catch {
+          // Not a real response.
+        }
+      }, () => {}]);
     } catch {
       // The page gets its response either way.
     }

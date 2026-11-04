@@ -94,7 +94,10 @@ async function handleCapture(message, tabId) {
   if (!operation || operation !== message.operation || typeof body !== "string" || typeof pageLoadId !== "string") {
     return { ignored: true };
   }
-  const inSession = tabId === sessionTabId();
+  // Taken once: the session can end while this capture is parsed and queued,
+  // and the capture still belongs to it.
+  const session = tabId === sessionTabId() ? sessionInfo() : null;
+  const inSession = session !== null;
   const config = await loadConfig();
   if (!inSession && config.mode === "off") return { ignored: true };
 
@@ -127,7 +130,7 @@ async function handleCapture(message, tabId) {
 
   const handle = typeof message.account === "string" && /^[A-Za-z0-9_]{1,15}$/.test(message.account) ? message.account : null;
   if (handle) await setLocal({ lastAccount: handle });
-  const account = handle ?? (inSession ? sessionInfo()?.account : null) ?? (await getLocal("lastAccount", null)) ?? config.account;
+  const account = handle ?? session?.account ?? (await getLocal("lastAccount", null)) ?? config.account;
   if (!account) {
     await recordProblem("capture", "dropped a batch: the logged-in account is unknown (no profile link in X's side nav)");
     return { ignored: true };
@@ -137,7 +140,7 @@ async function handleCapture(message, tabId) {
   if (inSession) noteSessionCapture({ operation, postIds });
   await enqueue({
     account,
-    session_id: inSession ? sessionInfo().id : await passiveSessionId(),
+    session_id: session ? session.id : await passiveSessionId(),
     mode: inSession ? "active" : "passive",
     batch: result.batch,
   });
