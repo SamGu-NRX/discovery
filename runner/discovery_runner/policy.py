@@ -191,6 +191,57 @@ def verify_all(claims, texts, roots):
     return out
 
 
+def exposure_check(spec, roots, max_depth=3):
+    """Read-only check of this Mac for a product named in a security notice. Returns evidence, never values.
+
+    spec: {"product", "cli_names": [], "config_paths": [], "file_globs": [], "env_name_patterns": []}. CLIs are
+    looked up on PATH, config paths tested for existence, file globs matched by name under the repo roots (to
+    max_depth, skipping dependency and VCS folders), and env var names matched in .env* files: only the part
+    before "=" is ever read into the result. Credential directories are never opened.
+    """
+    import fnmatch
+    import shutil
+    found = []
+    for c in spec.get("cli_names") or []:
+        if shutil.which(c):
+            found.append(f"CLI on PATH: {shutil.which(c)}")
+    for cp in spec.get("config_paths") or []:
+        p = Path(os.path.expanduser(cp))
+        if not _denied(p) and p.exists():
+            found.append(f"config exists: {p}")
+    globs = [g.lower() for g in spec.get("file_globs") or []]
+    pats = [re.compile(x) for x in spec.get("env_name_patterns") or []]
+    skip = {".git", "node_modules", ".venv", "venv", "__pycache__", "dist", "build", ".next", "Library"}
+    scanned = 0
+    for r in roots:
+        base = Path(os.path.expanduser(r))
+        if not base.is_dir():
+            continue
+        for dirpath, dirnames, filenames in os.walk(base):
+            depth = len(Path(dirpath).relative_to(base).parts)
+            dirnames[:] = [] if depth >= max_depth else [d for d in dirnames if d not in skip and not d.startswith(".")
+                                                       or d in (".github",)]
+            if _denied(Path(dirpath)):
+                dirnames[:] = []
+                continue
+            for fn in filenames:
+                scanned += 1
+                low = fn.lower()
+                if any(fnmatch.fnmatch(low, g) for g in globs):
+                    found.append(f"file: {Path(dirpath) / fn}")
+                if pats and low.startswith(".env"):
+                    try:
+                        names = [ln.split("=", 1)[0].strip().removeprefix("export ") for ln in
+                                 _read(Path(dirpath) / fn, 200_000).splitlines() if "=" in ln and not ln.lstrip().startswith("#")]
+                    except OSError:
+                        continue
+                    hits = sorted({n for n in names if any(p.search(n) for p in pats)})
+                    if hits:
+                        found.append(f"env var names in {Path(dirpath) / fn}: {', '.join(hits)}")
+    return {"product": spec.get("product"), "affected": bool(found), "evidence": found[:40],
+            "scanned_files": scanned, "roots": list(roots), "max_depth": max_depth}
+
+
 # ---------------------------------------------------------------- duplicates
 
 def norm_target(t):

@@ -484,6 +484,7 @@ class RegressionClasses(Home):
         # class: budget. Fails if non-application tool work runs past the share reserved for applications
         dr = deep_read("~/x", draft=None, prep={"needs_tools": True, "task": "build it"}, value=5)
         r = self.runner({"You triage": TRIAGE_TRY, "You deep-read": dr, "independent": JUDGE_OK}, codex_preps_per_day=2)
+        # value 5: worth waiting for, so it is re-queued rather than declined
         self.captured_post()
         run = r.work()[0]
         self.assertIn("reserved for applications", run["complete"]["note"])
@@ -507,6 +508,34 @@ class RegressionClasses(Home):
         self.captured_post()
         run = r.work()[0]
         self.assertTrue(run["complete"]["note"].startswith("closed: the deadline (2026-10-28) has passed"))
+
+
+class RegressionClassesRound6(Home):
+    def test_exposure_check_reports_names_not_values(self):
+        # class: budget (security). Fails if a security notice cannot be settled without a codex prep, or if the
+        # check ever records a secret value
+        with tempfile.TemporaryDirectory() as root:
+            proj = Path(root) / "app"
+            proj.mkdir()
+            spec = {"product": "Railway", "cli_names": ["no-such-cli-xyz"], "config_paths": [f"{root}/.railway"],
+                    "file_globs": ["railway.json"], "env_name_patterns": ["^RAILWAY_"]}
+            self.assertFalse(policy.exposure_check(spec, [root])["affected"])
+            (proj / ".env").write_text("RAILWAY_TOKEN=sk-super-secret-value\nOTHER=1\n")
+            ex = policy.exposure_check(spec, [root])
+        self.assertTrue(ex["affected"])
+        self.assertIn("RAILWAY_TOKEN", " ".join(ex["evidence"]))
+        self.assertNotIn("sk-super-secret-value", json.dumps(ex))
+
+    def test_low_value_work_under_budget_pressure_gets_its_reason(self):
+        # class: budget. Fails if lower-value tool work shows Sam "prep budget is reserved" instead of a reason
+        # (round 6: a save an earlier round declined with a real reason)
+        dr = deep_read("~/x", draft=None, prep={"needs_tools": True, "task": "build it"}, value=3,
+                       value_reason="an active thread already covers this reference")
+        r = self.runner({"You triage": TRIAGE_TRY, "You deep-read": dr, "independent": JUDGE_OK}, codex_preps_per_day=2)
+        self.captured_post()
+        run = r.work()[0]
+        self.assertEqual(run["complete"]["state"], "skipped")
+        self.assertIn("an active thread already covers this reference", run["complete"]["note"])
 
 
 class Scoring(Home):

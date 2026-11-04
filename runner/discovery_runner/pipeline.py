@@ -282,7 +282,18 @@ class Runner:
         needs_tools = bool(prep_spec.get("needs_tools"))
         is_app = prop.get("kind") == "apply_or_attend" or bool(prop.get("application"))
         value = int(prop.get("value") or 0)
-        if needs_tools and not is_app:
+        is_security = bool(prop.get("exposure_check"))
+        if is_security:
+            # A security notice is settled first by a deterministic read-only check, not a codex run: round 6
+            # deferred the Railway notice for budget and both graders scored that a miss.
+            ex = policy.exposure_check(prop["exposure_check"], cfg["repo_roots"] + ["~"])
+            run["exposure"] = ex
+            if not ex["affected"]:
+                return self.complete(cand, "skipped", f"checked, not affected: no {ex['product']} footprint on this Mac "
+                                     f"(PATH, config paths, file names and .env variable names under "
+                                     f"{', '.join(ex['roots'])}, {ex['scanned_files']} files)", run)
+            prop["why"] = (prop.get("why") or "") + " Found on this Mac: " + "; ".join(ex["evidence"][:6])
+        if needs_tools and not is_app and not is_security:
             # Round 4 spent the whole prep budget on optional tool trials and left four application postings with
             # no outcome. Applications may use every prep; other work stops PREP_RESERVE short of the limit and
             # needs a value of 3 or more.
@@ -290,6 +301,11 @@ class Runner:
                 return self.complete(cand, "skipped", f"value {value}/5 is below the bar for tool prep: "
                                                       f"{prop.get('value_reason')}", run)
             if config.used("codex_preps") >= cfg["codex_preps_per_day"] - PREP_RESERVE:
+                if value < 4:
+                    # Only work worth waiting for waits; the rest gets its reason now (round 6 showed Sam
+                    # "prep budget is reserved" for a save an earlier round declined with a real reason).
+                    return self.complete(cand, "skipped", f"not worth a prep today at value {value}/5: "
+                                                          f"{prop.get('value_reason')}", run)
                 note = "prep budget is reserved for applications today"
                 defer_today(cand["ref"], note)
                 return self.complete(cand, "new", note, run)
@@ -316,8 +332,9 @@ class Runner:
                         return self.complete(cand, "skipped" if attempt else "new",
                                              f"codex prep budget used up{'; last review: ' + rework if rework else ''}", run)
                     needs_tools = False
-                    prop["why"] = (prop.get("why") or "") + " Prep not run today (budget); the package is built " \
-                                                            "from the facts and the posting."
+                    if not run.get("preps"):
+                        prop["why"] = (prop.get("why") or "") + " Prep not run today (budget); the package is " \
+                                                                "built from the facts and the posting."
             if needs_tools:
                 if attempt == 0:
                     run["snapshot"] = local_snapshot(prop.get("target"), workdir, cfg)
@@ -373,22 +390,28 @@ class Runner:
         if verdict["verdict"] == "maybe":
             items += made_items
             prop["why"] = (prop.get("why") or "") + f" Reviewer's concern: {verdict.get('reason')}"
-        if run.get("snapshot") and any(i["type"] == "branch" or "/patches/" in i["ref"] for i in items) \
+        if any(i["type"] == "branch" or "/patches/" in i["ref"] for i in items) \
                 and prop.get("final_step_kind") not in ("push", "open_pr"):
             # A change to Sam's repo ends in a PR from his checkout, whatever the review said: the card carries
             # the concern, and the Worker's 3-a-day notification cap keeps asks rare. Round 4 left a pushable
             # branch and a publish script marked "none".
             prop["final_step_kind"] = "open_pr"
-            prop["final_step"] = (f"Apply the prepared patches to {run['snapshot']['repo']} on a new branch and open "
-                                  f"a PR")
+            repo = (run.get("snapshot") or {}).get("repo") or prop.get("target") or "the target repo"
+            prop["final_step"] = f"Apply the prepared patches to {repo} on a new branch and open a PR"
         findings = (run.get("prep") or {}).get("findings") or []
         if not prop.get("final_step_kind") and not is_app and not findings and prop.get("kind") != "reference_note" \
                 and not has_artifact(items):
             # Nothing to approve and nothing found: a report of a negative result is not a proposal. Round 5 posted
             # a Railway scanner and a synthetic teaser this way; both graders called them busywork.
             return self.complete(cand, "skipped", f"checked, nothing to act on: {(run.get('prep') or {}).get('summary') or prop.get('why')}"[:1900], run)
-        app_file = workdir / "application.json"
-        if prop.get("application") and app_file.exists():
+        app_file = best_application_file(workdir) if prop.get("application") else None
+        if app_file:
+            try:
+                (workdir / "APPLICATION.md").write_text(render_application(
+                    {**prop["application"], **json.loads(app_file.read_text())}))
+            except (json.JSONDecodeError, KeyError, TypeError):
+                pass
+        if prop.get("application") and app_file and app_file.exists():
             # Prep may complete the package; the card's count must describe the final file, not the first draft.
             try:
                 app = json.loads(app_file.read_text())
@@ -589,6 +612,25 @@ def render_application(app):
             lines.append(f"- **{f['name']}**: {f.get('value') or '— left blank (no sourced fact)'}"
                          f"{' (' + f['source'] + ')' if f.get('value') and f.get('source') else ''}")
     return "\n".join(lines) + "\n"
+
+
+def best_application_file(workdir):
+    """The application JSON with the most filled fields, wherever prep wrote it: round 6 showed Sam the runner's
+    first draft while prep's completed package sat in a subfolder."""
+    best, best_n = None, -1
+    for f in workdir.rglob("*.json"):
+        if "src" in f.relative_to(workdir).parts:
+            continue
+        try:
+            d = json.loads(f.read_text())
+        except (json.JSONDecodeError, OSError):
+            continue
+        fields = d.get("fields") if isinstance(d, dict) else None
+        if isinstance(fields, list) and fields and all(isinstance(x, dict) for x in fields):
+            n = sum(1 for x in fields if x.get("value"))
+            if n > best_n:
+                best, best_n = f, n
+    return best
 
 
 def deferred_today(ref):

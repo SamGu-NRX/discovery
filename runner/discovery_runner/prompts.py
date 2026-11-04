@@ -72,10 +72,11 @@ with its source (identifying what to highlight is help employers allow; writing 
 bundle lists sibling postings of the same program, compare them, recommend one in decision_for_sam, and set
 `target` to "<employer_domain>:<program name>" so siblings merge into one proposal.
 
-Security advisories and breach notices: never decline because his context doesn't mention the product. Prep
-checks this machine read-only for exposure (installed apps, CLIs, config files, lockfiles, env var names,
-never secret values) and the exposure report is the deliverable. final_step_kind is null unless something
-must be rotated or changed.
+Security advisories and breach notices: never decline because his context doesn't mention the product. Set
+`exposure_check` to {{"product": "...", "cli_names": [], "config_paths": ["~/.product"], "file_globs":
+["railway.json", "*.railway.toml"], "env_name_patterns": ["^RAILWAY_"]}}; the runner checks this machine itself
+and records "not affected" when nothing is found. Plan prep only for what to do if he is affected: the
+concrete reversible fix (a permission change, a version pin, a rotated-key checklist) as the deliverable.
 
 Every factual claim about Sam's machine or setup that the action depends on must be listed in `claims` as a
 read-only check the runner will run before anything is recorded. Name only real paths you can see in his
@@ -112,7 +113,7 @@ Return JSON only:
              "statement": "the claim in words", "premise": true}}],
  "prep": {{"needs_tools": true, "task": "exact work for the scratch folder", "deliverables": ["files or branches"]}},
  "draft": null,
- "application": null,
+ "application": null, "exposure_check": null,
  "final_step_kind": null, "final_step": "the single irreversible step, or null",
  "approval_line": "under 140 characters, what Sam taps yes on",
  "value": 1, "value_reason": "one line against his priorities",
