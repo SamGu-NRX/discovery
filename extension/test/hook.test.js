@@ -23,7 +23,7 @@ before(async () => {
   await context.route("https://x.com/**", (route) => {
     const url = route.request().url();
     if (url.includes("/not-graphql")) return route.fulfill({ contentType: "application/json", body: '{"unrelated":true}' });
-    if (url.includes("/NotificationsTimeline")) {
+    if (url.includes("/NotificationsTimeline") || url.includes("/SearchTimeline")) {
       return route.fulfill({ contentType: "application/json", body: '{"errors":[{"code":88,"message":"Rate limit exceeded"}]}' });
     }
     if (url.includes("/graphql/")) return route.fulfill({ contentType: "application/json", body: JSON.stringify(homeResponse()) });
@@ -205,5 +205,25 @@ test("X error 88 on an operation that is not captured is reported, without its b
     }, viaXhr);
     const sent = await sentToWorker();
     assert.deepEqual(sent.map((m) => [m.type, m.operation, m.body]), [["x-limit", "NotificationsTimeline", undefined]], viaXhr ? "xhr" : "fetch");
+  }
+});
+
+// Found in an install-readiness review of 99b794b: an XHR read as
+// responseType "json" has no text, so its code 88 went unseen.
+test("X error 88 in a JSON-typed XHR is reported, for captured and uncaptured operations", async () => {
+  for (const operation of ["NotificationsTimeline", "SearchTimeline"]) {
+    await clearSent();
+    await page.evaluate(async (op) => {
+      await new Promise((resolve) => {
+        const request = new XMLHttpRequest();
+        request.open("GET", `/i/api/graphql/q/${op}?variables=%7B%7D`);
+        request.responseType = "json";
+        request.onload = resolve;
+        request.send();
+      });
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }, operation);
+    const sent = await sentToWorker();
+    assert.deepEqual(sent.map((m) => [m.type, m.operation, m.body]), [["x-limit", operation, undefined]], operation);
   }
 });

@@ -25,6 +25,9 @@ export async function loadConfig() {
     ingestToken: typeof config.ingestToken === "string" ? config.ingestToken.trim() : "",
     // Used only when the logged-in handle cannot be read from X's side nav.
     account: typeof config.account === "string" ? config.account.trim().replace(/^@/, "") : "",
+    // When the mode last changed (the popup sets it); captures stored after a
+    // switch to Off are dropped against it, at the switch and at startup.
+    modeChangedAt: Number.isFinite(config.modeChangedAt) ? config.modeChangedAt : null,
   };
   for (const [key, { min, max, fallback }] of Object.entries(BOUNDS)) {
     const value = Number(config[key]);

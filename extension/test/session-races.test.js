@@ -1056,3 +1056,20 @@ test("a worker killed while removing a refused session's record reports nothing 
   assert.deepEqual(log.filter((entry) => entry.startsWith("status:")), []);
   assert.equal(fake.session.get("activeSession"), undefined);
 });
+
+// Found in an install-readiness review of 99b794b: loadConfig dropped
+// modeChangedAt, so this startup cleanup never ran. It imports a second copy
+// of background.js, which adds listeners, so it stays the last test here.
+test("a service worker restarted while capture is Off drops pieces stored after the switch", async () => {
+  await reset();
+  const offAt = Date.now() - 60_000;
+  const piece = (storedAt) => ({ account: "owner", session_id: "s", mode: "passive", captured_at: "x", bytes: 10, storedAt, piece: { batch_id: `c:${storedAt}`, op: "HomeTimeline", surface: "home_for_you", posts: [] } });
+  await chrome.storage.local.set({ config: { ...CONFIG, mode: "off", modeChangedAt: offAt }, outbox: [piece(offAt - 1000), piece(offAt + 1000)] });
+  await import(`../app/background.js?restart-${Date.now()}`);
+  const deadline = Date.now() + 2000;
+  while ((fake.local.get("outbox") ?? []).length > 1 && Date.now() < deadline) {
+    await new Promise((resolve) => realSetTimeout(resolve, 5));
+  }
+  assert.deepEqual(fake.local.get("outbox").map((e) => e.storedAt), [offAt - 1000]);
+  await chrome.storage.local.set({ config: CONFIG });
+});

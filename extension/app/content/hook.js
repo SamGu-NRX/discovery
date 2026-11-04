@@ -49,6 +49,7 @@
   const xhrStatus = getter(XMLHttpRequest.prototype, "status");
   const xhrResponseType = getter(XMLHttpRequest.prototype, "responseType");
   const xhrResponseText = getter(XMLHttpRequest.prototype, "responseText");
+  const xhrResponse = getter(XMLHttpRequest.prototype, "response");
   const xhrResponseURL = getter(XMLHttpRequest.prototype, "responseURL");
   const resStatus = getter(Response.prototype, "status");
   const resUrl = getter(Response.prototype, "url");
@@ -75,16 +76,19 @@
   // X's rate-limit error (code 88) can arrive with HTTP 200 on any GraphQL
   // operation. Bodies of captured operations go to the service worker, which
   // checks them; for every other operation only this verdict leaves the page.
+  const hasRateLimitError = (parsed) => {
+    const errors = parsed?.errors;
+    if (!isArray(errors)) return false;
+    for (let i = 0; i < errors.length; i += 1) if (errors[i]?.code === 88) return true;
+    return false;
+  };
   const isRateLimitBody = (text) => {
     if (!apply(exec, MAYBE_RATE_LIMIT, [text])) return false;
     try {
-      const errors = jsonParse(text)?.errors;
-      if (!isArray(errors)) return false;
-      for (let i = 0; i < errors.length; i += 1) if (errors[i]?.code === 88) return true;
+      return hasRateLimitError(jsonParse(text));
     } catch {
-      // Not JSON.
+      return false;
     }
-    return false;
   };
 
   const channel = document.createElement("span");
@@ -161,10 +165,18 @@
     const { href, operation } = graphql;
     const status = apply(xhrStatus, xhr, []);
     let body = null;
-    // X reads GraphQL as text. A "json" responseType has no raw text to
-    // copy, and re-serializing it would run page code (toJSON).
     const type = apply(xhrResponseType, xhr, []);
-    if (type === "" || type === "text") body = apply(xhrResponseText, xhr, []);
+    if (type === "" || type === "text") {
+      body = apply(xhrResponseText, xhr, []);
+    } else if (type === "json") {
+      // A "json" response has no raw text to copy, and re-serializing the
+      // object would run page code (toJSON), so nothing of it is forwarded.
+      // Its rate-limit verdict still is, for any operation.
+      if (status >= 200 && status <= 299 && hasRateLimitError(apply(xhrResponse, xhr, []))) {
+        send("limit", operation, status, href, "");
+        return;
+      }
+    }
     report(href, operation, status, body);
   };
 
