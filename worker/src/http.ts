@@ -17,11 +17,14 @@ export async function readJson<T>(req: Request, maxBytes = 64 * 1024): Promise<T
   if (declared > maxBytes) throw new HttpError(413, `body is ${declared} bytes; the limit is ${maxBytes}`);
   const text = await req.text();
   if (text.length > maxBytes) throw new HttpError(413, `body is over ${maxBytes} bytes`);
+  let parsed: unknown;
   try {
-    return JSON.parse(text) as T;
+    parsed = JSON.parse(text);
   } catch {
     throw new HttpError(400, "body must be JSON");
   }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) throw new HttpError(400, "body must be a JSON object");
+  return parsed as T;
 }
 
 export function fail(message: string): never {

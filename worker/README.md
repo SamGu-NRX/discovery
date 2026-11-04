@@ -15,7 +15,7 @@ Results and raw logs are in [EVIDENCE.md](EVIDENCE.md).
 ```sh
 npm install
 npm test                         # 15 tests against two real wrangler dev stacks and the fixture server, about 10 s
-python3 scripts/mutation-check.py # breaks the code 34 ways, one at a time; every break must fail a test, about 5 min
+python3 scripts/mutation-check.py # breaks the code 37 ways, one at a time; every break must fail a test, about 5 min
 npm run evidence                 # live sources plus the fixture phases, about 2 min; writes evidence/<timestamp>/
 ```
 

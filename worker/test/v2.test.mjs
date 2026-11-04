@@ -64,7 +64,8 @@ test("ingest upserts posts with the latest metrics, writes one sighting per post
   await runner("POST", "/positives", { items: [{ id: "i-old-save", text: "an old save", author_handle: "alice", source: "test" }] });
 
   const r1 = await ingest("sess-1", [
-    batch("home_for_you", [post("i-1"), post("i-2")]),
+    // i-1 twice in one batch is one sighting; i-2 in two batches is two.
+    batch("home_for_you", [post("i-1"), post("i-2"), post("i-1", { metrics: { likes: 3 } })]),
     batch("home_following", [post("i-2", { metrics: { likes: 2 } })]),
     batch("bookmarks", [post("i-3"), post("i-old-save")]),
   ]);
@@ -93,9 +94,21 @@ test("ingest upserts posts with the latest metrics, writes one sighting per post
   const unscored = (await runner("GET", "/x/posts?unscored=1&limit=500")).posts.map((p) => p.id);
   assert.ok(!unscored.includes("i-2") && unscored.includes("i-1"));
 
-  const bad = await s.call("POST", "/ingest/x", { account: "acct", session_id: "s", mode: "passive", batches: [batch("home_for_you", [{ ...post("i-9"), author_handle: undefined }])] }, { raw: true, token: "ingest" });
-  assert.equal(bad.status, 400);
-  assert.match(await bad.text(), /batches\[0\]\.posts\[0\]\.author_handle/);
+  const valid = { account: "acct", session_id: "s", mode: "passive", captured_at: "2026-11-04T09:00:00Z" };
+  const badBodies = [
+    [null, /JSON object/],
+    [{ ...valid, captured_at: undefined }, /captured_at/],
+    [{ ...valid, batches: [batch("home_for_you", [{ ...post("i-9"), author_handle: undefined }])] }, /batches\[0\]\.posts\[0\]\.author_handle/],
+    [{ ...valid, batches: [batch("home_for_you", [post("i-9", { created_at: "not-a-date" })])] }, /created_at/],
+    [{ ...valid, batches: [batch("home_for_you", [post("i-9", { metrics: { likes: "lots" } })])] }, /metrics\.likes/],
+    [{ ...valid, batches: [batch("home_for_you", [post("i-9")], { thread: { root_id: "i-9", op_self_thread_ids: [], reply_ids: [] } })] }, /thread/],
+  ];
+  for (const [body, field] of badBodies) {
+    const res = await s.call("POST", "/ingest/x", body, { raw: true, token: "ingest" });
+    assert.equal(res.status, 400, `expected 400 for ${JSON.stringify(body)?.slice(0, 80)}`);
+    assert.match(await res.text(), field);
+  }
+  assert.equal((await runner("GET", "/x/posts?limit=200")).posts.filter((p) => p.id === "i-9").length, 0, "a refused request stores nothing");
 });
 
 test("a captured thread leaves the detail queue and reads back in server order; a non-ok session pauses the account", async () => {

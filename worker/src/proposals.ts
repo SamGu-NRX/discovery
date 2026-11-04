@@ -97,8 +97,9 @@ export async function createProposal(env: Env, req: Request) {
   }));
   const finalStepKind = b.final_step_kind === null || b.final_step_kind === undefined ? null : oneOf(b.final_step_kind, FINAL_STEP_KINDS, "final_step_kind");
   const finalStep = optStr(b.final_step, "final_step", 2000);
+  // A null final_step_kind alone decides that nothing irreversible remains;
+  // a final_step sent with it is kept as a description.
   if (finalStepKind && !finalStep) fail("final_step must describe the step when final_step_kind is set");
-  if (!finalStepKind && finalStep) fail("final_step needs a final_step_kind; send null for both when nothing irreversible remains");
   const inputs = b.inputs ?? null;
   let expiresInS = DEFAULT_EXPIRY_S;
   if (b.expires_in_s !== undefined) {

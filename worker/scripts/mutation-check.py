@@ -40,6 +40,9 @@ muts = [
  ("M34 card text not escaped", "src/proposals.ts", "const esc = (s: string) => s.replace(", "const esc = (s: string) => s; const unused = (s: string) => s.replace("),
  ("M35 retried proposal gets a new id", "src/proposals.ts", 'const id = "p_" + (await sha256Hex(canonicalJson({ candidate_ids: candidateIds, kind, title, inputs_hash: hash }))).slice(0, 24);', 'const id = "p_" + randomHex(12);'),
  ("M36 cron never expires proposals", "src/index.ts", "const expired = await expireProposals(env, now);", "const expired = 0;"),
+ ("M38 one sighting per occurrence, not per batch", "src/x.ts", "      if (seen) {\n        seen.metrics = p.metrics;\n      } else {\n        inBatch.set(p.id,", "      if (false) {\n      } else {\n        inBatch.set(p.id + ':' + pi,"),
+ ("M39 non-object JSON body reaches handlers", "src/http.ts", 'if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) throw', "if (false) throw"),
+ ("M40 thread accepted on any batch", "src/x.ts", 'if (op !== "TweetDetail") fail(', "if (false) fail("),
  ("M37 malformed prepared URL breaks the card", "src/proposals.ts", "  } catch {\n    return null;\n  }\n}\n\nfunction preparedItem", "  } finally {\n  }\n}\n\nfunction preparedItem"),
 ]
 for name, path, old, new in muts:

@@ -30,7 +30,7 @@ interface Post {
   retweet_of_id: string | null;
   urls: string[];
   media: unknown[];
-  metrics: Record<string, number>;
+  metrics: Record<string, number | null>;
 }
 
 const ID = /^[A-Za-z0-9_-]{1,64}$/;
@@ -41,19 +41,36 @@ function postId(v: unknown, field: string): string {
 }
 const optId = (v: unknown, field: string) => (v === undefined || v === null ? null : postId(v, field));
 
-// Fails loudly on a missing required field, naming where it is, instead of
-// storing a half-parsed post.
+// An ISO time or any format Date.parse accepts (X's legacy created_at is
+// "Wed Oct 10 20:19:24 +0000 2018"), stored as ISO.
+function isoTime(v: unknown, field: string): string {
+  const ms = typeof v === "string" ? Date.parse(v) : NaN;
+  if (!Number.isFinite(ms)) fail(`${field} must be a date string, got ${JSON.stringify(v)}`);
+  return new Date(ms).toISOString();
+}
+
+// Each metric present must be a non-negative count, or null when X omitted it.
+function metrics(v: unknown, at: string): Record<string, number | null> {
+  if (v === undefined) return {};
+  if (typeof v !== "object" || v === null || Array.isArray(v)) fail(`${at}.metrics must be an object`);
+  for (const [k, n] of Object.entries(v)) {
+    if (n !== null && !(typeof n === "number" && Number.isFinite(n) && n >= 0)) fail(`${at}.metrics.${k} must be a non-negative number or null, got ${JSON.stringify(n)}`);
+  }
+  return v as Record<string, number | null>;
+}
+
+// Fails loudly on a missing or malformed field, naming where it is, instead
+// of storing a half-parsed post.
 function normalizePost(p: Record<string, unknown>, at: string): Post {
   if (typeof p !== "object" || p === null) fail(`${at} must be an object`);
   if (typeof p.text !== "string") fail(`${at}.text must be a string`);
   if (p.urls !== undefined && !(Array.isArray(p.urls) && p.urls.every((u) => typeof u === "string"))) fail(`${at}.urls must be an array of strings`);
   if (p.media !== undefined && !Array.isArray(p.media)) fail(`${at}.media must be an array`);
-  if (p.metrics !== undefined && (typeof p.metrics !== "object" || p.metrics === null || Array.isArray(p.metrics))) fail(`${at}.metrics must be an object`);
   return {
     id: postId(p.id, `${at}.id`),
     author_handle: str(p.author_handle, `${at}.author_handle`, 100),
     author_name: optStr(p.author_name, `${at}.author_name`, 200),
-    created_at: str(p.created_at, `${at}.created_at`, 64),
+    created_at: isoTime(p.created_at, `${at}.created_at`),
     text: p.text,
     lang: optStr(p.lang, `${at}.lang`, 16),
     conversation_id: optId(p.conversation_id, `${at}.conversation_id`),
@@ -62,7 +79,7 @@ function normalizePost(p: Record<string, unknown>, at: string): Post {
     retweet_of_id: optId(p.retweet_of_id, `${at}.retweet_of_id`),
     urls: (p.urls as string[] | undefined) ?? [],
     media: (p.media as unknown[] | undefined) ?? [],
-    metrics: (p.metrics as Record<string, number> | undefined) ?? {},
+    metrics: metrics(p.metrics, at),
   };
 }
 
@@ -79,6 +96,7 @@ export async function ingest(env: Env, req: Request) {
   const account = str(b.account, "account", 64);
   const sessionId = str(b.session_id, "session_id", 128);
   const mode = oneOf(b.mode, MODES, "mode");
+  isoTime(b.captured_at, "captured_at");
   if (!Array.isArray(b.batches)) fail("batches must be an array");
 
   // Last occurrence wins for the post's fields, so metrics end at the latest
@@ -90,18 +108,28 @@ export async function ingest(env: Env, req: Request) {
   b.batches.forEach((batch: Record<string, unknown>, bi: number) => {
     const at = `batches[${bi}]`;
     if (typeof batch !== "object" || batch === null) fail(`${at} must be an object`);
-    oneOf(batch.op, OPS, `${at}.op`);
+    const op = oneOf(batch.op, OPS, `${at}.op`);
     const surface = oneOf(batch.surface, SURFACES, `${at}.surface`);
     if (!Array.isArray(batch.posts)) fail(`${at}.posts must be an array`);
+    // One sighting per post per batch: a post X lists twice in one response
+    // keeps its first position and its last metrics.
+    const inBatch = new Map<string, { post_id: string; surface: string; position: unknown; metrics: unknown }>();
     batch.posts.forEach((raw: Record<string, unknown>, pi: number) => {
       const p = normalizePost(raw, `${at}.posts[${pi}]`);
       const position = raw.position === undefined || raw.position === null ? null : raw.position;
       if (position !== null && !Number.isInteger(position)) fail(`${at}.posts[${pi}].position must be an integer`);
+      const seen = inBatch.get(p.id);
+      if (seen) {
+        seen.metrics = p.metrics;
+      } else {
+        inBatch.set(p.id, { post_id: p.id, surface, position, metrics: p.metrics });
+      }
       const prev = posts.get(p.id);
-      posts.set(p.id, { ...p, sightings: (prev?.sightings ?? 0) + 1, bookmarked: prev?.bookmarked || (surface === "bookmarks" ? 1 : 0) });
-      sightings.push({ post_id: p.id, surface, position, metrics: p.metrics });
+      posts.set(p.id, { ...p, sightings: (prev?.sightings ?? 0) + (seen ? 0 : 1), bookmarked: prev?.bookmarked || (surface === "bookmarks" ? 1 : 0) });
     });
+    sightings.push(...inBatch.values());
     if (batch.thread !== undefined && batch.thread !== null) {
+      if (op !== "TweetDetail") fail(`${at}.thread is only allowed on TweetDetail batches, not ${op}`);
       const t = batch.thread as Record<string, unknown>;
       const ids = (v: unknown, f: string) => {
         if (!Array.isArray(v)) fail(`${at}.thread.${f} must be an array of ids`);
