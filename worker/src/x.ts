@@ -309,14 +309,21 @@ export const RESERVATION_TIMEOUT_MS = 30 * 60 * 1000;
 
 // docs/CONTRACT.md 36fbd71. The extension must get 200 here before it opens
 // any X window. The Worker refuses (423) while the account is paused, so the
-// pause holds even when the extension loses its own state. One D1 batch:
-// record crashes, then reserve only if nothing pauses the account.
+// pause holds even when the extension loses its own state. It also refuses
+// while another reservation for the account is still open: a browser that
+// died mid-session (perhaps right after X rate-limited it) must not get a
+// fresh session before the old one reports or turns into a crash 30 minutes
+// in. A repeated start with the same session_id is a lost-response retry and
+// gets 200. One D1 batch: record crashes, then reserve only if nothing
+// pauses the account and no other reservation is open.
 export async function startSession(env: Env, req: Request): Promise<Response> {
   const b = await readJson<Record<string, unknown>>(req);
   const account = str(b.account, "account", 64);
   const sessionId = str(b.session_id, "session_id", 128);
   const now = Date.now();
-  const [, reserved, paused, existing] = await env.DB.batch<Record<string, unknown>>([
+  const openElsewhere = `SELECT max(reserved_at) FROM x_sessions
+    WHERE account = ?2 AND reserved_at IS NOT NULL AND status IS NULL AND session_id != ?1`;
+  const [, reserved, paused, open, existing] = await env.DB.batch<Record<string, unknown>>([
     env.DB.prepare(
       `UPDATE x_sessions SET status = 'crash', ended_at = ?2,
          detail = 'no status ' || CAST((?2 - reserved_at) / 60000 AS INTEGER) || ' min after its reservation'
@@ -326,15 +333,21 @@ export async function startSession(env: Env, req: Request): Promise<Response> {
       `INSERT INTO x_sessions (session_id, account, mode, started_at, reserved_at)
        SELECT ?1, ?2, 'active', ?3, ?3
        WHERE NOT EXISTS (SELECT 1 FROM x_sessions WHERE account = ?2 AND status IS NOT NULL AND status != 'ok' AND ended_at > ?4)
+         AND (${openElsewhere}) IS NULL
        ON CONFLICT (session_id) DO UPDATE SET reserved_at = coalesce(x_sessions.reserved_at, excluded.reserved_at), mode = 'active'
          WHERE x_sessions.status IS NULL AND x_sessions.account = excluded.account
        RETURNING reserved_at`,
     ).bind(sessionId, account, now, now - PAUSE_MS),
     env.DB.prepare(PAUSED_SINCE).bind(account, now - PAUSE_MS),
+    env.DB.prepare(`SELECT (${openElsewhere}) AS open_at`).bind(sessionId, account),
     env.DB.prepare("SELECT account, status FROM x_sessions WHERE session_id = ?1").bind(sessionId),
   ]);
+  // The later of the two holds: a non-ok status pauses 24 h from its time,
+  // and an open reservation until it would count as a crash.
   const pausedAt = paused.results[0]?.paused_at as number | null | undefined;
-  if (pausedAt) return json({ pause_until: pauseUntil(pausedAt) }, 423);
+  const openAt = open.results[0]?.open_at as number | null | undefined;
+  const until = Math.max(pausedAt ? pausedAt + PAUSE_MS : 0, openAt ? openAt + RESERVATION_TIMEOUT_MS : 0);
+  if (until > 0) return json({ pause_until: new Date(until).toISOString() }, 423);
   const row = reserved.results[0];
   if (!row) {
     const s = existing.results[0];

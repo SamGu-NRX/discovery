@@ -76,6 +76,8 @@ muts = [
  ("M63 a refused start still reserves", "src/x.ts", "       WHERE NOT EXISTS (SELECT 1 FROM x_sessions WHERE account = ?2 AND status IS NOT NULL AND status != 'ok' AND ended_at > ?4)\n", ""),
  ("M64 crash pause runs from the reservation", "src/x.ts", "SET status = 'crash', ended_at = ?2,", "SET status = 'crash', ended_at = reserved_at,"),
  ("M65 a crash is never replaced by a later status", "src/x.ts", "x_sessions.status IN ('ok', 'crash') AND", "x_sessions.status IN ('ok') AND"),
+ ("M66 a second session while one is open", "src/x.ts", "         AND (${openElsewhere}) IS NULL\n", ""),
+ ("M67 an open reservation blocks its own retry", "src/x.ts", "AND status IS NULL AND session_id != ?1`;", "AND status IS NULL`;"),
  ("M37 malformed prepared URL breaks the card", "src/proposals.ts", "  } catch {\n    return null;\n  }\n}\n\nfunction preparedItem", "  } finally {\n  }\n}\n\nfunction preparedItem"),
 ]
 for name, path, old, new in muts:

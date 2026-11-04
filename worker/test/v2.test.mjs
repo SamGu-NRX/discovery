@@ -249,8 +249,9 @@ test("session reservations: a non-ok status or an unreported reservation pauses 
   // and the 24 h run from when the crash is detected.
   assert.equal((await start("acct-crash", "cr-1")).status, 200);
   await age("cr-1", "reserved_at", 29 * 60_000);
-  assert.equal((await start("acct-crash", "cr-2")).status, 200, "29 minutes without a status is not a crash yet");
-  await report("acct-crash", "cr-2", "ok");
+  r = await start("acct-crash", "cr-2");
+  assert.equal(r.status, 423, "29 minutes in, cr-1 is still open");
+  assert.ok(Math.abs(until(r) - (Date.now() + 60_000)) < 10_000, "until cr-1 would count as a crash");
   await age("cr-1", "reserved_at", 2 * 60_000);
   r = await start("acct-crash", "cr-3");
   assert.equal(r.status, 423);
@@ -269,8 +270,39 @@ test("session reservations: a non-ok status or an unreported reservation pauses 
 
   // The guard is per account, and a closed session id can't be reserved again.
   assert.equal((await start("acct-other", "other-1")).status, 200);
+  await report("acct-ok", "ok-2", "ok");
   assert.equal((await start("acct-ok", "ok-1")).status, 409);
   assert.equal((await s.call("POST", "/x/sessions/start", { account: "a", session_id: "b" }, { raw: true, token: "runner" })).status, 403);
+});
+
+test("a browser restart mid-session gets no new reservation until the open one reports or turns into a crash", async () => {
+  const start = async (account, session_id) => {
+    const res = await s.call("POST", "/x/sessions/start", { account, session_id }, { raw: true, token: "ingest" });
+    return { status: res.status, body: await res.json() };
+  };
+  const report = (account, session_id, status) => s.call("POST", "/ingest/x/status", { account, session_id, status }, { token: "ingest" });
+  const reservedAt = async (id) => (await s.d1(`SELECT reserved_at FROM x_sessions WHERE session_id = '${id}'`))[0].reserved_at;
+
+  // The browser dies mid-session after X rate-limits it, before anything is
+  // reported. After the restart the extension asks for a new session.
+  assert.equal((await start("acct-restart", "before")).status, 200);
+  let r = await start("acct-restart", "after");
+  assert.equal(r.status, 423, "a second session while the first is open");
+  assert.equal(Date.parse(r.body.pause_until), (await reservedAt("before")) + 30 * 60_000);
+  assert.deepEqual(await s.d1("SELECT session_id FROM x_sessions WHERE session_id = 'after'"), [], "a refused start reserves nothing");
+  assert.equal((await start("acct-restart", "before")).status, 200, "the same session_id again is a lost-response retry");
+
+  // The extension reports its own open session first; a rate limit pauses 24 h.
+  await report("acct-restart", "before", "rate_limited");
+  r = await start("acct-restart", "after");
+  assert.equal(r.status, 423);
+  assert.ok(Date.parse(r.body.pause_until) - Date.now() > 23.9 * 3600_000);
+
+  // A clean report releases the account at once.
+  assert.equal((await start("acct-restart-ok", "one")).status, 200);
+  assert.equal((await start("acct-restart-ok", "two")).status, 423);
+  await report("acct-restart-ok", "one", "ok");
+  assert.equal((await start("acct-restart-ok", "two")).status, 200);
 });
 
 test("a reply is covered only by a capture of its own permalink, not by the root's capture listing it among replies", async () => {
