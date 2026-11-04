@@ -363,6 +363,56 @@ class EndToEnd(Home):
         self.assertEqual(list(config.path("outbox", "x").parent.glob("*.json")), [])
 
 
+class OpenApplications(Home):
+    URL = "https://job-boards.greenhouse.io/acme/jobs/42"
+
+    def seed_posting(self):
+        """Put a listed posting in the runner's own fetch cache, as a fetch an hour ago would have."""
+        import hashlib
+        from discovery_runner import bundle as B
+        job = {"ok": True, "kind": "job", "board": "acme", "job_id": "42", "title": "Acme Fellows, ML Systems",
+               "text": "Applications are open for our January cohort - apply here by October 30. We review "
+                       "applications on a rolling basis. Program runs 4 months full-time.",
+               "questions": [{"label": "Why Acme?", "name": "q1", "type": "textarea"}],
+               "listing": "open: listed on the acme Greenhouse board as fetched 2026-11-04"}
+        for url, rec in ((self.URL, job), ("https://boards-api.greenhouse.io/v1/boards/acme/jobs", {"ok": True, "jobs": []})):
+            f = config.path("cache", "fetch", hashlib.sha1(B.norm_url(url).encode()).hexdigest()[:20] + ".json")
+            f.write_text(json.dumps({**rec, "url": url}))
+        return self.mock.state.add_candidate("watcher_event", "acme:42", "Acme Fellows, ML Systems", self.URL)
+
+    def test_open_rolling_posting_becomes_a_package_not_a_skip(self):
+        # fails if a listed rolling posting is dropped as expired at triage, or declined over Sam's availability
+        # (both happened to Anthropic's Fellows postings on Nov 4)
+        package = {"decline": False, "kind": "apply_or_attend", "title": "Acme Fellows application", "why": "w",
+                   "target": "acme.com:fellows", "prep": {"needs_tools": False}, "evidence": [],
+                   "final_step_kind": "submit", "final_step": "submit after writing the essay",
+                   "application": {"employer": "Acme", "employer_domain": "acme.com", "fields": [
+                       {"name": "Why Acme?", "kind": "essay", "value": "drafted by a model", "highlight": ["CogPortal"]},
+                       {"name": "Graduation", "kind": "fact", "value": "May 2028", "source": "facts"}]}}
+        soft = {"decline": True, "decline_reason": "his January is taken by Base Power; no reason to apply now",
+                "blocker": None}
+        r = self.runner({"You declined an application": package, "You triage": {
+            "action_type": "no_action", "why_it_matters": "deadline Oct 30 passed", "expired": True},
+            "You deep-read": soft, "independent": JUDGE_OK})
+        self.seed_posting()
+        run = r.work()[0]
+        self.assertIn("overridden", run["triage"])
+        (p,) = self.mock.state.proposals.values()
+        self.assertEqual(p["final_step_kind"], "submit")
+        app = json.loads(Path(run["proposal"]["body"]["prepared"][0]["ref"]).with_name("application.json").read_text())
+        self.assertEqual([f["value"] for f in app["fields"]], ["", "May 2028"])
+
+    def test_decline_quoting_a_hard_requirement_stands(self):
+        # fails if the runner forces packages for postings Sam clearly cannot apply to
+        hard = {"decline": True, "decline_reason": "requires a PhD",
+                "blocker": {"kind": "hard_requirement_unmet", "quote": "We review applications on a rolling basis"}}
+        r = self.runner({"You triage": {"action_type": "apply_or_attend", "why_it_matters": "w"}, "You deep-read": hard})
+        self.seed_posting()
+        run = r.work()[0]
+        self.assertEqual(run["complete"]["state"], "skipped")
+        self.assertEqual([c["stage"] for c in self.gw.calls].count("You deep-read"), 1)
+
+
 class Scoring(Home):
     def test_score_is_top5_positive_mean_minus_top5_skipped_plus_author_prior(self):
         # fails if the contract's scoring formula changes (k, sign of skipped, or the prior)

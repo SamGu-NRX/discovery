@@ -179,7 +179,10 @@ def fetch_greenhouse(url):
                               "options": [v.get("label") for v in f.get("values") or []][:30] or None})
     return {"ok": True, "kind": "job", "board": m[1], "job_id": m[2], "title": j.get("title"),
             "location": (j.get("location") or {}).get("name"), "updated_at": j.get("updated_at"),
-            "apply_url": j.get("absolute_url"), "text": text[:PAGE_CHARS * 2], "questions": questions}
+            "apply_url": j.get("absolute_url"), "text": text[:PAGE_CHARS * 2], "questions": questions,
+            # Greenhouse serves only listed postings (a closed job is a 404), so a fetched job is open now. Date text
+            # inside the posting ("apply by October 30" for one cohort) does not close a listed, rolling posting.
+            "listing": f"open: listed on the {m[1]} Greenhouse board as fetched {time.strftime('%Y-%m-%d')}"}
 
 
 def fetch_x(url, worker=None):
@@ -322,6 +325,11 @@ def board_jobs(board):
         return {"ok": True, "jobs": [{"id": str(j["id"]), "title": j["title"], "url": j.get("absolute_url"),
                                       "location": (j.get("location") or {}).get("name")} for j in json.loads(body)["jobs"]]}
     return cached(f"https://boards-api.greenhouse.io/v1/boards/{board}/jobs", get)
+
+
+def open_listing(b):
+    """The live job posting in a bundle, when one was fetched; None otherwise."""
+    return next((s for s in b.get("sources", []) if s.get("kind") == "job" and s.get("ok") and s.get("listing")), None)
 
 
 def watcher_bundle(worker, candidate):

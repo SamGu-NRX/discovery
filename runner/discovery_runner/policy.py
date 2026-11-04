@@ -58,6 +58,22 @@ def guidance_url(employer_domain, cfg):
     return None
 
 
+HARD_BLOCKERS = {"hard_requirement_unmet", "not_relevant", "deadline_passed"}
+
+
+def hard_blocker(prop, bundle_text_norm):
+    """The decline's blocker when it is a hard one quoted verbatim from the item, else None.
+
+    Availability, timing, location preference and "no reason to do it now" are Sam's decisions and never
+    count. deadline_passed counts only with a quote, and a listed posting overrides cohort dates upstream.
+    """
+    b = prop.get("blocker") or {}
+    quote = re.sub(r"\s+", " ", (b.get("quote") or "")).strip().lower().strip("\"'…. ")
+    if b.get("kind") in HARD_BLOCKERS and len(quote) > 12 and quote in bundle_text_norm:
+        return b
+    return None
+
+
 # ---------------------------------------------------------------- live-state verification
 
 # Read-only checks never open these, even to answer yes or no.

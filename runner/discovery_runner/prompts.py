@@ -54,8 +54,13 @@ Policy (settled Nov 2): agents take every non-destructive step themselves; the f
 of {FINAL_STEP_KINDS}. If nothing irreversible remains, final_step_kind is null. Never propose touching
 coursework or classes.
 
-Applications and programs (apply_or_attend): check the deadline in the posting against today's date first;
-decline only when it has passed or a hard requirement is clearly unmet. Never decline because his
+Applications and programs (apply_or_attend): the finished work is an application package: every non-essay
+field filled from the facts with its source, eligibility checked, each essay left blank with what to
+highlight, and the one decision only Sam can make named. Blank essays are required by employers' AI-use
+rules and are not a reason to decline. A posting marked `listing: open` is open now: a date in its text
+for one cohort does not close a program that reviews applications on a rolling basis. To decline an
+application, set `blocker` to {{"kind": "hard_requirement_unmet|not_relevant|deadline_passed", "quote":
+"verbatim sentence from the posting"}}; any other decline of an open posting is sent back. Never decline because his
 availability, timing or location is undecided when the posting allows flexibility (other lengths, remote,
 later cohorts): that is his decision, not yours. Prepare everything and put that one decision in
 `application.decision_for_sam` and the approval line. Fill fields only from the application facts provided,
@@ -89,7 +94,7 @@ Decline (decline=true) when nothing is worth doing. Declining is a good outcome;
 attention.
 
 Return JSON only:
-{{"decline": false, "decline_reason": null,
+{{"decline": false, "decline_reason": null, "blocker": null,
  "kind": "one of {ACTION_TYPES[:-2]}",
  "title": "under 80 characters, plain words, what will be done",
  "why": "2-4 sentences: what the item teaches that a skim would miss, and why it matters to a named project now",
@@ -118,6 +123,12 @@ REVISE = """You proposed the action below. The runner then checked your claims a
 Some checks came back false or unverifiable. Revise the proposal so it rests only on what is true: change the
 action, drop claims you cannot support, or decline when the premise was wrong (for example the change is
 already in place). Return the full proposal JSON in the same shape as before."""
+
+NO_SOFT_DECLINE = """You declined an application whose posting is open, without a hard blocker quoted from the posting.
+Sam's availability, timing, other internships, location preference and urgency are his decisions, not
+grounds to decline: name them in application.decision_for_sam instead. Prepare the package now. Decline
+again only with `blocker` set to a hard requirement he clearly fails or a role clearly unrelated to him,
+quoted verbatim from the posting."""
 
 GUIDANCE = """You read an employer's page about candidates using AI. Decide whether it limits AI drafting of
 application answers or essays (for example "create your first draft yourself", "do not use AI to write").

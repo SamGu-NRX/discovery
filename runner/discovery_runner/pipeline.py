@@ -169,6 +169,12 @@ class Runner:
         if tri.get("action_type") not in prompts.ACTION_TYPES:
             raise ValueError(f"triage returned action_type {tri.get('action_type')!r}")
         run["triage"] = tri
+        if B.open_listing(b) and tri["action_type"] != "apply_or_attend":
+            # A listed posting is open by definition, and watcher rules already chose it as relevant. Triage read
+            # "apply by October 30" (one cohort's date) as expired and dropped a rolling posting on Nov 4, so for
+            # open listings triage is advisory and the deep read decides with the facts in hand.
+            tri["overridden"] = f"triage said {tri['action_type']}: {tri.get('why_it_matters')}"
+            tri["action_type"] = "apply_or_attend"
         if tri["action_type"] == "no_action":
             return self.complete(cand, "skipped", f"no_action: {tri.get('why_it_matters')}", run)
         if tri["action_type"] == "reference_note":
@@ -198,6 +204,15 @@ class Runner:
         prop = self.llm.chat_json(cfg["models"]["deep_read"], prompts.DEEP_READ, u, stage="deep_read",
                                   item=cand["id"], effort="high")
         run["deep_read"] = prop
+        if prop.get("decline") and B.open_listing(b) and not policy.hard_blocker(prop, B.bundle_text(b)):
+            # Whether to apply around his other commitments is Sam's decision. An open application is declined
+            # only for a hard blocker quoted from the posting; every other decline gets one retry with that rule.
+            config.check_stop()
+            run["decline_without_blocker"] = prop
+            prop = self.llm.chat_json(cfg["models"]["deep_read"], prompts.DEEP_READ + "\n\n" + prompts.NO_SOFT_DECLINE,
+                                      f"{u}\n\n# Your declined answer\n{json.dumps(prop, ensure_ascii=False)}",
+                                      stage="deep_read_retry", item=cand["id"], effort="high")
+            run["deep_read"] = prop
         if prop.get("decline"):
             self.complete(cand, "skipped", f"declined: {prop.get('decline_reason')}", run)
             return None
