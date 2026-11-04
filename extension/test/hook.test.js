@@ -23,6 +23,9 @@ before(async () => {
   await context.route("https://x.com/**", (route) => {
     const url = route.request().url();
     if (url.includes("/not-graphql")) return route.fulfill({ contentType: "application/json", body: '{"unrelated":true}' });
+    if (url.includes("/NotificationsTimeline")) {
+      return route.fulfill({ contentType: "application/json", body: '{"errors":[{"code":88,"message":"Rate limit exceeded"}]}' });
+    }
     if (url.includes("/graphql/")) return route.fulfill({ contentType: "application/json", body: JSON.stringify(homeResponse()) });
     return route.fulfill({ contentType: "text/html", body: '<!doctype html><a data-testid="AppTabBar_Profile_Link" href="/owner">me</a>' });
   });
@@ -178,5 +181,29 @@ test("a response is labeled by the URL the browser fetched, not the URL the page
     for (const message of sent) {
       assert.equal(message.body, JSON.stringify(homeResponse()), `${name}: forwarded ${message.body?.slice(0, 60)}`);
     }
+  }
+});
+
+// Found in an install-readiness review of d5447c9: code 88 on an operation
+// the extension does not capture was never seen.
+test("X error 88 on an operation that is not captured is reported, without its body", async () => {
+  for (const viaXhr of [false, true]) {
+    await clearSent();
+    await page.evaluate(async (xhr) => {
+      const url = "/i/api/graphql/q/NotificationsTimeline?variables=%7B%7D";
+      if (xhr) {
+        await new Promise((resolve) => {
+          const request = new XMLHttpRequest();
+          request.open("GET", url);
+          request.onload = resolve;
+          request.send();
+        });
+      } else {
+        await (await fetch(url)).text();
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }, viaXhr);
+    const sent = await sentToWorker();
+    assert.deepEqual(sent.map((m) => [m.type, m.operation, m.body]), [["x-limit", "NotificationsTimeline", undefined]], viaXhr ? "xhr" : "fetch");
   }
 });

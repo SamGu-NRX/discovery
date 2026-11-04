@@ -40,6 +40,8 @@
   const URLCtor = URL;
   const then = Promise.prototype.then;
   const exec = RegExp.prototype.exec;
+  const jsonParse = JSON.parse;
+  const isArray = Array.isArray;
   const setHas = Set.prototype.has;
   const weakHas = WeakSet.prototype.has;
   const weakAdd = WeakSet.prototype.add;
@@ -68,6 +70,22 @@
   const READY = "dx-capture-ready";
   const DATA = "dx-capture-data";
   const OPERATION = /\/graphql\/[^/]+\/([A-Za-z]+)$/;
+  const MAYBE_RATE_LIMIT = /"code"\s*:\s*88\b/;
+
+  // X's rate-limit error (code 88) can arrive with HTTP 200 on any GraphQL
+  // operation. Bodies of captured operations go to the service worker, which
+  // checks them; for every other operation only this verdict leaves the page.
+  const isRateLimitBody = (text) => {
+    if (!apply(exec, MAYBE_RATE_LIMIT, [text])) return false;
+    try {
+      const errors = jsonParse(text)?.errors;
+      if (!isArray(errors)) return false;
+      for (let i = 0; i < errors.length; i += 1) if (errors[i]?.code === 88) return true;
+    } catch {
+      // Not JSON.
+    }
+    return false;
+  };
 
   const channel = document.createElement("span");
   let connected = false;
@@ -124,7 +142,9 @@
       return;
     }
     const deliver = (text) => {
-      if (typeof text === "string" && text) send("response", operation, status, url, text);
+      if (typeof text !== "string" || !text) return;
+      if (captured(operation)) send("response", operation, status, url, text);
+      else if (isRateLimitBody(text)) send("limit", operation, status, url, "");
     };
     if (typeof body === "string") deliver(body);
     else if (body) apply(then, body, [deliver, () => {}]);
@@ -143,10 +163,8 @@
     let body = null;
     // X reads GraphQL as text. A "json" responseType has no raw text to
     // copy, and re-serializing it would run page code (toJSON).
-    if (captured(operation)) {
-      const type = apply(xhrResponseType, xhr, []);
-      if (type === "" || type === "text") body = apply(xhrResponseText, xhr, []);
-    }
+    const type = apply(xhrResponseType, xhr, []);
+    if (type === "" || type === "text") body = apply(xhrResponseText, xhr, []);
     report(href, operation, status, body);
   };
 
@@ -176,7 +194,7 @@
           const { href, operation } = graphql;
           const status = apply(resStatus, res, []);
           const ok = status >= 200 && status <= 299;
-          const body = ok && captured(operation) ? apply(resText, apply(resClone, res, []), []) : null;
+          const body = ok ? apply(resText, apply(resClone, res, []), []) : null;
           report(href, operation, status, body);
         } catch {
           // Not a real response.

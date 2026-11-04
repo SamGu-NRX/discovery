@@ -165,7 +165,7 @@ async function reset() {
 test("a session recovered after a restart is reported before a new session can replace its record", async () => {
   await reset();
   await chrome.storage.session.set({
-    activeSession: { id: "old", windowId: 7, account: "owner", stop: { reason: "challenge", detail: "CAPTCHA" }, completed: false },
+    activeSession: { id: "old", reserved: true, windowId: 7, account: "owner", stop: { reason: "challenge", detail: "CAPTCHA" }, completed: false },
   });
   // Hold recovery right after it reads the old record, and start a session then.
   const read = deferred();
@@ -299,7 +299,7 @@ test("a capture from one session is not counted in the next session", async () =
 test("a stop pressed while a restart is recovered does not overwrite the recovered record", async () => {
   await reset();
   await chrome.storage.session.set({
-    activeSession: { id: "old", windowId: 7, account: "owner", stop: { reason: "challenge", detail: "CAPTCHA" }, completed: false },
+    activeSession: { id: "old", reserved: true, windowId: 7, account: "owner", stop: { reason: "challenge", detail: "CAPTCHA" }, completed: false },
   });
   // Hold recovery while it closes the old window.
   const closing = deferred();
@@ -466,7 +466,7 @@ test("a 429 while the session window is still opening stops that session as rate
 test("a 429 while restart recovery closes the old window is part of the recovered report", async () => {
   await reset();
   await chrome.storage.session.set({
-    activeSession: { id: "old", windowId: 7, account: "owner", stop: { reason: "stopped_by_user", detail: "Stop" }, completed: false },
+    activeSession: { id: "old", reserved: true, windowId: 7, account: "owner", stop: { reason: "stopped_by_user", detail: "Stop" }, completed: false },
   });
   const closing = hold(chrome.windows, "remove");
   const recovering = session.recoverInterruptedSession();
@@ -514,6 +514,7 @@ test("an old session whose report failed is kept, retried, and blocks new sessio
   await chrome.storage.session.set({
     activeSession: {
       id: "old",
+      reserved: true,
       windowId: 7,
       account: "owner",
       stop: { reason: "stopped_by_user", detail: "Stop" },
@@ -616,7 +617,7 @@ test("a login wall whose status report failed is still reported after the worker
 test("a 429 that arrived while recovery closed the old window is reported after the worker is killed mid-recovery", async () => {
   await reset();
   await chrome.storage.session.set({
-    activeSession: { id: "old", windowId: 7, account: "owner", stop: { reason: "stopped_by_user", detail: "Stop" }, completed: false },
+    activeSession: { id: "old", reserved: true, windowId: 7, account: "owner", stop: { reason: "stopped_by_user", detail: "Stop" }, completed: false },
   });
   const doomed = await workerCopy();
   const closing = hold(chrome.windows, "remove");
@@ -683,7 +684,7 @@ const statuses = (id) => log.filter((entry) => entry.startsWith(`status:${id}:`)
 test("a 429 while a new start waits for recovery is reported on the recovered session", async () => {
   await reset();
   await chrome.storage.session.set({
-    activeSession: { id: "old", windowId: 7, account: "owner", stop: { reason: "stopped_by_user", detail: "Stop" }, completed: false },
+    activeSession: { id: "old", reserved: true, windowId: 7, account: "owner", stop: { reason: "stopped_by_user", detail: "Stop" }, completed: false },
   });
   const closing = hold(chrome.windows, "remove");
   const recovering = session.recoverInterruptedSession();
@@ -733,7 +734,7 @@ test("a worker killed before a late 429's write lands never recovers the session
 test("a worker killed before a recovery-time 429's write lands never recovers the old session as ok", async () => {
   await reset();
   await chrome.storage.session.set({
-    activeSession: { id: "old", windowId: 7, account: "owner", stop: { reason: "stopped_by_user", detail: "Stop" }, completed: false },
+    activeSession: { id: "old", reserved: true, windowId: 7, account: "owner", stop: { reason: "stopped_by_user", detail: "Stop" }, completed: false },
   });
   const doomed = await workerCopy();
   const closing = hold(chrome.windows, "remove");
@@ -856,7 +857,7 @@ test("a status the Worker accepted is not sent again after a kill at the next wr
 test("a recovery whose report failed marks the record as waiting, not running", async () => {
   await reset();
   await chrome.storage.session.set({
-    activeSession: { id: "old", windowId: 7, account: "owner", stop: { reason: "stopped_by_user", detail: "Stop" }, completed: false },
+    activeSession: { id: "old", reserved: true, windowId: 7, account: "owner", stop: { reason: "stopped_by_user", detail: "Stop" }, completed: false },
   });
   statusDown = true;
   await session.recoverInterruptedSession();
@@ -868,7 +869,7 @@ test("a recovery whose report failed marks the record as waiting, not running", 
 test("a recovered status the Worker accepted is not sent again after a kill at the next write", async () => {
   await reset();
   await chrome.storage.session.set({
-    activeSession: { id: "old", windowId: 7, account: "owner", stop: { reason: "challenge", detail: "CAPTCHA" }, completed: false },
+    activeSession: { id: "old", reserved: true, windowId: 7, account: "owner", stop: { reason: "challenge", detail: "CAPTCHA" }, completed: false },
   });
   const doomed = await workerCopy();
   const kill = killer();
@@ -1024,4 +1025,34 @@ test("a login wall detect.js finds in one of Sam's own tabs pauses sessions and 
   assert.equal(log.filter((entry) => /^status:.+:login_wall$/.test(entry)).length, 1, log.join(" "));
   const started = await session.startSession("alarm");
   assert.equal(started.started, false);
+});
+
+// Found in an install-readiness review of d5447c9.
+
+test("X error 88 the hook found on an uncaptured operation pauses sessions", async () => {
+  await reset();
+  await fromTab(500, { type: "x-limit", operation: "NotificationsTimeline", status: 200, url: "https://x.com/i/api/graphql/q/NotificationsTimeline" });
+  assert.ok(Date.parse(fake.local.get("pauseUntil")) > Date.now());
+  assert.equal((await session.startSession("alarm")).started, false);
+});
+
+test("a worker killed while removing a refused session's record reports nothing for it after restart", async () => {
+  await reset();
+  reservation = { status: 404, body: {} };
+  const doomed = await workerCopy();
+  const kill = killer();
+  const remove = chrome.storage.session.remove;
+  chrome.storage.session.remove = async (key) => {
+    chrome.storage.session.remove = remove;
+    kill.trigger(0);
+    return chrome.storage.session.remove(key);
+  };
+  doomed.startSession("alarm");
+  await kill.stuck;
+  kill.restart();
+  log.length = 0;
+  const restarted = await workerCopy();
+  await restarted.recoverInterruptedSession();
+  assert.deepEqual(log.filter((entry) => entry.startsWith("status:")), []);
+  assert.equal(fake.session.get("activeSession"), undefined);
 });

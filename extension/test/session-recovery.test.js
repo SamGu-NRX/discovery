@@ -21,7 +21,7 @@ beforeEach(async () => {
 });
 
 async function recover(activeSession) {
-  await chrome.storage.session.set({ activeSession: { id: "s-1", windowId: 7, account: "sam", phase: "home", screens: 3, posts: 20, ...activeSession } });
+  await chrome.storage.session.set({ activeSession: { id: "s-1", reserved: true, windowId: 7, account: "sam", phase: "home", screens: 3, posts: 20, ...activeSession } });
   await recoverInterruptedSession();
   const status = worker.requests.find((r) => r.path === "/ingest/x/status")?.body;
   const { pauseUntil, lastSession } = await chrome.storage.local.get(["pauseUntil", "lastSession"]);

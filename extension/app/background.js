@@ -94,6 +94,10 @@ async function handle(message, sender) {
       });
     case "x-status":
       return fromXTab ? handleXStatus(message, sender.tab.id) : { error: "statuses come from x.com tabs" };
+    case "x-limit":
+      if (!fromXTab) return { error: "limits come from x.com tabs" };
+      await onBackOff(sender.tab.id, "rate_limited", `${String(message.operation).slice(0, 60)} returned X error 88 (rate limit)`);
+      return { ok: true };
     case "x-blocker":
       return fromXTab ? handleXBlocker(message, sender.tab.id) : { error: "blockers come from x.com tabs" };
     case "runSession":

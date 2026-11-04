@@ -130,6 +130,7 @@ export async function startSession(trigger) {
     operations: new Set(),
     stop: null,
     completed: false,
+    reserved: false,
     finishing: false,
     recorded: false,
     statusDecided: false,
@@ -192,12 +193,14 @@ export async function startSession(trigger) {
     }
     return { started: false, reason: reservation.reason };
   }
-  // Reserved: from here a pause stops the session before its window opens,
-  // and its status closes the reservation.
+  // Reserved: the record says so before anything else happens, and from
+  // here a pause stops the session before its window opens, and its status
+  // closes the reservation.
+  s.reserved = true;
   if (!s.stop && (await pausedOrPausing())) {
     s.stop = { reason: "paused", detail: "sessions were paused while this session was being reserved" };
-    await publish(s);
   }
+  await publish(s);
   run(s);
   return { started: true, id: s.id };
 }
@@ -331,8 +334,12 @@ export function recoverInterruptedSession() {
 async function recover() {
   const { activeSession } = await chrome.storage.session.get("activeSession");
   if (!activeSession || activeSession.id === current?.id) return;
-  // A record whose status the Worker already accepted only needs removing.
-  if (activeSession.statusSent) {
+  // A record whose status the Worker already accepted only needs removing,
+  // and so does one never marked reserved: nothing happens on X before the
+  // Worker's 200 is recorded, and a reservation that did reach the Worker
+  // unrecorded is closed by its crash rule after 30 minutes, which pauses
+  // the account rather than reporting a status that could be wrong.
+  if (activeSession.statusSent || !activeSession.reserved) {
     await removeRecord(activeSession.id);
     return;
   }
@@ -412,6 +419,7 @@ function publish(s, outcome = null, extra = {}) {
       windowId: s.windowId,
       account: s.account,
       reservedAccount: s.reservedAccount,
+      reserved: s.reserved,
       phase: s.phase,
       screens: s.screens,
       posts: s.posts,

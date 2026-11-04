@@ -20,6 +20,10 @@
       graphql("HomeTimeline", { cursor: "page2" }, true);
     });
     graphql("HomeTimeline", {}, false);
+    // A login prompt that appears over the timeline later, on the same URL.
+    if (location.hash === "#late-login") {
+      setTimeout(() => document.body.insertAdjacentHTML("beforeend", '<input type="password" name="password">'), 9000);
+    }
   </script>
 </body>
 </html>

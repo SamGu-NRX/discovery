@@ -241,6 +241,21 @@ test("a login page in one of Sam's own tabs pauses sessions and is reported, wit
   await page.close();
 });
 
+// Found in an install-readiness review of d5447c9: checks ran only after a
+// URL change (at about 1.5 s and 5 s), so a blocker appearing later on the
+// same URL went unseen. The fixture shows its prompt 9 s after load.
+test("a login prompt that appears later on the same URL in Sam's tab still pauses sessions", async () => {
+  await configure({ mode: "active", account: "fixtureuser" });
+  await worker.evaluate(() => chrome.storage.local.remove(["backOffReportedUntil", "pendingBackOff"]));
+  const startedAt = mock.requests.length;
+  const page = await context.newPage();
+  await page.goto("https://x.com/home#late-login");
+  const report = await mock.waitFor((r) => r.path === "/ingest/x/status" && r.body.status === "login_wall", { after: startedAt });
+  assert.match(report.body.detail, /login control input at \/home/);
+  assert.deepEqual(site.clicks, []);
+  await page.close();
+});
+
 async function startFakeX(dir) {
   const key = join(dir, "key.pem");
   const cert = join(dir, "cert.pem");

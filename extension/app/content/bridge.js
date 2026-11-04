@@ -34,26 +34,40 @@
     return handle;
   };
 
-  // X is a single-page app, so the page is checked shortly after each URL
-  // change (and the first load), once the new view has rendered. Each
-  // blocker is reported once per path.
-  const reportedBlockers = new Set();
+  // A blocker can appear at any time, on a new URL or on the same one (a
+  // login wall or a limit message over the timeline), so the page is checked
+  // every 5 s while visible and every 30 s while hidden, and 1.5 s after each
+  // URL change. A blocker is reported when it appears, again every 30
+  // minutes while it stays (each report extends the pause), and anew if it
+  // clears and comes back.
+  const VISIBLE_MS = 5_000;
+  const HIDDEN_MS = 30_000;
+  const REPEAT_MS = 30 * 60_000;
+  let shown = null; // { key, reportedAt } for the blocker on screen now
+  let lastHref = null;
+  let lastCheck = 0;
   const checkForBlocker = () => {
+    lastCheck = Date.now();
     const seen = globalThis.__dxDetect?.inspect();
-    if (!seen || !["login_wall", "challenge", "rate_limited"].includes(seen.blocker)) return;
+    if (!seen || !["login_wall", "challenge", "rate_limited"].includes(seen.blocker)) {
+      shown = null;
+      return;
+    }
     const key = `${seen.blocker}|${seen.path}`;
-    if (reportedBlockers.has(key)) return;
-    reportedBlockers.add(key);
+    if (shown?.key === key && Date.now() - shown.reportedAt < REPEAT_MS) return;
+    shown = { key, reportedAt: Date.now() };
     chrome.runtime
       .sendMessage({ type: "x-blocker", blocker: seen.blocker, evidence: seen.evidence, path: seen.path })
       .catch(() => {});
   };
-  let lastHref = null;
   setInterval(() => {
-    if (location.href === lastHref) return;
-    lastHref = location.href;
-    setTimeout(checkForBlocker, 1500);
-    setTimeout(checkForBlocker, 5000);
+    if (location.href !== lastHref) {
+      lastHref = location.href;
+      setTimeout(checkForBlocker, 1500);
+      return;
+    }
+    const every = document.visibilityState === "visible" ? VISIBLE_MS : HIDDEN_MS;
+    if (Date.now() - lastCheck >= every) checkForBlocker();
   }, 1000);
 
   // One message in flight at a time keeps captures in the order X sent them,
@@ -72,7 +86,7 @@
       start = end + 1;
     }
     const [version, kind, operation, status, url] = fields;
-    if (version !== "dx1" || (kind !== "response" && kind !== "status")) return null;
+    if (version !== "dx1" || !["response", "status", "limit"].includes(kind)) return null;
     if (!/^[A-Za-z]+$/.test(operation) || !/^\d{3}$/.test(status)) return null;
     return { kind, operation, status: Number(status), url, body: detail.slice(start) };
   }
@@ -83,7 +97,7 @@
     queue = queue
       .then(() =>
         chrome.runtime.sendMessage({
-          type: message.kind === "response" ? "capture" : "x-status",
+          type: { response: "capture", status: "x-status", limit: "x-limit" }[message.kind],
           operation: message.operation,
           url: message.url,
           status: message.status,
