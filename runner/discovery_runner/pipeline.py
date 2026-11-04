@@ -477,7 +477,10 @@ def render_application(app):
     for f in app["fields"]:
         if f.get("left_to_sam") or (f.get("kind") in policy.ESSAY_KINDS):
             lines.append(f"- **{f['name']}** — yours to write.")
-            lines += [f"  - highlight: {h}" for h in f.get("highlight") or []]
+            for h in f.get("highlight") or []:
+                if isinstance(h, dict):
+                    h = f"{h.get('fact') or h.get('text') or json.dumps(h)} ({h.get('source', 'no source')})"
+                lines.append(f"  - highlight: {h}")
         else:
             lines.append(f"- **{f['name']}**: {f.get('value') or '— left blank (no sourced fact)'}"
                          f"{' (' + f['source'] + ')' if f.get('value') and f.get('source') else ''}")
@@ -574,6 +577,7 @@ def run_codex(workdir, cfg, gateway_key, log=print):
             return res
     res["scratch_mb"] = round(mb, 1)
     pj = workdir / "prepared.json"
+    # A timed-out prep that already wrote prepared.json keeps what it finished (the prompt asks it to write early).
     if pj.exists():
         try:
             p = json.loads(pj.read_text())

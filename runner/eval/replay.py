@@ -164,7 +164,7 @@ def main():
     from discovery_runner.pipeline import Runner
     from discovery_runner.worker import Worker
 
-    ids = [i for i in a.ids.split(",") if i] or SAMPLE
+    ids = [] if a.ids == "none" else ([i for i in a.ids.split(",") if i] or SAMPLE)
     watchers = [] if a.watchers == "none" else [w for w in WATCHERS if a.watchers == "all" or w["ref"] in a.watchers]
     with mock_worker.MockWorker() as m:
         load_mock(m.state, load_saves(), ids, watchers, mock_worker)
