@@ -38,6 +38,10 @@ if grep -q '00000000-0000-0000-0000-000000000000' wrangler.jsonc; then
 fi
 
 "$W" d1 migrations apply DB --remote
+# The apply above has exited after printing only its banner, leaving a
+# migration pending (0005 and 0006 on 2026-11-04). Deploying code that needs
+# the new columns would then fail every request that uses them.
+"$W" d1 migrations list DB --remote | grep -q "No migrations to apply" || { echo "migrations still pending; not deploying" >&2; exit 1; }
 "$W" deploy | tee .wrangler/deploy-output.txt
 url=$(grep -oE 'https://discovery-watcher\.[a-z0-9-]+\.workers\.dev' .wrangler/deploy-output.txt | head -1)
 [ -n "$url" ] || { echo "no workers.dev URL in deploy output" >&2; exit 1; }

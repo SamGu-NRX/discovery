@@ -255,6 +255,7 @@ test("session reservations: a non-ok status or an unreported reservation pauses 
   r = await start("acct-crash", "cr-3");
   assert.equal(r.status, 423);
   const crashUntil = until(r);
+  assert.deepEqual(await s.d1("SELECT status, detail FROM x_sessions WHERE session_id = 'cr-1'"), [{ status: "crash", detail: "no status 31 min after its reservation" }]);
   assert.ok(Math.abs(crashUntil - (Date.now() + 24 * hour)) < 60_000);
   // A late ok for the crashed session does not clear it; a late real status
   // starts the clock from its own, later time.

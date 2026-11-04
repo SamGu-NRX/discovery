@@ -319,7 +319,7 @@ export async function startSession(env: Env, req: Request): Promise<Response> {
   const [, reserved, paused, existing] = await env.DB.batch<Record<string, unknown>>([
     env.DB.prepare(
       `UPDATE x_sessions SET status = 'crash', ended_at = ?2,
-         detail = 'no status ' || ((?2 - reserved_at) / 60000) || ' min after its reservation'
+         detail = 'no status ' || CAST((?2 - reserved_at) / 60000 AS INTEGER) || ' min after its reservation'
        WHERE account = ?1 AND reserved_at IS NOT NULL AND status IS NULL AND reserved_at < ?3`,
     ).bind(account, now, now - RESERVATION_TIMEOUT_MS),
     env.DB.prepare(
