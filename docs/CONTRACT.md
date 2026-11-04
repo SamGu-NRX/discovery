@@ -23,7 +23,7 @@ Each token is a random 32-byte hex string. It is stored locally in `~/.agent-sec
 | --- | --- | --- |
 | `ADMIN_TOKEN` (exists) | Director | everything |
 | `INGEST_TOKEN` | extension | `POST /ingest/x`, `POST /ingest/x/status`, `GET /x/detail-queue` |
-| `RUNNER_TOKEN` | runner | `/candidates/*`, `/x/posts/*`, `POST /proposals`, `GET /proposals`, `POST /positives` |
+| `RUNNER_TOKEN` | runner | `/candidates/*`, `/x/posts*`, `POST /embed`, `/proposals`, `/positives` |
 | per-proposal approval token | the approval link | `GET` and `POST /a/:token` |
 
 Approval tokens are minted per proposal. D1 stores only their SHA-256 hash. A token is single-use, bound to the proposal's `inputs_hash`, and expires with the proposal (default 7 days).
@@ -52,7 +52,7 @@ The extension normalizes X GraphQL into this shape. JSON paths are listed in the
 
 ## `POST /ingest/x`
 
-Request body, at most 1 MB:
+Request body, at most 256 KB (the extension splits larger captures, so a request stays inside the free plan's 10 ms CPU limit):
 
 ```json
 {
@@ -85,34 +85,38 @@ The response is `{ "posts_upserted", "sightings", "new_posts", "candidates_creat
 x_posts(id TEXT PRIMARY KEY, author_handle, author_name, created_at, text, lang,
   conversation_id, in_reply_to_id, quoted_id, retweet_of_id, urls_json, media_json,
   metrics_json, first_seen_at, last_seen_at, seen_count INTEGER, bookmarked INTEGER DEFAULT 0,
-  embedding BLOB NULL)
+  score REAL NULL, score_parts_json NULL, scored_at NULL)
 x_sightings(id INTEGER PRIMARY KEY, post_id, account, surface, position, session_id, mode,
   seen_at, metrics_json)
 x_threads(root_id TEXT PRIMARY KEY, captured_at, account, op_self_thread_ids_json, reply_ids_json)
 x_sessions(session_id TEXT PRIMARY KEY, account, mode, started_at, ended_at, status, detail,
   posts INTEGER, screens INTEGER)
-positives(id TEXT PRIMARY KEY, text, author_handle, source, added_at, embedding BLOB)
+positives(id TEXT PRIMARY KEY, text, author_handle, source, added_at)
 candidates(id TEXT PRIMARY KEY, kind /* x_post | watcher_event */, ref, title, url,
   score REAL, score_parts_json, state /* new|claimed|proposed|done|skipped|failed */,
   owner, lease_until, attempts INTEGER DEFAULT 0, created_at, updated_at, note)
 proposals(id TEXT PRIMARY KEY, candidate_ids_json, kind, title, why, evidence_json,
   prepared_json, final_step_kind /* NULL when none */, final_step, inputs_hash,
   state /* done|awaiting_approval|approved|skipped|later|expired|executed|outcome_unknown|failed */,
-  approval_token_hash, expires_at, notified_at, created_at, decided_at, result_json,
-  embedding BLOB NULL)
+  approval_token_hash, expires_at, notified_at, created_at, decided_at, result_json)
 ```
 
 ## Scoring and candidates
 
-- On ingest, the Worker embeds each new post with Workers AI (`@cf/baai/bge-base-en-v1.5`), using the post text, quoted text and link domains.
-- A post's score is the mean of its top-5 cosine similarities to `positives`, minus the mean of its top-5 similarities to skipped proposals, plus a small author prior (author saved before or approved before).
-- Every post Sam bookmarks becomes a candidate regardless of score, because a save is his explicit signal.
-- Other posts become candidates when they rank in the top 2% of a session or score at least 0.75. Unbookmarked candidates are capped at 15 a day.
-- Watcher rule matches become candidates of kind `watcher_event`. They no longer post to T3.
-- `POST /positives` (runner or admin) seeds positives from Sam's past saves, `{ "items": [{ "id", "text", "author_handle", "source" }] }`.
+Scoring runs in the runner, because cosine similarity over hundreds of saves would exceed the Worker's CPU limit. The Worker only creates candidates that need no score.
+
+- The Worker creates a candidate on ingest for every post first seen on the `bookmarks` surface, because a save is Sam's explicit signal. Watcher rule matches become candidates of kind `watcher_event` and no longer post to T3.
+- The runner pulls unscored posts and embeds them through `POST /embed`, using the post text, quoted text and link domains. It caches embeddings locally under `~/.discovery/cache/`.
+- A post's score is the mean of its top-5 cosine similarities to positives, minus the mean of its top-5 similarities to skipped proposals, plus a small author prior (author saved or approved before).
+- A post becomes a candidate when it ranks in the top 2% of its session or scores at least the threshold in the runner config (start at 0.75, measured on Sam's saves). Unbookmarked candidates are capped at 15 a day.
+- `POST /positives` (runner or admin) seeds positives from Sam's past saves, `{ "items": [{ "id", "text", "author_handle", "source" }] }`. `GET /positives` lists them.
 
 ## Runner endpoints
 
+- `POST /embed { texts: [up to 100] }` returns `{ vectors: [[768 floats]] }` from Workers AI `@cf/baai/bge-base-en-v1.5`.
+- `GET /x/posts?unscored=1&limit=200` returns normalized posts with `account`, `bookmarked` and latest `surface` and `session_id`.
+- `POST /x/posts/scores { scores: [{ id, score, parts }] }`
+- `POST /candidates { kind, ref, title, url, score, score_parts }` is idempotent on `(kind, ref)`.
 - `POST /candidates/claim { owner, ttl_s, limit }` returns leased candidates. An expired lease can be reclaimed. Completing with a stale owner returns 409.
 - `POST /candidates/:id/complete { owner, state, note }`
 - `GET /x/posts/:id/context` returns the post, its quoted post, the captured thread (`op_self_thread` and `replies` in server order, each a normalized post) and `thread_captured: true|false`.
