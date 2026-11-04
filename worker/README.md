@@ -14,8 +14,8 @@ Results and raw logs are in [EVIDENCE.md](EVIDENCE.md).
 
 ```sh
 npm install
-npm test                         # 21 tests against two real wrangler dev stacks and the fixture server, about 12 s
-python3 scripts/mutation-check.py # breaks the code 49 ways, one at a time; every break must fail a test, about 8 min
+npm test                         # 22 tests against two real wrangler dev stacks and the fixture server, about 12 s
+python3 scripts/mutation-check.py # breaks the code 53 ways, one at a time; every break must fail a test, about 8 min
 npm run evidence                 # live sources plus the fixture phases, about 2 min; writes evidence/<timestamp>/
 ```
 
@@ -105,10 +105,12 @@ Rules are case-insensitive JavaScript regexes tested against item titles or page
 
 **See what happened.** `GET /admin/log?since=`, `GET /admin/events?limit=50`, `GET /admin/watchers/<id>` (the watcher, its alarm, fetch log, events and jobs), and `GET /health`, which needs no token and returns the last cron run.
 
+**Synthetic checks.** Account `test` is reserved for them (contract 7d502f0). `GET /x/posts` lists only posts some other account has seen, with that account's latest sighting; ingest makes no candidates for account `test`; `POST /candidates` returns 422 for a ref starting `test-` and for a post only `test` has seen. Use ids starting `test-` anyway, and delete the rows afterward.
+
 **Remove synthetic X data.** Test ingests use account `test` and ids starting `test-`:
 
 ```sh
-npx wrangler d1 execute DB --remote --command "DELETE FROM candidates WHERE kind = 'x_post' AND ref LIKE 'test-%' AND state = 'new'; DELETE FROM x_sightings WHERE account = 'test'; DELETE FROM x_sessions WHERE account = 'test'; DELETE FROM x_posts WHERE id LIKE 'test-%';"
+npx wrangler d1 execute DB --remote --command "DELETE FROM proposals WHERE title LIKE 'test:%' AND candidate_ids_json LIKE '[\"test-%'; DELETE FROM candidates WHERE ref LIKE 'test-%'; DELETE FROM positives WHERE id LIKE 'test-%'; DELETE FROM x_sightings WHERE account = 'test' OR post_id LIKE 'test-%'; DELETE FROM x_threads WHERE account = 'test' OR root_id LIKE 'test-%'; DELETE FROM x_sessions WHERE account = 'test'; DELETE FROM x_ingest_batches WHERE account = 'test'; DELETE FROM x_posts WHERE id LIKE 'test-%';"
 ```
 
 ## Layout

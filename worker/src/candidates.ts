@@ -6,6 +6,7 @@
 
 import type { Env } from "./check";
 import { fail, HttpError, isStr, oneOf, optStr, str, utcDayStart } from "./http";
+import { TEST_ACCOUNT } from "./x";
 
 const KINDS = ["x_post", "watcher_event"] as const;
 const FINAL_STATES = ["proposed", "done", "skipped", "failed"] as const;
@@ -57,10 +58,19 @@ export async function createCandidate(env: Env, b: Record<string, unknown>): Pro
   const parts = b.score_parts === undefined ? null : JSON.stringify(b.score_parts);
   const now = Date.now();
 
+  // Synthetic data never becomes work (docs/CONTRACT.md, 7d502f0): refs
+  // starting "test-" are reserved, and so is any post only account "test"
+  // has seen, whatever its id.
+  if (ref.startsWith("test-")) throw new HttpError(422, `refs starting "test-" are reserved for synthetic checks`);
   let bookmarked = true;
   if (kind === "x_post") {
-    const post = await env.DB.prepare("SELECT bookmarked FROM x_posts WHERE id = ?").bind(ref).first<{ bookmarked: number }>();
+    const post = await env.DB.prepare(
+      `SELECT bookmarked, EXISTS (SELECT 1 FROM x_sightings WHERE post_id = ?1 AND account != ?2) AS real FROM x_posts WHERE id = ?1`,
+    )
+      .bind(ref, TEST_ACCOUNT)
+      .first<{ bookmarked: number; real: number }>();
     if (!post) throw new HttpError(404, `x_post candidate ref ${ref} is not an ingested post`);
+    if (!post.real) throw new HttpError(422, `post ${ref} was only seen by the reserved "${TEST_ACCOUNT}" account`);
     bookmarked = post.bookmarked === 1;
   }
   const capped = kind === "x_post" && !bookmarked;

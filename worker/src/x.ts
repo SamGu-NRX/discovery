@@ -11,6 +11,10 @@ import { fail, HttpError, intParam, isStr, oneOf, optStr, readJson, str } from "
 // docs/CONTRACT.md: at most 128 KB. A 245 KB ingest took 15 to 17 ms of CPU
 // on a cold request in production, over the Free plan's 10 ms.
 export const INGEST_MAX_BYTES = 128 * 1024;
+// docs/CONTRACT.md (7d502f0): account "test" is reserved for synthetic
+// checks. Its posts never reach the runner: GET /x/posts skips them and
+// ingest makes no candidates from them (see also createCandidate).
+export const TEST_ACCOUNT = "test";
 const PAUSE_MS = 24 * 3600 * 1000;
 const DETAIL_QUEUE_SIZE = 5;
 
@@ -163,7 +167,7 @@ export async function ingest(env: Env, req: Request) {
   // the first to record, and every later statement keeps only those batches.
   const requestId = crypto.randomUUID();
   const postList = [...posts.values()];
-  const bookmarkList = postList
+  const bookmarkList = (account === TEST_ACCOUNT ? [] : postList)
     .filter((p) => p.bookmark_batch_ids.length > 0)
     .map((p) => ({ id: p.id, b: p.bookmark_batch_ids, title: clip(`@${p.author_handle}: ${p.text.replace(/\s+/g, " ")}`, 140), url: `https://x.com/${p.author_handle}/status/${p.id}` }));
   const db = env.DB;
@@ -354,6 +358,12 @@ const WITH_LATEST_SIGHTING = `
   SELECT p.*, s.account, s.surface, s.session_id FROM x_posts p
   LEFT JOIN x_sightings s ON s.id = (SELECT max(id) FROM x_sightings WHERE post_id = p.id)`;
 
+// The runner's list: only posts some real account has seen, each with its
+// latest real sighting. The inner join drops posts seen only by "test".
+const WITH_LATEST_REAL_SIGHTING = `
+  SELECT p.*, s.account, s.surface, s.session_id FROM x_posts p
+  JOIN x_sightings s ON s.id = (SELECT max(id) FROM x_sightings WHERE post_id = p.id AND account != '${TEST_ACCOUNT}')`;
+
 // 500 rows took 11 ms of CPU in production on 2026-11-04, so a page is at
 // most 200, the contract's example size.
 export async function listPosts(env: Env, url: URL) {
@@ -362,8 +372,8 @@ export async function listPosts(env: Env, url: URL) {
   // Separate statements so the unscored read can use the partial index
   // x_posts_unscored instead of scanning every post.
   const sql = unscored
-    ? `${WITH_LATEST_SIGHTING} WHERE p.score IS NULL ORDER BY p.first_seen_at LIMIT ?1`
-    : `${WITH_LATEST_SIGHTING} ORDER BY p.first_seen_at DESC LIMIT ?1`;
+    ? `${WITH_LATEST_REAL_SIGHTING} WHERE p.score IS NULL ORDER BY p.first_seen_at LIMIT ?1`
+    : `${WITH_LATEST_REAL_SIGHTING} ORDER BY p.first_seen_at DESC LIMIT ?1`;
   const rows = await env.DB.prepare(sql).bind(limit).all<PostRow>();
   return { posts: rows.results.map(presentPost) };
 }

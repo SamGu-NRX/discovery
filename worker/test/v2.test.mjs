@@ -163,6 +163,29 @@ test("the ingest cap is 128 KB of bytes, counted while reading, even without a C
   assert.equal((await send(wrap("a".repeat(120_000)))).status, 200);
 });
 
+test("account test is synthetic: its posts never reach GET /x/posts or become candidates, and test- refs are refused", async () => {
+  // Ids without the test- prefix, so the account alone has to keep them out.
+  const r = await ingest("sess-syn", [batch("home_for_you", [post("syn-1"), post("syn-shared")]), batch("bookmarks", [post("syn-2")])], "test");
+  assert.equal(r.candidates_created, 0, "a bookmark from account test makes no candidate");
+  // A real account sees one of the same posts.
+  await ingest("sess-real", [batch("home_for_you", [post("syn-shared")])], "acct-real");
+  await ingest("sess-syn", [batch("home_for_you", [post("syn-shared")])], "test");
+
+  for (const path of ["/x/posts?unscored=1&limit=200", "/x/posts?limit=200"]) {
+    const ids = (await runner("GET", path)).posts.map((p) => p.id);
+    assert.ok(!ids.includes("syn-1") && !ids.includes("syn-2"), `${path} must not list posts only account test has seen`);
+    assert.ok(ids.includes("syn-shared"), `${path} still lists a post a real account has seen`);
+  }
+  const shared = (await runner("GET", "/x/posts?limit=200")).posts.find((p) => p.id === "syn-shared");
+  assert.equal(shared.account, "acct-real", "the listed sighting is the real account's, not test's later one");
+
+  const refuse = async (body) => (await s.call("POST", "/candidates", body, { raw: true, token: "runner" })).status;
+  assert.equal(await refuse({ kind: "watcher_event", ref: "test-anything", title: "t" }), 422);
+  assert.equal(await refuse({ kind: "x_post", ref: "syn-1", title: "t" }), 422, "a post only account test saw can't become a candidate");
+  assert.equal(await refuse({ kind: "x_post", ref: "syn-shared", title: "t" }), 201);
+  assert.ok(!(await xCandidates()).some((c) => c.ref === "syn-1" || c.ref === "syn-2"));
+});
+
 test("a captured thread leaves the detail queue and reads back in server order; a non-ok session pauses the account", async () => {
   await ingest("sess-d", [batch("bookmarks", [post("d-1")])], "acct-d");
   assert.deepEqual((await s.call("GET", "/x/detail-queue?account=acct-d", undefined, { token: "ingest" })).post_ids, ["d-1"]);

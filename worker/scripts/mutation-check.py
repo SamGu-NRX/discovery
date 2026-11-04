@@ -61,6 +61,11 @@ muts = [
   ['  if (p.state !== "awaiting_approval") throw new HttpError(409, `proposal ${id} is ${p.state}; only an unspent approval link can be rotated`);', "     WHERE id = ?1 AND state = 'awaiting_approval' AND expires_at > ?3 AND approval_token_hash = ?4"],
   ["", "     WHERE id = ?1 AND expires_at > ?3 AND approval_token_hash = ?4"]),
  ("M53 a root capture covers its replies", "src/x.ts", "`(t.root_id = ${postId} OR (t.root_id = ${conversationId} AND EXISTS (SELECT 1 FROM json_each(t.op_self_thread_ids_json) WHERE value = ${postId})))`", "`(t.root_id IN (${postId}, ${conversationId}))`"),
+ # contract 7d502f0: account test is synthetic
+ ("M54 GET /x/posts lists test posts", "src/x.ts", "FROM x_sightings WHERE post_id = p.id AND account != '${TEST_ACCOUNT}')`;", "FROM x_sightings WHERE post_id = p.id)`;"),
+ ("M55 test bookmarks become candidates", "src/x.ts", "(account === TEST_ACCOUNT ? [] : postList)", "(postList)"),
+ ("M56 test- refs accepted", "src/candidates.ts", 'if (ref.startsWith("test-")) throw', "if (false) throw"),
+ ("M57 test-only posts accepted as candidates", "src/candidates.ts", "if (!post.real) throw", "if (false) throw"),
  ("M37 malformed prepared URL breaks the card", "src/proposals.ts", "  } catch {\n    return null;\n  }\n}\n\nfunction preparedItem", "  } finally {\n  }\n}\n\nfunction preparedItem"),
 ]
 for name, path, old, new in muts:
