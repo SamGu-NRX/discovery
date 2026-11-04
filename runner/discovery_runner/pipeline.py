@@ -23,6 +23,7 @@ from .scoring import EmbeddingCache, cos
 from .worker import LeaseLost, WorkerError, WorkerUnavailable, new_client_id, submit_proposal
 
 ACTIONABLE = set(prompts.ACTION_TYPES) - {"no_action", "reference_note"}
+PREP_RESERVE = 2  # daily codex preps only applications may use
 
 
 # The lease owner. Random per process start, because hostname+PID collides when a restarted runner gets a
@@ -270,6 +271,17 @@ class Runner:
 
         prep_spec = prop.get("prep") or {}
         needs_tools = bool(prep_spec.get("needs_tools"))
+        is_app = prop.get("kind") == "apply_or_attend" or bool(prop.get("application"))
+        value = int(prop.get("value") or 0)
+        if needs_tools and not is_app:
+            # Round 4 spent the whole prep budget on optional tool trials and left four application postings with
+            # no outcome. Applications may use every prep; other work stops PREP_RESERVE short of the limit and
+            # needs a value of 3 or more.
+            if value < 3:
+                return self.complete(cand, "skipped", f"value {value}/5 is below the bar for tool prep: "
+                                                      f"{prop.get('value_reason')}", run)
+            if config.used("codex_preps") >= cfg["codex_preps_per_day"] - PREP_RESERVE:
+                return self.complete(cand, "new", f"prep budget is reserved for applications today", run)
         if not (prop.get("application") or (prop.get("draft") or {}).get("text") or needs_tools):
             if not prep_spec.get("task"):
                 return self.complete(cand, "skipped", "nothing to prepare: the deep read named no deliverable", run)
@@ -303,7 +315,16 @@ class Runner:
                 if prep.get("verdict") != "ready" or not made["verified"]:
                     rework = (f"Prep was {prep.get('verdict')}: {prep.get('summary')}. Missing deliverables: "
                               f"{made['missing']}. Fix the cause (see codex.log and PREP.md) and finish.")
-                    continue
+                    partial = made["verified"]
+                    if attempt == 0 and (is_app or value >= 4):
+                        continue
+                    if not partial and not items:
+                        continue
+                    # Verified parts of blocked work still reach Sam, with the gap named (round 4 hid a nearly
+                    # finished application package and a working site fallback behind a blocked step).
+                    made_items = partial
+                    prop["why"] = (prop.get("why") or "") + f" Not finished: {prep.get('summary')}"
+                    prop["final_step_kind"] = prop.get("final_step_kind") if is_app else None
                 made_items = made["verified"]
                 for k in ("approval_line", "final_step_kind", "final_step"):
                     if k in prep and (prep[k] or k != "approval_line"):
@@ -317,7 +338,7 @@ class Runner:
                 items += made_items
                 break
             rework = f"Independent review said maybe: {verdict.get('reason')}. Edits asked for: {verdict.get('fixes')}"
-            if not needs_tools:
+            if not needs_tools or not (is_app or value >= 4):
                 break
         else:
             verdict = verdict if made_items else None
@@ -326,15 +347,13 @@ class Runner:
                 return self.complete(cand, "new", "prep hit a gateway or network failure; retry later", run)
             return self.complete(cand, "skipped", f"not finished after rework: {rework}"[:1900], run)
         if verdict["verdict"] == "maybe":
-            # Finished, verified work the reviewer still calls "maybe" is recorded (no ask) with the concern in
-            # front of Sam. Round 3 dropped a finished security audit (firewall off, outdated macOS) this way.
             items += made_items
-            prop["final_step_kind"] = None
             prop["why"] = (prop.get("why") or "") + f" Reviewer's concern: {verdict.get('reason')}"
         if run.get("snapshot") and any(i["type"] == "branch" or "/patches/" in i["ref"] for i in items) \
-                and prop.get("final_step_kind") not in ("push", "open_pr") and verdict["verdict"] == "approve":
-            # A change to Sam's repo ends in a PR from his checkout; asking him to approve a reversible local
-            # step, or calling it done in a scratch clone, left round 3's patches stranded.
+                and prop.get("final_step_kind") not in ("push", "open_pr"):
+            # A change to Sam's repo ends in a PR from his checkout, whatever the review said: the card carries
+            # the concern, and the Worker's 3-a-day notification cap keeps asks rare. Round 4 left a pushable
+            # branch and a publish script marked "none".
             prop["final_step_kind"] = "open_pr"
             prop["final_step"] = (f"Apply the prepared patches to {run['snapshot']['repo']} on a new branch and open "
                                   f"a PR")

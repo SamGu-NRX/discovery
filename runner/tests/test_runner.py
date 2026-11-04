@@ -368,16 +368,15 @@ class EndToEnd(Home):
         self.assertEqual(models["You deep-read"], "gpt-6.1-sol")
         self.assertEqual(models["independent"], "gpt-6-astra")
 
-    def test_finished_work_rated_maybe_is_recorded_without_asking(self):
-        # fails if finished work the review rates "maybe" is dropped (round 3 lost a finished security audit) or
-        # asks Sam anyway (asks are for work the review approves), or loses the reviewer's concern
+    def test_finished_work_rated_maybe_reaches_sam_with_the_concern(self):
+        # fails if finished work the review rates "maybe" is dropped (round 3 lost a finished security audit),
+        # loses its final step (round 4 left a pushable branch marked "none"), or loses the reviewer's concern
         r = self.runner({"You triage": TRIAGE_TRY, "You deep-read": deep_read("~/x"),
                          "independent": {"verdict": "maybe", "busywork": False, "reason": "needs a real baseline"}})
         self.captured_post()
         r.work()
         (p,) = self.mock.state.proposals.values()
-        self.assertIsNone(p["final_step_kind"])
-        self.assertEqual(p["state"], "done")
+        self.assertEqual(p["final_step_kind"], "open_pr")
         self.assertIn("needs a real baseline", p["why"])
 
     def test_plan_without_deliverable_is_never_posted(self):

@@ -92,6 +92,10 @@ tool, a repo, a measurement, a render or a machine check. `deliverables` are the
 it must produce (a patch on a branch with its test output, a rendered file, a report with measured numbers).
 For reach_out, put the message in `draft` (Sam's voice: plain, short, specific) instead.
 
+If deciding depends on a number that exists on his machine (token and cache counts in his agent transcripts,
+past eval grades, a config value, an installed version), do not decline for lack of evidence: make the
+measurement the prep task and let the result decide.
+
 Decline (decline=true) when nothing is worth doing. Declining is a good outcome; a weak proposal wastes his
 attention.
 
@@ -163,6 +167,10 @@ Hard rules:
   committed on top as "WIP snapshot". Work there on a new branch named discovery/<short-topic>, commit, and
   also export your commits with `git format-patch` into ./patches/ so Sam can apply them to his checkout.
   Otherwise clone other repositories into ./src/ (shallow). Keep this folder under 150 MB.
+- When you reproduce a defect in Sam's code, fix it on your branch with a test asserting the correct
+  behavior. Never commit a test that asserts the buggy output.
+- `final_step` names the one action an executor performs after Sam approves (push this branch, open this PR,
+  submit this form). Never write "Sam runs <script>".
 - When a command fails for an environment reason (an import path, a missing dependency, a loader or config
   error, an optional tool that is unavailable), fix it within this folder and retry, up to 3 times, and
   record each attempt in prepared.json `checks`. Stop only for the hard rules above. A missing optional tool
