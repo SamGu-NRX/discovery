@@ -1000,3 +1000,28 @@ test("a session reports under the account it reserved, and stops if X shows anot
     await chrome.storage.local.set({ lastAccount: "owner" });
   }
 });
+
+// Found in an install-readiness review of 017f38a.
+
+test("a session started while a passive 429's pause is still being written reserves nothing and opens nothing", async () => {
+  await reset();
+  const pausing = hold(chrome.storage.local, "set", (values) => "pauseUntil" in values);
+  const signal = fromTab(500, { type: "x-status", operation: "HomeTimeline", status: 429 });
+  await pausing.entered;
+  const started = await session.startSession("alarm");
+  pausing.release();
+  await signal;
+  assert.equal(started.started, false);
+  assert.ok(!log.some((entry) => entry === "reserve" || entry.startsWith("open:")), log.join(" "));
+});
+
+test("a login wall detect.js finds in one of Sam's own tabs pauses sessions and is reported once", async () => {
+  await reset();
+  const blocker = { type: "x-blocker", blocker: "login_wall", evidence: "path /i/flow/login", path: "/i/flow/login" };
+  await fromTab(500, blocker);
+  await fromTab(501, blocker);
+  assert.ok(Date.parse(fake.local.get("pauseUntil")) > Date.now());
+  assert.equal(log.filter((entry) => /^status:.+:login_wall$/.test(entry)).length, 1, log.join(" "));
+  const started = await session.startSession("alarm");
+  assert.equal(started.started, false);
+});

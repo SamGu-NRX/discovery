@@ -94,6 +94,8 @@ async function handle(message, sender) {
       });
     case "x-status":
       return fromXTab ? handleXStatus(message, sender.tab.id) : { error: "statuses come from x.com tabs" };
+    case "x-blocker":
+      return fromXTab ? handleXBlocker(message, sender.tab.id) : { error: "blockers come from x.com tabs" };
     case "runSession":
       return fromExtensionPage ? startSession("manual") : { error: "only the popup starts sessions" };
     case "stopSession":
@@ -181,6 +183,16 @@ async function handleXStatus(message, tabId) {
   // answers GraphQL with 401 in a working logged-in tab; if it does, the cost
   // is a 24-hour pause, never a session running past a login wall.
   else if (status === 401) await onBackOff(tabId, "login_wall", `${operation} answered HTTP 401`);
+  return { ok: true };
+}
+
+// A login wall, challenge or rate-limit page detect.js found in any X tab,
+// Sam's own included: the same back-off as a 429.
+async function handleXBlocker(message, tabId) {
+  const reason = message.blocker;
+  if (!["login_wall", "challenge", "rate_limited"].includes(reason)) return { ignored: true };
+  const detail = `${String(message.evidence).slice(0, 120)} at ${String(message.path).slice(0, 120)}`;
+  await onBackOff(tabId, reason, detail);
   return { ok: true };
 }
 

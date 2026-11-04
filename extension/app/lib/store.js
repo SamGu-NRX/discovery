@@ -86,11 +86,23 @@ export async function getPauseUntil() {
 // happens next.
 const PAUSE_MS = 24 * 3600_000;
 const pauseLock = createLock();
+// Pause writes started but not yet stored. A call counts from the moment it
+// is made, before any await, so a signal handled in this worker is visible to
+// pausedOrPausing() even while its write is still in flight.
+let pausesInFlight = 0;
 export function extendPause(until = new Date(Date.now() + PAUSE_MS).toISOString()) {
+  pausesInFlight += 1;
   return pauseLock(async () => {
     const existing = await getPauseUntil();
     if (!existing || Date.parse(existing) < Date.parse(until)) await setLocal({ pauseUntil: until });
+  }).finally(() => {
+    pausesInFlight -= 1;
   });
+}
+
+// True while sessions are paused or a pause is being written.
+export async function pausedOrPausing() {
+  return pausesInFlight > 0 || Boolean(await getPauseUntil());
 }
 
 // Per-page capture state (feed offsets, permalink threads), kept in

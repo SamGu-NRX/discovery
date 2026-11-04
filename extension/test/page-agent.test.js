@@ -7,6 +7,7 @@ import { after, before, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 
+const DETECT = fileURLToPath(new URL("../app/content/detect.js", import.meta.url));
 const AGENT = fileURLToPath(new URL("../app/content/page-agent.js", import.meta.url));
 
 let browser;
@@ -17,6 +18,8 @@ before(async () => {
   page = await browser.newPage();
   await page.route("https://x.com/**", (route) => route.fulfill({ contentType: "text/html", body: "<!doctype html><body></body>" }));
   await page.goto("https://x.com/home");
+  // The session injects detect.js, then the agent.
+  await page.addScriptTag({ path: DETECT });
   await page.addScriptTag({ path: AGENT });
 });
 

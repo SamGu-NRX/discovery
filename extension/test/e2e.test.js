@@ -218,6 +218,29 @@ test("two starts at once run one session", async () => {
   await popup.close();
 });
 
+// Found in an install-readiness review of 017f38a: the login page answers
+// 200, so only the page itself shows the wall.
+test("a login page in one of Sam's own tabs pauses sessions and is reported, without touching the page", async () => {
+  await configure({ mode: "active", account: "fixtureuser" });
+  await worker.evaluate(() => chrome.storage.local.remove(["backOffReportedUntil", "pendingBackOff"]));
+  const startedAt = mock.requests.length;
+  const page = await context.newPage();
+  await page.goto("https://x.com/i/flow/login");
+  const report = await mock.waitFor((r) => r.path === "/ingest/x/status" && r.body.status === "login_wall", { after: startedAt });
+  assert.match(report.body.detail, /\/i\/flow\/login/);
+  const pauseUntil = await worker.evaluate(async () => (await chrome.storage.local.get("pauseUntil")).pauseUntil);
+  assert.ok(Date.parse(pauseUntil) > Date.now());
+
+  const popup = await context.newPage();
+  await popup.goto(`chrome-extension://${extensionId}/popup/popup.html`);
+  const reply = await popup.evaluate(() => chrome.runtime.sendMessage({ type: "runSession" }));
+  assert.equal(reply.started, false);
+  assert.ok(!mock.requests.slice(startedAt).some((r) => r.path === "/x/sessions/start"));
+  assert.deepEqual(site.clicks, []);
+  await popup.close();
+  await page.close();
+});
+
 async function startFakeX(dir) {
   const key = join(dir, "key.pem");
   const cert = join(dir, "cert.pem");

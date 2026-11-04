@@ -17,7 +17,7 @@
     },
     {
       "matches": ["https://x.com/*"],
-      "js": ["content/bridge.js"],
+      "js": ["content/detect.js", "content/bridge.js"],
       "run_at": "document_start"
     }
   ],

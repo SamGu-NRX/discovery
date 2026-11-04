@@ -7,7 +7,7 @@
 
 import { flush } from "./outbox.js";
 import { scheduleNext } from "./schedule.js";
-import { extendPause, getLocal, getPauseUntil, loadConfig, recordProblem, setLocal } from "./store.js";
+import { extendPause, getLocal, getPauseUntil, loadConfig, pausedOrPausing, recordProblem, setLocal } from "./store.js";
 import { getDetailQueue, pauseFrom, postStatus, reserveSession } from "./worker-api.js";
 import { bookmarksUrl, historyBookmarksUrl, homeUrl, isMintedXUrl, permalinkUrl, xPath } from "./xurl.js";
 
@@ -175,7 +175,12 @@ export async function startSession(trigger) {
   // lost its own state. Anything but 200 means no session, a 404 from a
   // Worker that does not offer the guard yet included. A refused session
   // never reserved anything, so it reports no status; its record goes.
-  const reservation = await reserveSession(s.config, { account: s.reservedAccount, session_id: s.id });
+  // A back-off signal handled just before this session began may still be
+  // writing its pause; it counts as a pause here, before and after reserving.
+  // (One handled after the session began reached it through requestStop.)
+  const reservation = (await pausedOrPausing())
+    ? { ok: false, reason: "Sessions were just paused.", pauseUntil: null }
+    : await reserveSession(s.config, { account: s.reservedAccount, session_id: s.id });
   if (!reservation.ok) {
     s.finishing = true;
     s.statusDecided = true;
@@ -186,6 +191,12 @@ export async function startSession(trigger) {
       if (current === s) current = null;
     }
     return { started: false, reason: reservation.reason };
+  }
+  // Reserved: from here a pause stops the session before its window opens,
+  // and its status closes the reservation.
+  if (!s.stop && (await pausedOrPausing())) {
+    s.stop = { reason: "paused", detail: "sessions were paused while this session was being reserved" };
+    await publish(s);
   }
   run(s);
   return { started: true, id: s.id };
@@ -493,7 +504,7 @@ async function agent(s, name, arg) {
   if (name === "inspect") await currentPath(s);
   else await onExpectedPage(s);
   const target = { tabId: s.tabId };
-  await chrome.scripting.executeScript({ target, files: ["content/page-agent.js"] });
+  await chrome.scripting.executeScript({ target, files: ["content/detect.js", "content/page-agent.js"] });
   const [injection] = await chrome.scripting.executeScript({
     target,
     func: (command) => {

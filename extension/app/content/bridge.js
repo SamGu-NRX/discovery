@@ -1,7 +1,8 @@
 // Isolated world, document_start on x.com. Receives captured responses from
 // hook.js over the private channel described there and forwards them to the
-// service worker. It only reads the page (the logged-in handle from the side
-// nav) and never touches X otherwise.
+// service worker. It also reports when detect.js finds a login wall, a
+// challenge or a rate limit on the page, so one in Sam's own tab pauses
+// sessions too. It only reads the page and never touches X otherwise.
 
 (() => {
   const HELLO = "dx-capture-hello";
@@ -32,6 +33,28 @@
     handle = m ? m[1] : null;
     return handle;
   };
+
+  // X is a single-page app, so the page is checked shortly after each URL
+  // change (and the first load), once the new view has rendered. Each
+  // blocker is reported once per path.
+  const reportedBlockers = new Set();
+  const checkForBlocker = () => {
+    const seen = globalThis.__dxDetect?.inspect();
+    if (!seen || !["login_wall", "challenge", "rate_limited"].includes(seen.blocker)) return;
+    const key = `${seen.blocker}|${seen.path}`;
+    if (reportedBlockers.has(key)) return;
+    reportedBlockers.add(key);
+    chrome.runtime
+      .sendMessage({ type: "x-blocker", blocker: seen.blocker, evidence: seen.evidence, path: seen.path })
+      .catch(() => {});
+  };
+  let lastHref = null;
+  setInterval(() => {
+    if (location.href === lastHref) return;
+    lastHref = location.href;
+    setTimeout(checkForBlocker, 1500);
+    setTimeout(checkForBlocker, 5000);
+  }, 1000);
 
   // One message in flight at a time keeps captures in the order X sent them,
   // which the service worker relies on for positions and thread pages.
