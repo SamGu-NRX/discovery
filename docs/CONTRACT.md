@@ -74,7 +74,9 @@ Request body, at most 128 KB. The extension splits larger captures. In productio
 
 `thread` appears only on TweetDetail batches. `batch_id` is the idempotency key. The Worker records it with a uniqueness constraint in the same D1 batch as the writes, and a repeated `batch_id` writes no sightings and leaves counters unchanged, so retries and lost responses are safe. The Worker upserts posts, always overwriting `metrics` with the latest values, and writes one sighting row per post per batch. A post first seen on the `bookmarks` surface sets `bookmarked = 1`.
 
-The response is `{ "posts_upserted", "sightings", "new_posts", "candidates_created" }`.
+The response is `{ "posts_upserted", "sightings", "new_posts", "candidates_created", "duplicate_batch_ids" }`.
+
+Account `test` is reserved for synthetic checks. The Worker never lists its posts in `GET /x/posts`, never creates candidates from them, and refuses `POST /candidates` for refs starting with `test-`. Clean up test rows after each check.
 
 `POST /ingest/x/status` takes `{ "account", "session_id", "status": "ok | login_wall | rate_limited | challenge | error", "detail" }`. For any status other than `ok`, `GET /x/detail-queue` returns `{ "pause_until": "<ISO time 24 h later>" }` and extension sessions stop until then.
 
