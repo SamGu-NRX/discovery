@@ -2,9 +2,9 @@
 // them, so a closed browser or an offline Worker loses nothing. Each capture
 // is stored as its pieces (batch.js), each with its own batch_id. A piece
 // leaves the outbox as soon as the body carrying it gets a 2xx, or the Worker
-// rejects that body as malformed (4xx other than auth, timeout and 429), so an
-// accepted piece is never sent again. A piece whose request failed or got no
-// answer is retried with the same batch_id, which the Worker deduplicates.
+// rejects that body as malformed (400, 413, 422). A piece whose request
+// failed or got no answer is retried with the same batch_id, which the
+// Worker deduplicates.
 
 import { packPieces, splitCapture } from "./batch.js";
 import { WorkerError, postIngest } from "./worker-api.js";
@@ -25,8 +25,12 @@ const encoder = new TextEncoder();
 // Stored with each entry so the budget check does not re-encode the outbox.
 const sizeOf = (entry) => encoder.encode(JSON.stringify(entry)).length + 32;
 
+// Returns false, storing nothing, when capture is Off by the time the write
+// happens; the mode is read under the outbox lock, after every earlier await
+// in the capture's path.
 export function enqueue({ account, session_id, mode, batch }) {
   return serial(async () => {
+    if ((await loadConfig()).mode === "off") return false;
     const { pieces, dropped } = splitCapture(crypto.randomUUID(), batch);
     if (dropped.length) {
       await recordProblem("batch", `dropped ${dropped.length} item(s) larger than one request: ${dropped.slice(0, 3).join(", ")}`);
@@ -39,25 +43,37 @@ export function enqueue({ account, session_id, mode, batch }) {
     }
     let total = outbox.reduce((sum, entry) => sum + entry.bytes, 0);
     let overflow = 0;
-    while (total > OUTBOX_BUDGET_BYTES && outbox.length > pieces.length) {
+    // Oldest first, the new capture's own early pieces included if it alone
+    // is over budget.
+    while (total > OUTBOX_BUDGET_BYTES && outbox.length > 1) {
       total -= outbox.shift().bytes;
       overflow += 1;
     }
     if (overflow) await recordProblem("outbox", `outbox full: dropped the ${overflow} oldest piece(s) not yet sent`);
     await storeOutbox(outbox);
+    return true;
   });
 }
 
 // The budget leaves room for everything else, but if Chrome still refuses
-// the write (other keys grew), the older half of the outbox goes, once,
-// rather than losing the new capture and every later one.
+// the write (other keys grew), the older half of the outbox goes, then half
+// again, rather than losing the new capture and every later one. The problem
+// is recorded only after space is freed, since recording it needs space too.
 async function storeOutbox(outbox) {
-  try {
-    await setLocal({ outbox });
-  } catch (err) {
-    const drop = Math.ceil(outbox.length / 2);
-    await recordProblem("outbox", `storage refused the outbox (${err.message}); dropped the ${drop} oldest piece(s)`);
-    await setLocal({ outbox: outbox.slice(drop) });
+  let kept = outbox;
+  let failure = null;
+  for (;;) {
+    try {
+      await setLocal({ outbox: kept });
+      break;
+    } catch (err) {
+      if (kept.length <= 1) throw err;
+      failure ??= err;
+      kept = kept.slice(Math.ceil(kept.length / 2));
+    }
+  }
+  if (failure) {
+    await recordProblem("outbox", `storage refused the outbox (${failure.message}); dropped the ${outbox.length - kept.length} oldest piece(s)`).catch(() => {});
   }
 }
 
@@ -84,20 +100,27 @@ export function flush() {
         continue;
       }
       for (const { body, pieceIndexes } of bodies) {
+        let accepted = false;
         try {
           await postIngest(config, body);
-          await afterAccepted(body);
+          accepted = true;
         } catch (err) {
           const status = err instanceof WorkerError ? err.status : 0;
-          const permanent = status >= 400 && status < 500 && ![401, 403, 408, 429].includes(status);
+          // Malformed (400), too large (413) or unprocessable (422) cannot
+          // succeed on resend; every other failure, a 404 from a mistyped or
+          // redeploying Worker included, is retried.
+          const permanent = [400, 413, 422].includes(status);
           await recordProblem("worker", permanent ? `dropped pieces the Worker rejected: ${err.message}` : err.message);
           if (!permanent) return;
         }
-        // Settled pieces leave storage before the next request, so a service
-        // worker stopped mid-flush does not send them again.
+        // Settled pieces leave storage first, before any other bookkeeping,
+        // so the window in which a stopped service worker would resend them
+        // is this one write. A resend inside it is harmless: the Worker
+        // ignores a batch_id it has already applied.
         const settled = new Set(pieceIndexes.map((i) => entries[i]));
         outbox = outbox.filter((entry) => !settled.has(entry));
         await setLocal({ outbox });
+        if (accepted) await afterAccepted(body);
       }
     }
   });

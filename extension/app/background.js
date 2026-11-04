@@ -127,7 +127,7 @@ async function handleCapture(message, tabId) {
   if (!result) return { ignored: true };
   if (result.threadError) await recordProblem("parse", result.threadError);
 
-  if (result.rateLimited) await onRateLimited(tabId, `${operation} returned X error 88 (rate limit)`);
+  if (result.rateLimited) await onBackOff(tabId, "rate_limited", `${operation} returned X error 88 (rate limit)`);
   if (!result.batch) return { posts: 0 };
 
   const handle = typeof message.account === "string" && /^[A-Za-z0-9_]{1,15}$/.test(message.account) ? message.account : null;
@@ -139,13 +139,14 @@ async function handleCapture(message, tabId) {
   }
 
   const postIds = result.batch.posts.map((p) => p.id);
-  if (session) noteSessionCapture(session.id, { operation, postIds });
-  await enqueue({
+  const queued = await enqueue({
     account,
     session_id: session ? session.id : await passiveSessionId(),
     mode: inSession ? "active" : "passive",
     batch: result.batch,
   });
+  if (!queued) return { ignored: true };
+  if (session) noteSessionCapture(session.id, { operation, postIds });
   scheduleFlush();
   return { posts: postIds.length };
 }
@@ -153,18 +154,21 @@ async function handleCapture(message, tabId) {
 async function handleXStatus(message, tabId) {
   const status = Number(message.status);
   const operation = String(message.operation).slice(0, 60);
-  if (status === 429) await onRateLimited(tabId, `${operation} answered HTTP 429`);
-  else if (status === 401 && tabId === sessionTabId()) requestStop("login_wall", `${operation} answered HTTP 401`);
+  if (status === 429) await onBackOff(tabId, "rate_limited", `${operation} answered HTTP 429`);
+  // X answers 401 to some requests in a logged-in tab, so only the session's
+  // own tab counts it as a login wall.
+  else if (status === 401 && tabId === sessionTabId()) await onBackOff(tabId, "login_wall", `${operation} answered HTTP 401`);
   return { ok: true };
 }
 
-// X throttles the account, not the tab: any rate limit stops a running
-// session. One the session will not report (seen while Sam browses, or too
-// late in a session's teardown) is reported once under the passive session
-// and holds sessions off for the Worker's pause.
-async function onRateLimited(tabId, detail) {
+// X throttles the account, not the tab: a back-off signal stops a running
+// session wherever it was seen, including one still opening its window or
+// one restart recovery is reporting. A signal no session will report (seen
+// while Sam browses, or after a session reported its status) is reported
+// once under the passive session and holds sessions off for the pause.
+async function onBackOff(tabId, reason, detail) {
   const fromSession = tabId === sessionTabId();
-  const accepted = sessionTabId() !== null && requestStop("rate_limited", fromSession ? detail : `${detail} in another tab`);
+  const accepted = requestStop(reason, fromSession ? detail : `${detail} in another tab`);
   if (fromSession && accepted) return;
   await recordProblem("x", detail);
   if (await getPauseUntil()) return;
@@ -172,7 +176,7 @@ async function onRateLimited(tabId, detail) {
   const config = await loadConfig();
   const account = (await getLocal("lastAccount", null)) ?? config.account;
   if (account) {
-    await postStatus(config, { account, session_id: await passiveSessionId(), status: "rate_limited", detail })
+    await postStatus(config, { account, session_id: await passiveSessionId(), status: reason, detail })
       .catch((err) => recordProblem("worker", err.message));
   }
 }

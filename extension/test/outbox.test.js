@@ -94,3 +94,76 @@ test("when other state crowds the quota, a refused outbox write drops older piec
   assert.match(lastProblem.message, /storage refused the outbox/);
   await chrome.storage.local.remove("crowding");
 });
+
+// Found in a correctness review of dd9581d.
+
+// Each of these tests starts from an empty outbox with the Worker configured.
+async function freshStore() {
+  await chrome.storage.local.remove(["outbox", "lastProblem", "lastSession", "crowding", "stats"]);
+  await chrome.storage.local.set({ config: { workerUrl: worker.url, ingestToken: "t", mode: "passive" } });
+}
+
+const capture = (prefix, count, textBytes) => ({
+  account: "a",
+  session_id: "s",
+  mode: "passive",
+  batch: { op: "HomeTimeline", surface: "home_for_you", posts: Array.from({ length: count }, (_, i) => post(`${prefix}${i}`, textBytes)) },
+});
+
+test("one capture larger than the outbox budget keeps only its newest pieces within 7 MiB", async () => {
+  await freshStore();
+  await enqueue(capture("big", 80, 100_000));
+  const { outbox } = await chrome.storage.local.get("outbox");
+  assert.ok(JSON.stringify(outbox).length <= 7 * 1024 * 1024, `${JSON.stringify(outbox).length} bytes`);
+  assert.equal(outbox.at(-1).piece.posts.at(-1).id, "big79");
+});
+
+test("an accepted piece is out of storage before any other bookkeeping runs", async () => {
+  await freshStore();
+  await enqueue(capture("k", 1, 100));
+  // Hold the first write after acceptance that is not the outbox itself.
+  const entered = deferredLocal();
+  const set = chrome.storage.local.set;
+  chrome.storage.local.set = async (values) => {
+    if (!("outbox" in values) && !("lastProblem" in values)) {
+      chrome.storage.local.set = set;
+      entered.resolve((await chrome.storage.local.get("outbox")).outbox);
+    }
+    return set(values);
+  };
+  await flush();
+  assert.deepEqual(await entered.promise, []);
+});
+
+test("when storage is completely full, the outbox frees space before recording why, and keeps the new capture", async () => {
+  await freshStore();
+  await enqueue(capture("old", 1, 5000));
+  const used = await chrome.storage.local.getBytesInUse();
+  // The key's length plus the value's JSON, quotes included.
+  await chrome.storage.local.set({ crowding: "x".repeat(LOCAL_QUOTA_BYTES - used - "crowding".length - 2) });
+  assert.equal(await chrome.storage.local.getBytesInUse(), LOCAL_QUOTA_BYTES);
+
+  await enqueue(capture("new", 1, 1000));
+  const { outbox } = await chrome.storage.local.get("outbox");
+  assert.deepEqual(outbox.map((e) => e.piece.posts[0].id), ["new0"]);
+  await chrome.storage.local.remove("crowding");
+});
+
+test("a piece the Worker answers with 404 is kept and retried under the same batch_id", async () => {
+  await freshStore();
+  const before = worker.requests.length;
+  await enqueue(capture("r", 1, 100));
+  statuses.push(404);
+  await flush();
+  await flush();
+  const sent = worker.requests.slice(before).map((r) => r.body.batches[0].batch_id);
+  assert.equal(sent.length, 2);
+  assert.equal(sent[0], sent[1]);
+  assert.deepEqual((await chrome.storage.local.get("outbox")).outbox, []);
+});
+
+function deferredLocal() {
+  let resolve;
+  const promise = new Promise((r) => (resolve = r));
+  return { promise, resolve };
+}

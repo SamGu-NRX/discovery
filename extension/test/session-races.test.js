@@ -72,12 +72,17 @@ chrome.scripting = {
     return [{ result: { ok: { scrolled: true, atBottom: false } } }];
   },
 };
+// Status reports fail with 503 while this is set.
+let statusDown = false;
+const ingests = [];
 globalThis.fetch = async (url, init) => {
   const path = new URL(url).pathname;
   if (path === "/ingest/x/status") {
     const body = JSON.parse(init.body);
     log.push(`status:${body.session_id}:${body.status}`);
+    if (statusDown) return new Response("{}", { status: 503 });
   }
+  if (path === "/ingest/x") ingests.push(JSON.parse(init.body));
   if (path === "/x/detail-queue") return new Response(JSON.stringify({ post_ids: [], pause_until: null }));
   return new Response("{}");
 };
@@ -123,6 +128,8 @@ async function reset() {
   fake.local.delete("outbox");
   fake.session.clear();
   log.length = 0;
+  ingests.length = 0;
+  statusDown = false;
   ended = deferred();
 }
 
@@ -371,4 +378,167 @@ test("a 429 during teardown survives a service worker restart before teardown en
   release.resolve();
   await untilIdle();
   assert.equal(recovered.status, "rate_limited");
+});
+
+// Found in a correctness review of dd9581d.
+
+// Holds the next call of obj[name] whose arguments satisfy `when` until
+// released; later calls run normally.
+function hold(obj, name, when = () => true) {
+  const entered = deferred();
+  const gate = deferred();
+  const original = obj[name];
+  obj[name] = async (...args) => {
+    if (!when(...args)) return original.apply(obj, args);
+    obj[name] = original;
+    entered.resolve();
+    await gate.promise;
+    return original.apply(obj, args);
+  };
+  return { entered: entered.promise, release: gate.resolve };
+}
+
+const switchOff = async () => {
+  const off = { ...CONFIG, mode: "off" };
+  await chrome.storage.local.set({ config: off });
+  chrome.storage.onChanged.fire({ config: { oldValue: CONFIG, newValue: off } }, "local");
+};
+
+for (const [status, expected] of [[429, "rate_limited"], [401, "login_wall"]]) {
+  test(`a ${status} from the session tab while teardown sends its last captures is reported as ${expected}, and recorded`, async () => {
+    await reset();
+    await session.startSession("manual");
+    const tabId = session.sessionTabId();
+    const flushing = hold(chrome.storage.local, "get", (key) => key === "outbox");
+    session.requestStop("stopped_by_user", "Sam pressed Stop");
+    await flushing.entered;
+    await fromTab(tabId, { type: "x-status", operation: "HomeTimeline", status });
+    const recorded = structuredClone(fake.session.get("activeSession"));
+    flushing.release();
+    const report = await ended.promise;
+    await untilIdle();
+    assert.equal(recorded.outcome.reason, expected);
+    assert.equal(report.status, expected);
+  });
+}
+
+test("a 429 while the session window is still opening stops that session as rate_limited", async () => {
+  await reset();
+  const opening = hold(chrome.windows, "create");
+  await session.startSession("manual");
+  await opening.entered;
+  await fromTab(500, { type: "x-status", operation: "HomeTimeline", status: 429 });
+  opening.release();
+  const report = await ended.promise;
+  await untilIdle();
+  assert.equal(report.status, "rate_limited");
+});
+
+test("a 429 while restart recovery closes the old window is part of the recovered report", async () => {
+  await reset();
+  await chrome.storage.session.set({
+    activeSession: { id: "old", windowId: 7, account: "owner", stop: { reason: "stopped_by_user", detail: "Stop" }, completed: false },
+  });
+  const closing = hold(chrome.windows, "remove");
+  const recovering = session.recoverInterruptedSession();
+  await closing.entered;
+  await fromTab(101, { type: "x-status", operation: "HomeTimeline", status: 429 });
+  closing.release();
+  await recovering;
+  assert.ok(log.includes("status:old:rate_limited"), log.join(" "));
+});
+
+test("a capture still being parsed when capture turns Off is not queued or sent", async () => {
+  await reset();
+  await session.startSession("manual");
+  const tabId = session.sessionTabId();
+  const parsing = hold(chrome.storage.session, "get", (key) => key === "pages");
+  const reply = fromTab(tabId, capture());
+  await parsing.entered;
+  await switchOff();
+  await ended.promise;
+  await untilIdle();
+  parsing.release();
+  assert.equal((await reply).ignored, true);
+  const { flush } = await import("../app/lib/outbox.js");
+  await flush();
+  assert.equal((fake.local.get("outbox") ?? []).length, 0);
+  assert.equal(ingests.length, 0);
+});
+
+test("Off while a session is starting stops it before any window opens", async () => {
+  await reset();
+  const recording = hold(chrome.storage.session, "set", (values) => values.activeSession?.windowId === null);
+  const starting = session.startSession("manual");
+  await recording.entered;
+  await switchOff();
+  recording.release();
+  await starting;
+  const report = await ended.promise;
+  await untilIdle();
+  assert.ok(!log.some((entry) => entry.startsWith("open:")), log.join(" "));
+  assert.equal(report.reason, "capture_off");
+});
+
+test("an old session whose report failed is kept, retried, and blocks new sessions until reported", async () => {
+  await reset();
+  await chrome.storage.session.set({
+    activeSession: { id: "old", windowId: 7, account: "owner", stop: { reason: "stopped_by_user", detail: "Stop" }, completed: false },
+  });
+  statusDown = true;
+  await session.recoverInterruptedSession();
+  assert.equal(fake.session.get("activeSession")?.id, "old", "record kept after a failed report");
+  const refused = await session.startSession("manual");
+  assert.equal(refused.started, false);
+  assert.ok(!log.some((entry) => entry.startsWith("open:")));
+
+  statusDown = false;
+  log.length = 0;
+  const started = await session.startSession("manual");
+  assert.equal(started.started, true);
+  assert.equal(log[0], "status:old:ok", log.join(" "));
+  session.requestStop("stopped_by_user", "cleanup");
+  await ended.promise;
+  await untilIdle();
+});
+
+test("closing the session window while a tab call is pending reports ok, not error", async () => {
+  await reset();
+  const reading = deferred();
+  const gate = deferred();
+  const get = chrome.tabs.get;
+  chrome.tabs.get = async () => {
+    chrome.tabs.get = get;
+    reading.resolve();
+    await gate.promise;
+    throw new Error("No tab with id: 101");
+  };
+  await session.startSession("manual");
+  await reading.promise;
+  removed.fire(fake.session.get("activeSession").windowId);
+  gate.resolve();
+  const report = await ended.promise;
+  await untilIdle();
+  assert.equal(report.status, "ok");
+  assert.equal(report.reason, "window_closed");
+  assert.equal(fake.local.get("pauseUntil"), undefined);
+});
+
+test("a Following timeline captured after home first loaded is still noted in the status", async () => {
+  await reset();
+  const execute = chrome.scripting.executeScript;
+  chrome.scripting.executeScript = async (options) => {
+    if (options.args?.[0]?.name === "scroll") {
+      session.noteSessionCapture(session.sessionInfo().id, { operation: "HomeLatestTimeline", postIds: ["101"] });
+    }
+    return execute(options);
+  };
+  try {
+    await session.startSession("manual");
+    const report = await ended.promise;
+    await untilIdle();
+    assert.match(report.detail, /home opened on Following/);
+  } finally {
+    chrome.scripting.executeScript = execute;
+  }
 });
