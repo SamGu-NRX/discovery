@@ -6,7 +6,7 @@ runner then does exactly what `work` does: real bundle building and link fetchin
 CLIProxyAPI, real live-machine checks and real `codex exec` preps. Only the Worker is the mock, and its
 embeddings are hashed bags of words standing in for bge-base (they pick related saves less well).
 
-Usage: python3 runner/eval/replay.py <round-dir> [--ids id,id] [--no-prep]
+Usage: python3 runner/eval/replay.py <round-dir> [--ids id,id] [--watchers all|none|ref,ref]
 Writes <round-dir>/artifacts.md (what Sam would see, without judge verdicts) and <round-dir>/summary.json.
 """
 import argparse
@@ -154,7 +154,6 @@ def main():
     ap.add_argument("round_dir")
     ap.add_argument("--ids", default="")
     ap.add_argument("--watchers", default="all", help="all | none | comma-separated refs")
-    ap.add_argument("--no-prep", action="store_true")
     a = ap.parse_args()
     home = Path(a.round_dir).expanduser().resolve()
     home.mkdir(parents=True, exist_ok=True)
@@ -171,8 +170,10 @@ def main():
         load_mock(m.state, load_saves(), ids, watchers, mock_worker)
         tok = home / "token"
         tok.write_text(mock_worker.TOKEN)
+        # Grading needs every sampled candidate handled in one round, so the eval home's daily budgets are
+        # larger than the live defaults (20 deep reads, 5 preps). Prep timeout and scratch limits stay the same.
         cfg = {**config.DEFAULTS, "worker_url": m.url, "token_file": str(tok), "claim_limit": 3,
-               "codex_preps_per_day": 0 if a.no_prep else 5, "deep_reads_per_day": 40}
+               "codex_preps_per_day": 12, "deep_reads_per_day": 40}
         (home / "config.json").write_text(json.dumps(cfg, indent=1))
         cfg = config.load()
         runner = Runner(cfg, Worker.from_config(cfg), Gateway.from_config(cfg),

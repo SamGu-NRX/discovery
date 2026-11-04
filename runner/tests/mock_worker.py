@@ -59,6 +59,7 @@ class State:
         self.proposals = {}
         self.routes_down = set()
         self.daily_cap = 15
+        self.issue_tokens = True  # contract 10b06ac; False reproduces a Worker that predates lease tokens
         self.lock = threading.Lock()
         self.log = []
 
@@ -146,7 +147,8 @@ def make_handler(state):
                     expired = c["state"] == "claimed" and c["lease_until"] < ms(now())
                     if c["state"] == "new" or expired:
                         c.update(state="claimed", owner=b["owner"], attempts=c["attempts"] + 1,
-                                 lease_until=ms(now() + dt.timedelta(seconds=b["ttl_s"])))
+                                 lease_until=ms(now() + dt.timedelta(seconds=b["ttl_s"])),
+                                 lease_token=uuid.uuid4().hex if s.issue_tokens else None)
                         out.append(dict(c))
                 return self.reply(200, {"candidates": out})
             m = re.fullmatch(r"/candidates/([^/]+)/complete", path)
@@ -157,6 +159,8 @@ def make_handler(state):
                     return self.reply(404, {"error": "no such candidate"})
                 if c["owner"] != b["owner"] or c["state"] != "claimed":
                     return self.reply(409, {"error": "stale owner"})
+                if c.get("lease_token") and b.get("lease_token") != c["lease_token"]:
+                    return self.reply(409, {"error": "stale lease token"})
                 c.update(state=b["state"], note=b.get("note"), updated_at=ms(now()), lease_until=None,
                          owner=None if b["state"] == "new" else c["owner"])
                 return self.reply(200, {"ok": True})

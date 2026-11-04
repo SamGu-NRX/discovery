@@ -54,11 +54,15 @@ class Gateway:
         with self._lock, open(self.log_path, "a") as f:
             f.write(json.dumps(rec) + "\n")
 
+    def key(self):
+        if self._key is None:
+            self._key = self._key_provider()
+        return self._key
+
     def chat(self, model, system, user, *, stage, item, effort="medium", json_mode=True):
         if model not in ALLOWED_MODELS:
             raise ValueError(f"model {model!r} is not allowed in the runner")
-        if self._key is None:
-            self._key = self._key_provider()
+        self.key()
         body = {"model": model, "reasoning_effort": effort,
                 "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]}
         if json_mode:
@@ -117,6 +121,13 @@ def summarize_calls(path=None, since=None):
     for line in path.read_text().splitlines():
         c = json.loads(line)
         if since and c["ts"] < since:
+            continue
+        if c.get("tool") == "codex exec":
+            m = by.setdefault("codex exec (gpt-6.1-sol)", {"runs": 0, "failed": 0, "tokens_total": 0, "seconds": 0.0})
+            m["runs"] += 1
+            m["failed"] += c["status"] != "prep_ok"
+            m["tokens_total"] += c.get("tokens_total") or 0
+            m["seconds"] = round(m["seconds"] + c["latency_s"], 1)
             continue
         m = by.setdefault(c["requested_model"], {"ok": 0, "errors": 0, "in": 0, "cached": 0, "out": 0, "usd": 0.0})
         if c["status"] != "ok":

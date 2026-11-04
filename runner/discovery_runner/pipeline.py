@@ -11,8 +11,8 @@ import os
 import re
 import shutil
 import signal
-import socket
 import subprocess
+import uuid
 from pathlib import Path
 
 from . import bundle as B
@@ -25,8 +25,9 @@ from .worker import LeaseLost, WorkerError, WorkerUnavailable, new_client_id, su
 ACTIONABLE = set(prompts.ACTION_TYPES) - {"no_action", "reference_note"}
 
 
-def owner_id():
-    return f"runner-{socket.gethostname().split('.')[0]}-{os.getpid()}"
+# The lease owner. Random per process start, because hostname+PID collides when a restarted runner gets a
+# reused PID and could complete a lease its dead predecessor held (contract 10b06ac).
+INSTANCE_ID = f"runner-{uuid.uuid4().hex}"
 
 
 class Runner:
@@ -35,7 +36,7 @@ class Runner:
         self.worker = worker
         self.llm = gateway
         self.log = log
-        self.owner = owner_id()
+        self.owner = INSTANCE_ID
         self._emb = None
         self._positives = None
 
@@ -96,7 +97,7 @@ class Runner:
     def complete(self, cand, state, note, run):
         run["complete"] = {"state": state, "note": note}
         try:
-            self.worker.complete(cand["id"], self.owner, state, note)
+            self.worker.complete(cand["id"], self.owner, state, note, cand.get("lease_token"))
         except LeaseLost as e:
             run["complete"]["lease_lost"] = str(e)
             self.log(f"lease lost on {cand['id']}: {e}")
@@ -266,7 +267,7 @@ class Runner:
             config.check_stop()
             if not config.take("codex_preps", cfg["codex_preps_per_day"]):
                 return self.complete(cand, "new", "codex prep budget used up for today; retry tomorrow", run)
-            prep = run_codex(workdir, cfg, self.log)
+            prep = run_codex(workdir, cfg, self.llm.key(), self.log)
             run["prep"] = prep
             if prep.get("verdict") == "premise_false":
                 return self.complete(cand, "skipped", f"prep found the premise false: {prep.get('summary')}", run)
@@ -372,13 +373,14 @@ class Runner:
             (workdir / "APPLICATION.md").write_text(render_application(app))
             filled = sum(1 for f in app["fields"] if f.get("value"))
             left = [f["name"] for f in app["fields"] if not f.get("value")]
-            items.append({"type": "draft", "ref": str(workdir / "APPLICATION.md"),
+            items.append({"type": "draft", "ref": str(workdir / "APPLICATION.md"), "sha256": _sha(workdir / "APPLICATION.md"),
                           "summary": f"{filled} of {len(app['fields'])} fields filled; left to Sam: "
                                      f"{', '.join(left)[:300]}. {app['ai_policy']['why']}"})
         d = prop.get("draft") or {}
         if d.get("text"):
             (workdir / "DRAFT.md").write_text(f"To: {d.get('to')}\nVia: {d.get('channel')}\n\n{d['text']}\n")
-            items.append({"type": "draft", "ref": str(workdir / "DRAFT.md"), "summary": f"message to {d.get('to')}"})
+            items.append({"type": "draft", "ref": str(workdir / "DRAFT.md"), "sha256": _sha(workdir / "DRAFT.md"),
+                          "summary": f"message to {d.get('to')}"})
         return items
 
     def proposal_body(self, client_id, cand, b, prop, verdict, prepared, run):
@@ -388,7 +390,6 @@ class Runner:
         if failed:
             why += " Unverified: " + "; ".join(f"{c.get('statement') or c.get('path') or c.get('repo')} "
                                               f"({c['status']}: {c['detail']})" for c in failed)
-        bad_quotes = [e for e in prop.get("evidence") or [] if not (e.get("verified") and e.get("where_valid"))]
         evidence = [{"quote": e["quote"], "where": e["where"]} for e in prop.get("evidence") or []
                     if e.get("verified") and e.get("where_valid")]
         fsk = prop.get("final_step_kind")
@@ -401,15 +402,17 @@ class Runner:
             why += f" Reviewer's concern: {verdict.get('reason')}"
             if verdict.get("fixes"):
                 why += " Suggested edits: " + "; ".join(verdict["fixes"][:3])
+        prepared = [{**i, "summary": i.get("summary") or Path(i["ref"]).name} for i in prepared]
         return {"client_id": client_id, "candidate_ids": [cand["id"]], "kind": prop.get("kind"),
-                "title": prop.get("title", "")[:120], "why": why, "evidence": evidence, "prepared": prepared,
+                "title": prop.get("title", "")[:120], "why": why[:4000], "evidence": evidence, "prepared": prepared,
                 "final_step_kind": fsk, "final_step": final_step,
+                # The approval card shows every inputs field and the approval hash binds them (contract 10b06ac),
+                # so inputs hold only what Sam approves: the target, the ask, the deadline and a hash of each
+                # deliverable. Review notes, checks and dropped quotes are in PROPOSAL.md.
                 "inputs": {"target": prop.get("target"), "approval_line": prop.get("approval_line"),
                            "deadline": (prop.get("application") or {}).get("deadline") or prop.get("deadline"),
-                           "author_handle": (b.get("op") or {}).get("author"), "connects": prop.get("connects"),
-                           "judge": verdict, "checks": checks, "dropped_quotes": len(bad_quotes),
-                           "missing_context": b.get("missing_context"), "value": prop.get("value"),
-                           "candidate_url": cand.get("url")}}
+                           "deliverables": {Path(i["ref"]).name: i["sha256"] for i in prepared if i.get("sha256")},
+                           "source": cand.get("url"), "author_handle": (b.get("op") or {}).get("author")}}
 
     def reference_note(self, cand, b, tri, run):
         client_id = new_client_id()
@@ -419,8 +422,8 @@ class Runner:
                 "evidence": [], "prepared": [{"type": "note", "ref": cand.get("url") or cand["ref"],
                                               "summary": tri.get("gist", "")}],
                 "final_step_kind": None, "final_step": None,
-                "inputs": {"target": cand.get("url"), "projects": tri.get("projects"),
-                           "author_handle": (b.get("op") or {}).get("author"), "candidate_url": cand.get("url")}}
+                "inputs": {"target": cand.get("url"), "source": cand.get("url"),
+                           "author_handle": (b.get("op") or {}).get("author")}}
         res = submit_proposal(self.worker, body)
         record_local(body, res)
         run["proposal"] = {"body": body, "response": res}
@@ -466,6 +469,11 @@ def render_application(app):
     return "\n".join(lines) + "\n"
 
 
+def _sha(p):
+    import hashlib
+    return hashlib.sha256(Path(p).read_bytes()).hexdigest()[:16]
+
+
 def verify_manifest(workdir, items):
     """Keep only prepared items that exist: files inside workdir (with size and hash) and real git branches."""
     import hashlib
@@ -506,18 +514,21 @@ def dir_mb(p: Path):
 
 def codex_command(workdir, cfg):
     """No sandbox-bypass or approval-bypass flag, ever: writes stay in workdir, network via sandbox config."""
+    # mcp_servers={} keeps Sam's interactive MCP servers (OAuth-gated, irrelevant to prep) out of the run.
     return ["codex", "exec", "-c", "model_provider=cliproxy", "-m", cfg["models"]["prep"],
-            "-c", 'model_reasoning_effort="medium"', "--sandbox", "workspace-write",
+            "-c", 'model_reasoning_effort="medium"', "-c", "mcp_servers={}", "--sandbox", "workspace-write",
             "-c", "sandbox_workspace_write.network_access=true", "-C", str(workdir), "--skip-git-repo-check",
             "--ephemeral", "-o", str(workdir / "last-message.md"), prompts.PREP]
 
 
-def run_codex(workdir, cfg, log=print):
+def run_codex(workdir, cfg, gateway_key, log=print):
+    """The gateway key reaches codex only through its environment (the provider's env_key), never argv or logs."""
     cmd = codex_command(workdir, cfg)
     t0 = dt.datetime.now(dt.timezone.utc)
+    env = {**os.environ, "CLIPROXY_API_KEY": gateway_key}
     with open(workdir / "codex.log", "w") as out:
         proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT, cwd=workdir,
-                                start_new_session=True)
+                                start_new_session=True, env=env)
         try:
             code = proc.wait(timeout=cfg["prep_timeout_s"])
             timed_out = False
@@ -530,10 +541,13 @@ def run_codex(workdir, cfg, log=print):
                 proc.wait()
             code, timed_out = None, True
     secs = (dt.datetime.now(dt.timezone.utc) - t0).total_seconds()
+    m = re.findall(r"tokens used\s*\n\s*([\d,]+)", (workdir / "codex.log").read_text(errors="replace"))
+    tokens = int(m[-1].replace(",", "")) if m else None
     with open(config.path("logs", "calls.jsonl"), "a") as f:
         f.write(json.dumps({"ts": config.now_iso(), "stage": "prep", "item": workdir.name, "requested_model":
                             cfg["models"]["prep"], "tool": "codex exec", "exit": code, "timed_out": timed_out,
-                            "latency_s": round(secs, 1), "status": "ok" if code == 0 else "error"}) + "\n")
+                            "tokens_total": tokens, "latency_s": round(secs, 1),
+                            "status": "prep_ok" if code == 0 else "prep_error"}) + "\n")
     res = {"exit": code, "timed_out": timed_out, "seconds": round(secs, 1), "items": []}
     mb = dir_mb(workdir)
     if mb > cfg["prep_scratch_mb"]:

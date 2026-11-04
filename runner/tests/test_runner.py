@@ -272,6 +272,29 @@ class Leases(Home):
         run = r.work()[0]
         self.assertIn("lease_lost", run["complete"])
 
+    def test_old_process_cannot_complete_a_reclaimed_lease(self):
+        # fails if a runner whose lease expired and was reclaimed can still complete the candidate, even when
+        # it shares the new holder's owner id (hostname+PID reuse across restarts, contract 10b06ac)
+        s = self.mock.state
+        c = s.add_candidate("watcher_event", "w:1", "t", "https://example.com/job")
+        old = self.runner({})
+        (claimed,) = old.worker.claim(old.owner, 1, 1)
+        s.candidates[c["id"]]["lease_until"] = ms(now() - dt.timedelta(seconds=5))
+        (reclaimed,) = old.worker.claim(old.owner, 600, 1)
+        old.complete(claimed, "skipped", "late", run := {})
+        self.assertIn("lease_lost", run["complete"])
+        self.assertEqual(s.candidates[c["id"]]["state"], "claimed")
+        old.complete(reclaimed, "skipped", "current holder", {})
+        self.assertEqual(s.candidates[c["id"]]["state"], "skipped")
+
+    def test_complete_without_tokens_still_works_on_an_older_worker(self):
+        # fails if the runner requires lease tokens before the Worker issues them
+        self.mock.state.issue_tokens = False
+        r = self.runner({"You triage": TRIAGE_NONE})
+        c = self.captured_post()
+        r.work()
+        self.assertEqual(self.mock.state.candidates[c["id"]]["state"], "skipped")
+
     def test_no_proposal_is_posted_after_the_lease_expires(self):
         # fails if a runner whose lease ran out still posts, so two runners create the same proposal
         r = self.runner({"You triage": TRIAGE_TRY, "You deep-read": deep_read("~/x"), "independent": JUDGE_OK},

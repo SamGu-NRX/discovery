@@ -98,9 +98,12 @@ class Worker:
     def claim(self, owner, ttl_s, limit):
         return self._call("POST", "/candidates/claim", {"owner": owner, "ttl_s": ttl_s, "limit": limit})["candidates"]
 
-    def complete(self, cid, owner, state, note):
-        return self._call("POST", f"/candidates/{urllib.parse.quote(cid, safe='')}/complete",
-                          {"owner": owner, "state": state, "note": note[:2000]})
+    def complete(self, cid, owner, state, note, lease_token=None):
+        """lease_token is sent once claim responses carry one; until the Worker issues tokens, owner alone."""
+        body = {"owner": owner, "state": state, "note": note[:2000]}
+        if lease_token:
+            body["lease_token"] = lease_token
+        return self._call("POST", f"/candidates/{urllib.parse.quote(cid, safe='')}/complete", body)
 
     def post_context(self, post_id):
         return self._call("GET", f"/x/posts/{urllib.parse.quote(post_id, safe='')}/context")
