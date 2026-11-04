@@ -1,11 +1,42 @@
 // Reads an x.com page and says whether X is showing a login wall, a
 // challenge or a rate limit. Read-only: it looks at the URL, selectors and
-// visible text, and never clicks, focuses, types or touches a form. It runs
+// text it shows, and never clicks, focuses, types or touches a form. It runs
 // in Sam's own X tabs, where bridge.js reports what it finds, and in session
 // windows, where page-agent.js uses it.
 
 (() => {
   if (globalThis.__dxDetect) return;
+
+  // Shown on screen: rendered, not hidden by visibility or opacity, and
+  // more than 1 px each way once every ancestor that clips its overflow has
+  // cut it down (the usual visually-hidden pattern leaves 1 px). X's pages
+  // carry hidden inputs and text that a person never sees; only what is
+  // shown is a blocker. Found in a readiness review of fa4efb8.
+  function shown(el, clips = new Map()) {
+    if (!el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) return false;
+    const box = intersect(el.getBoundingClientRect(), clipBox(el.parentElement, clips));
+    return box.right - box.left > 1 && box.bottom - box.top > 1;
+  }
+
+  // The area an element's overflow-clipping ancestors leave visible, cached
+  // per element for one inspect() so siblings share the walk.
+  const UNCLIPPED = { left: -Infinity, top: -Infinity, right: Infinity, bottom: Infinity };
+  function clipBox(el, clips) {
+    if (!el || el === document.documentElement) return UNCLIPPED;
+    if (clips.has(el)) return clips.get(el);
+    const style = getComputedStyle(el);
+    const outer = clipBox(el.parentElement, clips);
+    const box = style.overflowX === "visible" && style.overflowY === "visible" ? outer : intersect(el.getBoundingClientRect(), outer);
+    clips.set(el, box);
+    return box;
+  }
+
+  const intersect = (a, b) => ({
+    left: Math.max(a.left, b.left),
+    top: Math.max(a.top, b.top),
+    right: Math.min(a.right, b.right),
+    bottom: Math.min(a.bottom, b.bottom),
+  });
 
   // Text the page shows outside posts, bios, user cells and the trends
   // sidebar, so a post that merely says "rate limit" cannot stop a session.
@@ -14,8 +45,18 @@
       "[data-testid='sidebarColumn'], [contenteditable], script, style, noscript, textarea, input";
     const parts = [];
     let length = 0;
+    // Many text nodes share a parent; each element is measured once.
+    const seen = new Map();
+    const clips = new Map();
+    const visible = (el) => {
+      if (!seen.has(el)) seen.set(el, shown(el, clips));
+      return seen.get(el);
+    };
     const walker = document.createTreeWalker(document.body ?? document.documentElement, NodeFilter.SHOW_TEXT, {
-      acceptNode: (node) => (node.parentElement?.closest(skip) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT),
+      acceptNode: (node) => {
+        const parent = node.parentElement;
+        return !parent || parent.closest(skip) || !visible(parent) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT;
+      },
     });
     while (walker.nextNode() && length < 40_000) {
       const text = walker.currentNode.nodeValue.trim();
@@ -58,7 +99,7 @@
       blocker = "challenge";
       evidence = "challenge frame";
     } else {
-      const login = [...document.querySelectorAll(LOGIN_SELECTOR)].find((el) => !el.closest("article"));
+      const login = [...document.querySelectorAll(LOGIN_SELECTOR)].find((el) => !el.closest("article") && shown(el));
       if (login) {
         blocker = "login_wall";
         evidence = `login control ${login.getAttribute("data-testid") || login.tagName.toLowerCase()}`;
