@@ -249,7 +249,9 @@ async function finish(s, outcome) {
     await chrome.windows.remove(s.windowId).catch(() => {});
   }
   await flush().catch((err) => recordProblem("worker", err.message));
-  const account = s.account ?? (await getLocal("lastAccount", null)) ?? s.config.account;
+  // The status closes the Worker's reservation, which is keyed by the
+  // account the session reserved under.
+  const account = s.reservedAccount;
   // Record the final outcome; a signal arriving during that write is
   // recorded too. The status is then chosen with no await before the
   // request, so nothing can arrive between choosing and reporting it.
@@ -363,7 +365,7 @@ async function recoverRecord(record) {
   const detail = `${outcome.reason}: ${outcome.detail}; screens=${record.screens ?? 0} posts=${record.posts ?? 0}`.slice(0, 1000);
   if (status !== "ok") await extendPause();
   const config = await loadConfig();
-  const account = record.account ?? (await getLocal("lastAccount", null)) ?? config.account;
+  const account = record.reservedAccount ?? record.account ?? (await getLocal("lastAccount", null)) ?? config.account;
   const answer = await postStatus(config, { account, session_id: record.id, status, detail }).catch(() => null);
   const reported = answer !== null;
   // The receipt first; without one the record stays, marked for the popup,
@@ -398,6 +400,7 @@ function publish(s, outcome = null, extra = {}) {
       startedAt: s.startedAt,
       windowId: s.windowId,
       account: s.account,
+      reservedAccount: s.reservedAccount,
       phase: s.phase,
       screens: s.screens,
       posts: s.posts,
@@ -524,6 +527,11 @@ async function inspect(s) {
     await setLocal({ lastAccount: seen.account });
     await publish(s);
   }
+  // The Worker reserved this session for one account; reading another
+  // account's timeline under that reservation would mix up their pauses.
+  if (seen.account && seen.account !== s.reservedAccount) {
+    throw new StopSession("error", `X is logged in as @${seen.account}, but this session was reserved for @${s.reservedAccount}`);
+  }
   await onExpectedPage(s);
   // X's generic error page often means throttling; three in a row ends the visit.
   s.errorPages = seen.errorPage ? s.errorPages + 1 : 0;
@@ -570,7 +578,7 @@ async function visitHome(s) {
   s.phase = "home";
   await publish(s);
   await inspect(s);
-  const account = s.account ?? s.config.account;
+  const account = s.reservedAccount;
   if (account) await checkWorkerPause(s, account);
   await scrollScreens(s, { screens: s.config.homeMaxScreens, ms: s.config.homeMaxMinutes * 60_000 });
 }
@@ -599,7 +607,7 @@ async function visitBookmarks(s) {
 async function visitPermalinks(s) {
   s.phase = "permalinks";
   await publish(s);
-  const account = s.account ?? s.config.account;
+  const account = s.reservedAccount;
   if (!account) {
     s.notes.push("detail queue skipped: logged-in account unknown");
     return;

@@ -176,9 +176,11 @@ async function handleXStatus(message, tabId) {
   const status = Number(message.status);
   const operation = String(message.operation).slice(0, 60);
   if (status === 429) await onBackOff(tabId, "rate_limited", `${operation} answered HTTP 429`);
-  // X answers 401 to some requests in a logged-in tab, so only the session's
-  // own tab counts it as a login wall.
-  else if (status === 401 && tabId === sessionTabId()) await onBackOff(tabId, "login_wall", `${operation} answered HTTP 401`);
+  // A GraphQL 401 from any X tab means the account's login is not usable, so
+  // it pauses sessions like any login wall. There is no evidence that X
+  // answers GraphQL with 401 in a working logged-in tab; if it does, the cost
+  // is a 24-hour pause, never a session running past a login wall.
+  else if (status === 401) await onBackOff(tabId, "login_wall", `${operation} answered HTTP 401`);
   return { ok: true };
 }
 

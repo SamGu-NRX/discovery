@@ -89,8 +89,10 @@ const reservedIds = [];
 // The body POST /ingest/x/status answers with.
 let statusAnswer = {};
 const ingests = [];
+const statusBodies = [];
 globalThis.fetch = async (url, init) => {
   const path = new URL(url).pathname;
+  if (path === "/ingest/x/status") statusBodies.push(JSON.parse(init.body));
   if (path === "/x/sessions/start") {
     log.push("reserve");
     reservedIds.push(JSON.parse(init.body).session_id);
@@ -965,4 +967,36 @@ test("the pause_until the Worker returns for a status is stored", async () => {
   await ended.promise;
   await untilIdle();
   assert.equal(fake.local.get("pauseUntil"), "2099-01-01T00:00:00.000Z");
+});
+
+// Found in an install-readiness review of 40dd650.
+
+test("a GraphQL 401 in one of Sam's own X tabs pauses sessions", async () => {
+  await reset();
+  await fromTab(500, { type: "x-status", operation: "HomeTimeline", status: 401 });
+  assert.ok(Date.parse(fake.local.get("pauseUntil")) > Date.now());
+  const started = await session.startSession("alarm");
+  assert.equal(started.started, false);
+});
+
+test("a session reports under the account it reserved, and stops if X shows another account", async () => {
+  await reset();
+  await chrome.storage.local.set({ lastAccount: "alice" });
+  statusBodies.length = 0;
+  const execute = chrome.scripting.executeScript;
+  chrome.scripting.executeScript = async (options) =>
+    options.args?.[0]?.name === "inspect"
+      ? [{ result: { ok: { account: "bob", blocker: null, errorPage: false, path: new URL(tab.url).pathname } } }]
+      : execute(options);
+  try {
+    const started = await session.startSession("manual");
+    assert.deepEqual(reservedIds, [started.id]);
+    const report = await ended.promise;
+    await untilIdle();
+    assert.match(report.detail, /logged in as @bob, but this session was reserved for @alice/);
+    assert.deepEqual(statusBodies.map((b) => b.account), ["alice"]);
+  } finally {
+    chrome.scripting.executeScript = execute;
+    await chrome.storage.local.set({ lastAccount: "owner" });
+  }
 });
