@@ -43,7 +43,13 @@
   const VISIBLE_MS = 5_000;
   const HIDDEN_MS = 30_000;
   const REPEAT_MS = 30 * 60_000;
-  let shown = null; // { key, reportedAt } for the blocker on screen now
+  // A back-off message counts as delivered only when the service worker
+  // answers { ok: true }, which it does after the pause is stored. Anything
+  // else (a rejected send while the worker restarts, an { error } reply) is
+  // tried again.
+  const acknowledged = (reply) => reply?.ok === true;
+  let shown = null; // { key, reportedAt } for the blocker on screen, once acknowledged
+  let sendingBlocker = false;
   let lastHref = null;
   let lastCheck = 0;
   const checkForBlocker = () => {
@@ -55,10 +61,18 @@
     }
     const key = `${seen.blocker}|${seen.path}`;
     if (shown?.key === key && Date.now() - shown.reportedAt < REPEAT_MS) return;
-    shown = { key, reportedAt: Date.now() };
+    if (sendingBlocker) return;
+    sendingBlocker = true;
+    // Not acknowledged: `shown` stays as it was, so the next check sends again.
     chrome.runtime
       .sendMessage({ type: "x-blocker", blocker: seen.blocker, evidence: seen.evidence, path: seen.path })
-      .catch(() => {});
+      .then((reply) => {
+        if (acknowledged(reply)) shown = { key, reportedAt: Date.now() };
+      })
+      .catch(() => {})
+      .finally(() => {
+        sendingBlocker = false;
+      });
   };
   setInterval(() => {
     if (location.href !== lastHref) {
@@ -91,9 +105,33 @@
     return { kind, operation, status: Number(status), url, body: detail.slice(start) };
   }
 
+  // A 429, a 401 or an X error 88 is sent until acknowledged: every 2 s,
+  // up to 30 times, outside the capture queue so captures keep flowing.
+  const BACK_OFF_TRIES = 30;
+  const deliverBackOff = async (payload) => {
+    for (let attempt = 0; attempt < BACK_OFF_TRIES; attempt += 1) {
+      try {
+        if (acknowledged(await chrome.runtime.sendMessage(payload))) return;
+      } catch {
+        // The worker is restarting; try again.
+      }
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+    }
+  };
+
   function onData(event) {
     const message = decode(event.detail);
     if (!message) return;
+    if (message.kind === "limit" || (message.kind === "status" && (message.status === 429 || message.status === 401))) {
+      deliverBackOff({
+        type: message.kind === "limit" ? "x-limit" : "x-status",
+        operation: message.operation,
+        url: message.url,
+        status: message.status,
+        pageLoadId,
+      });
+      return;
+    }
     queue = queue
       .then(() =>
         chrome.runtime.sendMessage({

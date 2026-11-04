@@ -148,7 +148,9 @@
     const deliver = (text) => {
       if (typeof text !== "string" || !text) return;
       if (captured(operation)) send("response", operation, status, url, text);
-      else if (isRateLimitBody(text)) send("limit", operation, status, url, "");
+      // Sent on its own as well for captured operations, so it is retried
+      // until the service worker acknowledges the pause (bridge.js).
+      if (isRateLimitBody(text)) send("limit", operation, status, url, "");
     };
     if (typeof body === "string") deliver(body);
     else if (body) apply(then, body, [deliver, () => {}]);

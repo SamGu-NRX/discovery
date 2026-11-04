@@ -22,6 +22,17 @@ const BLOCKING = new Set(["login_wall", "rate_limited", "challenge", "error"]);
 // the popup, a closed window, Off); a generic error, such as a tab call
 // failing because Sam closed the window, does not.
 const X_SIGNALS = new Set(["login_wall", "rate_limited", "challenge"]);
+// K, the most requests a session window may make to X before X has shown it
+// a home timeline with posts. A session that starts while X is still
+// blocking never sees one, so this bounds it whatever detection does: at K
+// the window is closed and sessions pause. README explains the number; it
+// has no live measurement behind it.
+const PROBATION_REQUEST_CAP = 50;
+// Requests X's service worker makes for a page carry tab id -1. They are
+// counted too, from any x.com page, since the session tab's cannot be told
+// apart; that can only trip the cap early.
+const X_ORIGIN = /^https:\/\/([a-z0-9-]+\.)*x\.com$/;
+
 const statusFor = (reason) => (BLOCKING.has(reason) ? reason : reason === "interrupted" ? "error" : "ok");
 
 let current = null;
@@ -107,6 +118,9 @@ export function noteSessionCapture(sessionId, { operation, postIds }) {
   if (!s || s.id !== sessionId) return;
   s.posts += postIds.length;
   s.operations.add(operation);
+  // A home timeline with posts shows X is serving this account; K stops
+  // applying from here.
+  if ((operation === "HomeTimeline" || operation === "HomeLatestTimeline") && postIds.length > 0) s.healthy = true;
   if (operation === "Bookmarks" && postIds.some((id) => s.knownBookmarks.has(id))) {
     s.reachedKnownBookmark = true;
   }
@@ -131,6 +145,9 @@ export async function startSession(trigger) {
     stop: null,
     completed: false,
     reserved: false,
+    xRequests: 0,
+    healthy: false,
+    capTripped: false,
     finishing: false,
     recorded: false,
     statusDecided: false,
@@ -186,11 +203,16 @@ export async function startSession(trigger) {
     s.finishing = true;
     s.statusDecided = true;
     if (reservation.pauseUntil) await extendPause(reservation.pauseUntil);
+    const blocked = X_SIGNALS.has(s.stop?.reason);
     try {
-      await removeRecord(s.id);
+      // A back-off signal this session took while reserving still has to be
+      // paused on and reported: recovery does that from the record, which
+      // stays until the Worker has the report.
+      if (!blocked) await removeRecord(s.id);
     } finally {
       if (current === s) current = null;
     }
+    if (blocked) await recoverInterruptedSession();
     return { started: false, reason: reservation.reason };
   }
   // Reserved: the record says so before anything else happens, and from
@@ -215,6 +237,20 @@ async function run(s) {
     requestStop("window_closed", "the session window was closed");
   };
   chrome.windows.onRemoved.addListener(onRemoved);
+  // Counts every request the session window makes to X, whatever caused it,
+  // and enforces K until X shows a timeline.
+  const onRequest = (details) => {
+    if (s.tabId === null) return;
+    if (details.tabId !== s.tabId && !(details.tabId === -1 && X_ORIGIN.test(details.initiator ?? ""))) return;
+    s.xRequests += 1;
+    if (s.healthy || s.capTripped || s.xRequests < PROBATION_REQUEST_CAP) return;
+    s.capTripped = true;
+    // The stop first, so the window's closing is not taken for the reason.
+    requestStop("error", `X took ${s.xRequests} requests without showing a timeline (limit ${PROBATION_REQUEST_CAP})`);
+    chrome.windows.remove(s.windowId).catch(() => {});
+    extendPause().catch(() => {});
+  };
+  chrome.webRequest.onBeforeRequest.addListener(onRequest, { urls: ["https://x.com/*", "https://*.x.com/*"] });
 
   let outcome = { reason: "completed", detail: "finished" };
   try {
@@ -232,6 +268,7 @@ async function run(s) {
 
   clearInterval(keepAlive);
   chrome.windows.onRemoved.removeListener(onRemoved);
+  chrome.webRequest.onBeforeRequest.removeListener(onRequest);
   s.finishing = true;
   let reported = false;
   try {
@@ -285,7 +322,7 @@ async function finish(s, outcome) {
   }
   const detail = [
     `${outcome.reason}: ${outcome.detail}`,
-    `screens=${s.screens} posts=${s.posts}`,
+    `screens=${s.screens} posts=${s.posts} x_requests=${s.xRequests}`,
     ...s.notes,
   ].join("; ").slice(0, 1000);
 
@@ -339,7 +376,9 @@ async function recover() {
   // Worker's 200 is recorded, and a reservation that did reach the Worker
   // unrecorded is closed by its crash rule after 30 minutes, which pauses
   // the account rather than reporting a status that could be wrong.
-  if (activeSession.statusSent || !activeSession.reserved) {
+  // An unreserved record that holds a back-off signal is still processed
+  // like any other, so the signal is paused on and reported.
+  if (activeSession.statusSent || (!activeSession.reserved && !holdsBlocker(activeSession))) {
     await removeRecord(activeSession.id);
     return;
   }
@@ -394,6 +433,10 @@ async function recoverRecord(record) {
     lastSession: { ...record, endedAt: new Date().toISOString(), status, reason: outcome.reason, detail, reported },
   });
   if (reported) await removeRecord(record.id);
+}
+
+function holdsBlocker(record) {
+  return [record.outcome, record.stop, record.lateStop].some((o) => o && BLOCKING.has(o.reason));
 }
 
 async function hasRecordOtherThan(id) {

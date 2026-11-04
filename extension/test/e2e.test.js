@@ -32,7 +32,10 @@ let context;
 let worker;
 let mock;
 let extensionId;
-const site = { homeIsLoginWall: false, homeRedirect: null, graphqlStatus: 200, clicks: [], pages: [] };
+const site = { homeIsLoginWall: false, homeRedirect: null, homeWithoutTimeline: false, graphqlStatus: 200, clicks: [], pages: [], requests: 0 };
+// K in app/lib/session.js: the most requests a session window may make to X
+// before X shows it a timeline.
+const K = 50;
 
 let fakeX;
 
@@ -68,6 +71,7 @@ after(async () => {
 async function configure(extra = {}) {
   site.clicks = [];
   site.pages = [];
+  site.requests = 0;
   await worker.evaluate(
     (config) => chrome.storage.local.set({ config, pauseUntil: null, lastSession: null }),
     {
@@ -156,6 +160,7 @@ test("a session that meets a login wall stops, reports login_wall and pauses its
     assert.equal(status.body.status, "login_wall");
     assert.deepEqual(site.pages, ["/i/flow/login"], "stopped before bookmarks and permalinks");
     assert.deepEqual(site.clicks, []);
+    assert.ok(site.requests <= K, `${site.requests} requests to X`);
 
     const pauseUntil = await worker.evaluate(async () => (await chrome.storage.local.get("pauseUntil")).pauseUntil);
     assert.ok(Date.parse(pauseUntil) > Date.now() + 23 * 3600_000);
@@ -179,9 +184,38 @@ test("a GraphQL 429 during a session stops it and reports rate_limited", async (
     assert.equal(status.body.status, "rate_limited");
     assert.match(status.body.detail, /HomeTimeline answered HTTP 429/);
     assert.deepEqual(site.pages, ["/home"], "stopped before bookmarks and permalinks");
+    assert.ok(site.requests <= K, `${site.requests} requests to X`);
+    const pauseUntil = await worker.evaluate(async () => (await chrome.storage.local.get("pauseUntil")).pauseUntil);
+    assert.ok(Date.parse(pauseUntil) > Date.now() + 23 * 3600_000);
     await popup.close();
   } finally {
     site.graphqlStatus = 200;
+  }
+});
+
+// The bound must hold even when nothing on the page reads as a block: this
+// home page keeps calling X and never loads a timeline.
+test("a session window that keeps calling X without a timeline is closed at K requests and pauses sessions", async () => {
+  await configure();
+  site.homeWithoutTimeline = true;
+  try {
+    const popup = await context.newPage();
+    await popup.goto(`chrome-extension://${extensionId}/popup/popup.html`);
+    const startedAt = mock.requests.length;
+    await popup.click("#run");
+    const status = await mock.waitFor((r) => r.path === "/ingest/x/status", { after: startedAt, timeoutMs: 60_000 });
+    assert.equal(status.body.status, "error");
+    assert.match(status.body.detail, new RegExp(`X took ${K} requests without showing a timeline`));
+    // Requests the page had already started when the cap closed the window
+    // may still arrive; let them, then count.
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    assert.ok(site.requests <= K, `${site.requests} requests to X`);
+    assert.deepEqual(site.pages, ["/home"]);
+    const pauseUntil = await worker.evaluate(async () => (await chrome.storage.local.get("pauseUntil")).pauseUntil);
+    assert.ok(Date.parse(pauseUntil) > Date.now() + 23 * 3600_000);
+    await popup.close();
+  } finally {
+    site.homeWithoutTimeline = false;
   }
 });
 
@@ -271,6 +305,7 @@ async function startFakeX(dir) {
 }
 
 async function serveX(req, res) {
+  site.requests += 1;
   const url = new URL(req.url, "https://x.com");
   const send = (type, body, status = 200) => res.writeHead(status, { "content-type": type }).end(body);
   const html = async (file) => {
@@ -296,7 +331,9 @@ async function serveX(req, res) {
     if (op === "TweetDetail") return json(variables.cursor ? detailPage2Response() : detailResponse());
     return send("text/plain", "", 404);
   }
+  if (url.pathname === "/i/api/1.1/ping") return res.writeHead(204).end();
   if (url.pathname === "/home") {
+    if (site.homeWithoutTimeline) return html("busy.html");
     if (site.homeIsLoginWall) return res.writeHead(302, { location: "https://x.com/i/flow/login" }).end();
     if (site.homeRedirect) return res.writeHead(302, { location: `https://x.com${site.homeRedirect}` }).end();
     return html("home.html");

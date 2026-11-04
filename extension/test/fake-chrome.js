@@ -8,6 +8,16 @@
 
 export const LOCAL_QUOTA_BYTES = 10 * 1024 * 1024;
 
+// An event like chrome.*.onX, with fire() for tests.
+function listenerSet() {
+  const listeners = new Set();
+  return {
+    addListener: (fn) => listeners.add(fn),
+    removeListener: (fn) => listeners.delete(fn),
+    fire: (...args) => [...listeners].forEach((fn) => fn(...args)),
+  };
+}
+
 export function installFakeChrome() {
   const local = new Map();
   const session = new Map();
@@ -38,6 +48,7 @@ export function installFakeChrome() {
     storage: { local: area(local, LOCAL_QUOTA_BYTES), session: area(session) },
     windows: { remove: async (id) => void removedWindows.push(id) },
     alarms: { create: async () => {}, clear: async () => {}, get: async () => null },
+    webRequest: { onBeforeRequest: listenerSet() },
     runtime: { getPlatformInfo: async () => ({}) },
   };
   return { local, session, removedWindows };

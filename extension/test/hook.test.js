@@ -227,3 +227,18 @@ test("X error 88 in a JSON-typed XHR is reported, for captured and uncaptured op
     assert.deepEqual(sent.map((m) => [m.type, m.operation, m.body]), [["x-limit", operation, undefined]], operation);
   }
 });
+
+// Found in a readiness review of 24a9a80: code 88 in an operation the
+// extension captures went out only as a capture, which is never resent, so
+// a worker restart could lose it. It is also sent as a limit, which is.
+test("X error 88 in a captured operation is also reported as a limit", async () => {
+  await clearSent();
+  await page.evaluate(async () => {
+    await (await fetch("/i/api/graphql/q/SearchTimeline?variables=%7B%7D")).text();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  });
+  const sent = await sentToWorker();
+  assert.deepEqual(sent.map((m) => m.type).sort(), ["capture", "x-limit"]);
+  const limit = sent.find((m) => m.type === "x-limit");
+  assert.deepEqual([limit.operation, limit.body], ["SearchTimeline", undefined]);
+});

@@ -52,8 +52,11 @@ chrome.windows.onRemoved = removed;
 // What happened, in order: window opens and status reports.
 const log = [];
 let tab = null;
+// Chrome never reuses a window id within a browser run. Reusing one here let
+// an earlier test's late teardown close a later test's window.
+let nextWindowId = 10;
 chrome.windows.create = async ({ url }) => {
-  const id = 10 + log.length;
+  const id = nextWindowId++;
   log.push(`open:${id}`);
   tab = { id: id + 100, url };
   updates.fire(tab.id, { status: "complete" });
@@ -1072,4 +1075,55 @@ test("a service worker restarted while capture is Off drops pieces stored after 
   }
   assert.deepEqual(fake.local.get("outbox").map((e) => e.storedAt), [offAt - 1000]);
   await chrome.storage.local.set({ config: CONFIG });
+});
+
+// Found in a readiness review of 24a9a80.
+
+test("an unreserved record that holds a 429 is paused on and reported after a restart, not dropped", async () => {
+  await reset();
+  await chrome.storage.session.set({
+    activeSession: { id: "old", reserved: false, windowId: null, account: "owner", stop: { reason: "rate_limited", detail: "HomeTimeline answered HTTP 429" }, completed: false },
+  });
+  const restarted = await workerCopy();
+  await restarted.recoverInterruptedSession();
+  assert.deepEqual(statuses("old"), ["status:old:rate_limited"]);
+  assert.ok(Date.parse(fake.local.get("pauseUntil")) > Date.now());
+});
+
+test("a 429 a session took while its reservation was refused is reported for it", async () => {
+  await reset();
+  reservation = { status: 404, body: {} };
+  const reserving = hold(globalThis, "fetch", (url) => new URL(url).pathname === "/x/sessions/start");
+  const starting = session.startSession("alarm");
+  await reserving.entered;
+  await fromTab(500, { type: "x-status", operation: "HomeTimeline", status: 429 });
+  reserving.release();
+  const started = await starting;
+  assert.equal(started.started, false);
+  assert.ok(log.some((entry) => /^status:.+:rate_limited$/.test(entry)), log.join(" "));
+  assert.equal(fake.session.get("activeSession"), undefined);
+});
+
+test("a session window that makes K requests without a timeline is closed and pauses sessions", async () => {
+  await reset();
+  const started = await session.startSession("manual");
+  const opening = hold(chrome.tabs, "update");
+  await opening.entered;
+  const tabId = session.sessionTabId();
+  // Half from the tab, half from X's service worker (tab id -1). Requests
+  // from other tabs and other sites are not counted.
+  for (let i = 0; i < 25; i += 1) {
+    chrome.webRequest.onBeforeRequest.fire({ tabId, url: "https://x.com/i/api/1.1/ping" });
+    chrome.webRequest.onBeforeRequest.fire({ tabId: -1, initiator: "https://x.com", url: "https://x.com/i/api/1.1/ping" });
+    chrome.webRequest.onBeforeRequest.fire({ tabId: tabId + 1, url: "https://x.com/i/api/1.1/ping" });
+    chrome.webRequest.onBeforeRequest.fire({ tabId: -1, initiator: "https://example.com", url: "https://x.com/i/api/1.1/ping" });
+  }
+  opening.release();
+  const report = await ended.promise;
+  await untilIdle();
+  assert.equal(report.id, started.id);
+  assert.equal(report.status, "error");
+  assert.match(report.detail, /50 requests without showing a timeline \(limit 50\); .*x_requests=50$/);
+  assert.ok(Date.parse(fake.local.get("pauseUntil")) > Date.now());
+  assert.ok(fake.removedWindows.length > 0);
 });
