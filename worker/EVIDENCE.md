@@ -383,3 +383,18 @@ A second contract test (native Codex, `gpt-6.1-sol`, high, no prior context) the
 Deployed as `326f7a9a`. `GET /x/posts` now lists only posts some account other than `test` has seen, with that account's latest sighting. Ingest makes no candidates for account `test`, and `POST /candidates` returns 422 for refs starting `test-` and for any post only `test` has seen. The test fails on 1a28c52 (`candidates_created` was 1 for a `test` bookmark). Mutations M54 to M57 put each rule back, and all 53 mutations are caught.
 
 In production, an ingest as `test` with a bookmarks batch returned `candidates_created: 0`. Neither list form showed the posts. `POST /candidates` returned 422 for a `test-` ref, and 422 with "only seen by the reserved \"test\" account" for an unprefixed post id ingested as `test`. The rows were deleted afterward.
+
+## Deferral with state "new"
+
+The runner defers a candidate by completing it with `state: "new"`, and production answered 400. Deployed as `4ca1b01a` with migration 0005. A `new` completion releases the lease, clears the owner, keeps `attempts` and stores the note. The test fails on be41122.
+
+Keeping `attempts` changed two other things:
+
+- Claims take the least-attempted candidates first. Otherwise a deferred bookmark, with no score and an old `created_at`, is reclaimed every cycle ahead of everything else (M59).
+- The crash-loop guard counts `expired_leases`, not `attempts`. A candidate deferred three times is no longer failed by its first expired lease (M60).
+
+All 56 mutations are caught and 23 tests pass.
+
+**A two-minute window with a missing column.** The first `migrations apply` for 0005 did not apply, and I deployed without checking. Version `4ca1b01a` ran from about 11:03 to 11:05 UTC without `candidates.expired_leases`, and every claim in that window would have failed with 500. A failing D1 batch is one transaction, so no partial write is possible. I confirmed the column after applying the migration again.
+
+In production after the fix, a synthetic `watcher_event` candidate deferred with `state: "new"` returned `owner: null`, `lease_until: null`, `attempts: 1` and the note. The next claim returned it with `attempts: 2` and `expired_leases: 0`, and the deferred lease's token got 409. The row was deleted.
