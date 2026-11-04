@@ -24,7 +24,7 @@ import {
   setLocal,
   updatePageState,
 } from "./lib/store.js";
-import { postStatus } from "./lib/worker-api.js";
+import { pauseFrom, postStatus } from "./lib/worker-api.js";
 
 const FLUSH_ALARM = "flush";
 // X's GraphQL error code for "Rate limit exceeded"; it can arrive with HTTP 200.
@@ -217,8 +217,9 @@ async function sendPendingBackOff() {
   const report = await getLocal("pendingBackOff", null);
   if (!report) return;
   try {
-    await postStatus(await loadConfig(), report);
+    const answer = await postStatus(await loadConfig(), report);
     await setLocal({ pendingBackOff: null });
+    if (pauseFrom(answer)) await extendPause(pauseFrom(answer));
   } catch (err) {
     await recordProblem("worker", `back-off status not reported yet: ${err.message}`);
   }

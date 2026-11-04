@@ -8,7 +8,7 @@
 import { flush } from "./outbox.js";
 import { scheduleNext } from "./schedule.js";
 import { extendPause, getLocal, getPauseUntil, loadConfig, recordProblem, setLocal } from "./store.js";
-import { getDetailQueue, postStatus, reserveSession } from "./worker-api.js";
+import { getDetailQueue, pauseFrom, postStatus, reserveSession } from "./worker-api.js";
 import { bookmarksUrl, historyBookmarksUrl, homeUrl, isMintedXUrl, permalinkUrl, xPath } from "./xurl.js";
 
 const LOAD_TIMEOUT_MS = 30_000;
@@ -276,11 +276,13 @@ async function finish(s, outcome) {
   if (status !== "ok") await extendPause();
   let reported = false;
   try {
-    await postStatus(s.config, { account, session_id: s.id, status, detail });
+    const answer = await postStatus(s.config, { account, session_id: s.id, status, detail });
     reported = true;
     // The receipt is the first write after the Worker's answer, so a restart
     // after it does not send the status again.
     await publish(s, outcome, { final: true, statusSent: true });
+    // The Worker's view of the account's pause, which may be longer.
+    if (pauseFrom(answer)) await extendPause(pauseFrom(answer));
   } catch (err) {
     if (reported) throw err;
     await recordProblem("worker", `session status not reported: ${err.message}`);
@@ -362,13 +364,12 @@ async function recoverRecord(record) {
   if (status !== "ok") await extendPause();
   const config = await loadConfig();
   const account = record.account ?? (await getLocal("lastAccount", null)) ?? config.account;
-  const reported = await postStatus(config, { account, session_id: record.id, status, detail }).then(
-    () => true,
-    () => false,
-  );
+  const answer = await postStatus(config, { account, session_id: record.id, status, detail }).catch(() => null);
+  const reported = answer !== null;
   // The receipt first; without one the record stays, marked for the popup,
   // and the next start or restart reports it again.
   await chrome.storage.session.set({ activeSession: { ...settled, ...(reported ? { statusSent: true } : { awaitingReport: true }) } });
+  if (pauseFrom(answer)) await extendPause(pauseFrom(answer));
   await setLocal({
     lastSession: { ...record, endedAt: new Date().toISOString(), status, reason: outcome.reason, detail, reported },
   });

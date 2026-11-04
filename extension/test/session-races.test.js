@@ -82,20 +82,27 @@ chrome.scripting = {
 };
 // Status reports fail with 503 while this is set.
 let statusDown = false;
-// The answer to POST /x/sessions/start: a status and body, or "network" to fail.
+// The answer to POST /x/sessions/start: a status and body, or "network" to
+// fail; a list is answered in order, its last entry repeating.
 let reservation = { status: 200, body: {} };
+const reservedIds = [];
+// The body POST /ingest/x/status answers with.
+let statusAnswer = {};
 const ingests = [];
 globalThis.fetch = async (url, init) => {
   const path = new URL(url).pathname;
   if (path === "/x/sessions/start") {
     log.push("reserve");
-    if (reservation === "network") throw new TypeError("Failed to fetch");
-    return new Response(JSON.stringify(reservation.body), { status: reservation.status });
+    reservedIds.push(JSON.parse(init.body).session_id);
+    const answer = Array.isArray(reservation) ? (reservation.length > 1 ? reservation.shift() : reservation[0]) : reservation;
+    if (answer === "network") throw new TypeError("Failed to fetch");
+    return new Response(JSON.stringify(answer.body), { status: answer.status });
   }
   if (path === "/ingest/x/status") {
     const body = JSON.parse(init.body);
     log.push(`status:${body.session_id}:${body.status}`);
     if (statusDown) return new Response("{}", { status: 503 });
+    return new Response(JSON.stringify(statusAnswer));
   }
   if (path === "/ingest/x") ingests.push(JSON.parse(init.body));
   if (path === "/x/detail-queue") return new Response(JSON.stringify({ post_ids: [], pause_until: null }));
@@ -148,6 +155,8 @@ async function reset() {
   ingests.length = 0;
   statusDown = false;
   reservation = { status: 200, body: {} };
+  reservedIds.length = 0;
+  statusAnswer = {};
   ended = deferred();
 }
 
@@ -928,9 +937,32 @@ for (const [name, answer, reasonPattern] of [
     const result = await session.startSession("alarm");
     assert.equal(result.started, false);
     assert.match(result.reason, reasonPattern);
-    assert.deepEqual(log, ["reserve"]);
+    // A lost answer is retried once; nothing else happens.
+    assert.deepEqual(log, answer === "network" ? ["reserve", "reserve"] : ["reserve"]);
     assert.equal(session.sessionInfo(), null);
     assert.equal(fake.session.get("activeSession"), undefined);
     if (answer.body?.pause_until) assert.equal(fake.local.get("pauseUntil"), answer.body.pause_until);
   });
 }
+
+// Live endpoint behavior (Worker 16ffe7c2).
+
+test("a reservation whose answer was lost is retried once under the same session id", async () => {
+  await reset();
+  reservation = ["network", { status: 200, body: {} }];
+  const started = await session.startSession("manual");
+  assert.equal(started.started, true);
+  assert.deepEqual(reservedIds, [started.id, started.id]);
+  session.requestStop("stopped_by_user", "cleanup");
+  await ended.promise;
+  await untilIdle();
+});
+
+test("the pause_until the Worker returns for a status is stored", async () => {
+  await reset();
+  statusAnswer = { status: "ok", pause_until: "2099-01-01T00:00:00.000Z" };
+  await session.startSession("manual");
+  await ended.promise;
+  await untilIdle();
+  assert.equal(fake.local.get("pauseUntil"), "2099-01-01T00:00:00.000Z");
+});
