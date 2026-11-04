@@ -9,7 +9,10 @@ import { fail, HttpError, isStr, oneOf, optStr, str, utcDayStart } from "./http"
 import { TEST_ACCOUNT } from "./x";
 
 const KINDS = ["x_post", "watcher_event"] as const;
-const FINAL_STATES = ["proposed", "done", "skipped", "failed"] as const;
+// "new" is a deferral: the runner hands the candidate back for a later
+// claim (thread not captured yet, budget spent, runner stopping). It
+// releases the lease and keeps attempts; the others are final.
+const COMPLETE_STATES = ["new", "proposed", "done", "skipped", "failed"] as const;
 
 // docs/CONTRACT.md, "Scoring and candidates": unbookmarked candidates are
 // capped at 15 a day. Enforced here as well as in the runner, so a runner bug
@@ -18,7 +21,8 @@ export const UNBOOKMARKED_DAILY_CAP = 15;
 
 // A candidate whose lease has expired this many times is failed instead of
 // handed out again, so one input that kills the runner cannot loop forever.
-export const MAX_ATTEMPTS = 3;
+// Counted in expired_leases, not attempts: attempts also counts deferrals.
+export const MAX_EXPIRED_LEASES = 3;
 
 const MAX_LIMIT = 10;
 const MAX_TTL_S = 3600;
@@ -103,24 +107,26 @@ export async function claimCandidates(env: Env, b: Record<string, unknown>) {
   if (typeof limit !== "number" || !Number.isInteger(limit) || limit < 1) fail("limit must be a positive integer");
   const now = Date.now();
   const db = env.DB;
-  // Explicit signals (bookmarks, watcher matches) have no score and go
-  // first, then the highest scores, oldest first within each.
+  // Least-attempted first, so candidates handed back with state "new" go
+  // behind ones never tried instead of being reclaimed every cycle. Within
+  // that, explicit signals (bookmarks, watcher matches) have no score and go
+  // first, then the highest scores, oldest first.
   const [, claimed] = await db.batch<CandidateRow>([
     db
       .prepare(
         `UPDATE candidates SET state = 'failed', owner = NULL, lease_until = NULL, lease_token = NULL, updated_at = ?1,
-           note = 'lease expired after ' || attempts || ' attempts'
-         WHERE state = 'claimed' AND lease_until < ?1 AND attempts >= ?2`,
+           expired_leases = expired_leases + 1, note = 'lease expired ' || (expired_leases + 1) || ' times'
+         WHERE state = 'claimed' AND lease_until < ?1 AND expired_leases + 1 >= ?2`,
       )
-      .bind(now, MAX_ATTEMPTS),
+      .bind(now, MAX_EXPIRED_LEASES),
     db
       .prepare(
         `UPDATE candidates SET state = 'claimed', owner = ?1, lease_until = ?2, attempts = attempts + 1, updated_at = ?3,
-           lease_token = lower(hex(randomblob(16)))
+           lease_token = lower(hex(randomblob(16))), expired_leases = expired_leases + (state = 'claimed')
          WHERE id IN (
            SELECT id FROM candidates
            WHERE state = 'new' OR (state = 'claimed' AND lease_until < ?3)
-           ORDER BY score IS NOT NULL, score DESC, created_at, id
+           ORDER BY attempts, score IS NOT NULL, score DESC, created_at, id
            LIMIT ?4)
          RETURNING *`,
       )
@@ -132,10 +138,13 @@ export async function claimCandidates(env: Env, b: Record<string, unknown>) {
 export async function completeCandidate(env: Env, id: string, b: Record<string, unknown>) {
   const owner = str(b.owner, "owner", 200);
   const leaseToken = str(b.lease_token, "lease_token", 64);
-  const state = oneOf(b.state, FINAL_STATES, "state");
+  const state = oneOf(b.state, COMPLETE_STATES, "state");
   const note = optStr(b.note, "note", 2000);
+  // A deferral clears the owner so the row reads as unclaimed; a final state
+  // keeps who finished it.
   const row = await env.DB.prepare(
-    `UPDATE candidates SET state = ?3, note = coalesce(?4, note), owner = ?2, lease_until = NULL, lease_token = NULL, updated_at = ?5
+    `UPDATE candidates SET state = ?3, note = coalesce(?4, note), owner = CASE WHEN ?3 = 'new' THEN NULL ELSE ?2 END,
+       lease_until = NULL, lease_token = NULL, updated_at = ?5
      WHERE id = ?1 AND owner = ?2 AND lease_token = ?6 AND state = 'claimed'
      RETURNING *`,
   )

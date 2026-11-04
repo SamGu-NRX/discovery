@@ -14,8 +14,8 @@ Results and raw logs are in [EVIDENCE.md](EVIDENCE.md).
 
 ```sh
 npm install
-npm test                         # 22 tests against two real wrangler dev stacks and the fixture server, about 12 s
-python3 scripts/mutation-check.py # breaks the code 53 ways, one at a time; every break must fail a test, about 8 min
+npm test                         # 23 tests against two real wrangler dev stacks and the fixture server, about 12 s
+python3 scripts/mutation-check.py # breaks the code 56 ways, one at a time; every break must fail a test, about 8 min
 npm run evidence                 # live sources plus the fixture phases, about 2 min; writes evidence/<timestamp>/
 ```
 
@@ -67,13 +67,13 @@ No secret is printed. Then `node scripts/verify-production.mjs <base-url> ~/.age
 | `POST /positives`, `GET /positives?limit=&offset=` | Insert is deduplicated by id. A list page is at most 5000. |
 | `POST /candidates` | Idempotent on `(kind, ref)`: 201 when created, 200 with `created: false` when it exists. An `x_post` ref must be an ingested post. 429 after 15 unbookmarked `x_post` candidates in a UTC day. |
 | `GET /candidates?state=&kind=` | The newest 500. |
-| `POST /candidates/claim` | `{owner, ttl_s, limit}`, with `ttl_s` up to 3600 and `limit` up to 10. Each returned candidate carries a random `lease_token`, which appears only in this response. Unscored candidates (bookmarks, watcher matches) come first, then by score. |
-| `POST /candidates/:id/complete` | `{owner, lease_token, state, note}`. Succeeds only with the current claim's token; a reclaim replaces it, so the earlier claimant gets 409 even under the same owner name. An owner whose lease expired but was never reclaimed still completes. |
+| `POST /candidates/claim` | `{owner, ttl_s, limit}`, with `ttl_s` up to 3600 and `limit` up to 10. Each returned candidate carries a random `lease_token`, which appears only in this response. Least-attempted first, so a deferred candidate goes behind ones never tried; then unscored candidates (bookmarks, watcher matches), then by score. |
+| `POST /candidates/:id/complete` | `{owner, lease_token, state, note}`. Succeeds only with the current claim's token; a reclaim replaces it, so the earlier claimant gets 409 even under the same owner name. An owner whose lease expired but was never reclaimed still completes. `state` is `proposed`, `done`, `skipped` or `failed`, or `new` to defer: that releases the lease, clears the owner, keeps `attempts` and stores the note. |
 | `POST /proposals`, `GET /proposals?state=&since=` | See below. |
 | `POST /proposals/:id/rotate-token` | Re-mints the approval link of an unspent proposal, keeping `expires_at` and `inputs_hash`; the old link stops working. Refused with 409 once the notification went to T3 unless the body is `{"force": true}`, because the old link is the one in Sam's question card. Not in the contract. |
 | `GET /admin/log?since=` | Admin only. Counts and rows since a time (default 24 h): sessions, candidates, proposals, watcher events, the last cron run. |
 
-**Candidates.** A candidate is `new`, then `claimed` under a lease, then `proposed`, `done`, `skipped` or `failed`. An expired lease can be claimed again. A candidate whose lease has expired 3 times is set to `failed` instead of being handed out a fourth time, so one input that crashes the runner can't loop forever. `origin` records who made it: `bookmark` (ingest), `watcher` (a rule match) or `runner`.
+**Candidates.** A candidate is `new`, then `claimed` under a lease, then `proposed`, `done`, `skipped` or `failed`, or back to `new` when the runner defers it. An expired lease can be claimed again. A candidate whose lease has expired 3 times (`expired_leases`) is set to `failed` instead of being handed out a fourth time, so one input that crashes the runner can't loop forever. Deferrals raise `attempts` but not `expired_leases`. `origin` records who made it: `bookmark` (ingest), `watcher` (a rule match) or `runner`.
 
 **Proposals and approvals.**
 

@@ -27,7 +27,7 @@ muts = [
  ("M22 status pause ignored", "src/x.ts", "if (endedAt) return", "if (false) return"),
  ("M23 candidate claim ignores lease expiry", "src/candidates.ts", "OR (state = 'claimed' AND lease_until < ?3)", "OR state = 'claimed'"),
  # M24 (complete ignores owner) was retired in 10b06ac: lease_token now carries that guarantee (M44).
- ("M25 no attempt cap on candidates", "src/candidates.ts", "AND attempts >= ?2`", "AND attempts >= ?2 AND 0`"),
+ ("M25 no expired-lease cap on candidates", "src/candidates.ts", "AND expired_leases + 1 >= ?2`", "AND expired_leases + 1 >= ?2 AND 0`"),
  ("M26 route scopes not checked", "src/index.ts", 'if (scope !== "admin" && !found.route.scopes.includes(scope))', "if (false)"),
  ("M27 admin API open to any token", "src/index.ts", '  if (scope !== "admin") throw new HttpError(403, `the ${scope} token cannot call ${req.method} ${url.pathname}`);\n', ""),
  # v2, slice 2
@@ -66,6 +66,10 @@ muts = [
  ("M55 test bookmarks become candidates", "src/x.ts", "(account === TEST_ACCOUNT ? [] : postList)", "(postList)"),
  ("M56 test- refs accepted", "src/candidates.ts", 'if (ref.startsWith("test-")) throw', "if (false) throw"),
  ("M57 test-only posts accepted as candidates", "src/candidates.ts", "if (!post.real) throw", "if (false) throw"),
+ # deferral by completing with state "new"
+ ("M58 deferral keeps the owner", "src/candidates.ts", "owner = CASE WHEN ?3 = 'new' THEN NULL ELSE ?2 END", "owner = ?2"),
+ ("M59 claims ignore attempts", "src/candidates.ts", "ORDER BY attempts, score IS NOT NULL", "ORDER BY score IS NOT NULL"),
+ ("M60 the crash guard counts deferrals", "src/candidates.ts", "AND expired_leases + 1 >= ?2`", "AND attempts >= ?2`"),
  ("M37 malformed prepared URL breaks the card", "src/proposals.ts", "  } catch {\n    return null;\n  }\n}\n\nfunction preparedItem", "  } finally {\n  }\n}\n\nfunction preparedItem"),
 ]
 for name, path, old, new in muts:

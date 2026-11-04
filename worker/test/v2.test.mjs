@@ -278,6 +278,43 @@ test("lease tokens: completing needs the current claim's token, so a reclaim und
   assert.equal((await complete(second.id, { owner: "runner-same", lease_token: second.lease_token })).status, 200);
 });
 
+test("completing with state new defers: the lease is released, attempts and the note are kept, and never-tried candidates are claimed first", async () => {
+  const claimOne = async (owner) => (await runner("POST", "/candidates/claim", { owner, ttl_s: 60, limit: 1 })).candidates[0];
+  // Lease everything earlier tests left unclaimed, so the order below is this test's alone.
+  while (await claimOne("drainer"));
+
+  await runner("POST", "/candidates", { kind: "watcher_event", ref: "defer:1", title: "defer one" });
+  const first = await claimOne("runner-x");
+  assert.equal(first.ref, "defer:1");
+  const deferred = await runner("POST", `/candidates/${first.id}/complete`, { owner: "runner-x", lease_token: first.lease_token, state: "new", note: "deferred: thread not captured yet" });
+  assert.equal(deferred.state, "new");
+  assert.equal(deferred.owner, null);
+  assert.equal(deferred.lease_until, null);
+  assert.equal(deferred.attempts, 1, "a deferral keeps attempts");
+  assert.equal(deferred.note, "deferred: thread not captured yet");
+  const again = await s.call("POST", `/candidates/${first.id}/complete`, { owner: "runner-x", lease_token: first.lease_token, state: "done" }, { raw: true, token: "runner" });
+  assert.equal(again.status, 409, "a deferral ends the lease, so its token can't complete again");
+
+  await runner("POST", "/candidates", { kind: "watcher_event", ref: "defer:2", title: "defer two" });
+  assert.equal((await claimOne("runner-y")).ref, "defer:2", "a never-tried candidate goes before a deferred one");
+  const back = await claimOne("runner-y");
+  assert.equal(back.ref, "defer:1");
+  assert.equal(back.attempts, 2);
+
+  // Deferrals are not crashes: after three of them, one expired lease must
+  // not fail the candidate.
+  let lease = back;
+  for (const n of [2, 3]) {
+    await runner("POST", `/candidates/${lease.id}/complete`, { owner: "runner-y", lease_token: lease.lease_token, state: "new", note: `deferral ${n}` });
+    lease = (await runner("POST", "/candidates/claim", { owner: "runner-y", ttl_s: n === 3 ? 0.5 : 60, limit: 10 })).candidates.find((c) => c.ref === "defer:1");
+  }
+  assert.equal(lease.attempts, 4);
+  await new Promise((r) => setTimeout(r, 700));
+  const after = (await runner("POST", "/candidates/claim", { owner: "runner-z", ttl_s: 60, limit: 10 })).candidates.find((c) => c.ref === "defer:1");
+  assert.ok(after, "one expired lease after three deferrals must not fail the candidate");
+  assert.equal(after.expired_leases, 1);
+});
+
 // ---- proposals and approval links ----
 
 const proposal = (n, extra = {}) => ({
