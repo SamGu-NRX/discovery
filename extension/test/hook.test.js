@@ -145,6 +145,18 @@ const MISLABELED = {
       xhr.send();
     });
   },
+  // The "?" inside the payload ends the data: URL's path right after the
+  // operation name, so the path looks like a GraphQL path.
+  "a data: URL whose path names a GraphQL operation": async () => {
+    const url = 'data:application/json,{"forged":"/graphql/q/HomeTimeline?"}';
+    await (await fetch(url)).arrayBuffer();
+    const xhr = new XMLHttpRequest();
+    xhr.open("GET", url);
+    await new Promise((resolve) => {
+      xhr.onload = resolve;
+      xhr.send();
+    });
+  },
   "an XHR opened for GraphQL, then reopened elsewhere": async () => {
     const xhr = new XMLHttpRequest();
     xhr.open("GET", "/i/api/graphql/q/HomeTimeline");
@@ -161,10 +173,10 @@ test("a response is labeled by the URL the browser fetched, not the URL the page
     await clearSent();
     await page.evaluate(`(${scenario})().then(() => new Promise((resolve) => setTimeout(resolve, 150)))`);
     // Whatever is forwarded must be a GraphQL response the browser really
-    // fetched; here that can only be the home timeline fixture.
+    // fetched from X; here that can only be the home timeline fixture.
     const sent = await sentToWorker();
     for (const message of sent) {
-      assert.ok(message.body?.includes('"home_timeline_urt"'), `${name}: forwarded ${message.body?.slice(0, 40)}`);
+      assert.equal(message.body, JSON.stringify(homeResponse()), `${name}: forwarded ${message.body?.slice(0, 60)}`);
     }
   }
 });

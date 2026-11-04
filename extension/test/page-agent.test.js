@@ -80,3 +80,16 @@ test("the agent scrolls only when the page is still on the expected path", async
   await page.evaluate(() => history.replaceState(null, "", "/home"));
   assert.deepEqual(moved, { scrolled: false, path: "/settings" });
 });
+
+// A smooth scroll keeps moving after the agent returns, so the page could
+// change its path mid-scroll. Found in review at 1c7ec61.
+test("a scroll is finished when the checked step returns", async () => {
+  const moved = await page.evaluate(() => {
+    document.body.innerHTML = '<div style="height:20000px"></div>';
+    window.scrollTo({ top: 0, behavior: "instant" });
+    const result = globalThis.__dxAgent.run({ name: "scroll", arg: { fraction: 0.8, pathPattern: "^/home$" } });
+    return { result, y: window.scrollY, expected: Math.round(window.innerHeight * 0.8) };
+  });
+  assert.equal(moved.result.scrolled, true);
+  assert.equal(moved.y, moved.expected);
+});

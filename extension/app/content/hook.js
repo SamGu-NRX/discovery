@@ -54,6 +54,8 @@
   const resText = Response.prototype.text;
   const urlHref = getter(URL.prototype, "href");
   const urlPathname = getter(URL.prototype, "pathname");
+  const urlProtocol = getter(URL.prototype, "protocol");
+  const urlHostname = getter(URL.prototype, "hostname");
   const realFetch = window.fetch;
 
   // Keep in sync with OPS in lib/ops.js.
@@ -96,12 +98,16 @@
     }
   };
 
-  // The absolute URL and operation name, or null for anything that is not a
-  // GraphQL operation URL.
+  // The absolute URL and operation name, or null for anything that is not an
+  // X GraphQL URL. data: and blob: URLs can carry any path, so only https on
+  // X's own hosts counts.
   const parseGraphql = (url) => {
     if (typeof url !== "string" || url === "") return null;
     try {
       const parsed = new URLCtor(url);
+      if (apply(urlProtocol, parsed, []) !== "https:") return null;
+      const host = apply(urlHostname, parsed, []);
+      if (host !== "x.com" && host !== "api.x.com") return null;
       const m = apply(exec, OPERATION, [apply(urlPathname, parsed, [])]);
       return m ? { href: apply(urlHref, parsed, []), operation: m[1] } : null;
     } catch {

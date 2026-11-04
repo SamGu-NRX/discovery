@@ -95,6 +95,27 @@ await chrome.storage.local.set({ config: CONFIG });
 await import("../app/background.js");
 const session = await import("../app/lib/session.js");
 
+// A session writes its final record before it finishes tearing down.
+async function untilIdle() {
+  while (session.sessionInfo() !== null) await new Promise((resolve) => realSetTimeout(resolve, 1));
+}
+
+// Sends a message to background.js as an x.com tab would.
+function fromTab(tabId, message) {
+  const reply = deferred();
+  messages.fire(message, { id: chrome.runtime.id, url: "https://x.com/home", tab: { id: tabId } }, reply.resolve);
+  return reply.promise;
+}
+
+const capture = (url = "https://x.com/i/api/graphql/q/HomeTimeline") => ({
+  type: "capture",
+  operation: "HomeTimeline",
+  url,
+  body: JSON.stringify(homeResponse()),
+  pageLoadId: `load-${Math.random()}`,
+  account: "owner",
+});
+
 async function reset() {
   await session.recoverInterruptedSession();
   fake.local.delete("pauseUntil");
@@ -195,4 +216,99 @@ test("a capture parsed after its session ended is still queued under that sessio
   const outbox = fake.local.get("outbox") ?? [];
   assert.ok(outbox.length > 0, "capture queued");
   assert.ok(outbox.every((entry) => entry.session_id === sessionId && entry.mode === "active"));
+});
+
+// Found in review at 1c7ec61.
+
+test("a capture whose URL is not an https X URL is ignored, whatever its path says", async () => {
+  await reset();
+  // The "?" ends the data: URL's path right after the operation name.
+  const answer = await fromTab(500, capture('data:application/json,{"x":"/graphql/q/HomeTimeline?"}'));
+  assert.equal(answer.ignored, true);
+  assert.equal((fake.local.get("outbox") ?? []).length, 0);
+});
+
+test("a capture from one session is not counted in the next session", async () => {
+  await reset();
+  await session.startSession("manual");
+  const tabA = session.sessionTabId();
+  const entered = deferred();
+  const gate = deferred();
+  const get = chrome.storage.local.get;
+  chrome.storage.local.get = async (key) => {
+    if (key === "config") {
+      chrome.storage.local.get = get;
+      entered.resolve();
+      await gate.promise;
+    }
+    return get(key);
+  };
+  const reply = fromTab(tabA, capture());
+  await entered.promise;
+  session.requestStop("stopped_by_user", "end A");
+  await ended.promise;
+  await untilIdle();
+
+  ended = deferred();
+  const b = await session.startSession("manual");
+  assert.equal(b.started, true);
+  gate.resolve();
+  await reply;
+  const report = await ended.promise;
+  assert.equal(report.id, b.id);
+  assert.equal(report.posts, 0, "B counted a post captured by A");
+});
+
+test("a stop pressed while a restart is recovered does not overwrite the recovered record", async () => {
+  await reset();
+  await chrome.storage.session.set({
+    activeSession: { id: "old", windowId: 7, account: "owner", stop: { reason: "challenge", detail: "CAPTCHA" }, completed: false },
+  });
+  // Hold recovery while it closes the old window.
+  const closing = deferred();
+  const release = deferred();
+  const remove = chrome.windows.remove;
+  chrome.windows.remove = async (id) => {
+    chrome.windows.remove = remove;
+    closing.resolve();
+    await release.promise;
+    return remove(id);
+  };
+  const recovering = session.recoverInterruptedSession();
+  await closing.promise;
+  const starting = session.startSession("manual");
+  session.requestStop("stopped_by_user", "pressed during recovery");
+  await new Promise((resolve) => realSetTimeout(resolve, 20));
+  const record = (await chrome.storage.session.get("activeSession")).activeSession;
+  release.resolve();
+  await recovering;
+  await starting;
+
+  assert.equal(record.id, "old");
+  assert.equal(record.stop.reason, "challenge");
+  assert.ok(log.includes("status:old:challenge"), log.join(" "));
+});
+
+test("a GraphQL 429 that arrives while a finished session closes is still reported as rate_limited", async () => {
+  await reset();
+  const started = await session.startSession("manual");
+  const tabId = session.sessionTabId();
+  // Hold teardown as it closes the window, then deliver a 429 from the tab.
+  const closing = deferred();
+  const release = deferred();
+  const remove = chrome.windows.remove;
+  chrome.windows.remove = async (id) => {
+    chrome.windows.remove = remove;
+    closing.resolve();
+    await release.promise;
+    return remove(id);
+  };
+  await closing.promise;
+  await fromTab(tabId, { type: "x-status", operation: "HomeTimeline", status: 429 });
+  release.resolve();
+  const report = await ended.promise;
+
+  assert.equal(report.id, started.id);
+  assert.equal(report.status, "rate_limited");
+  assert.ok(Date.parse(fake.local.get("pauseUntil")) > Date.now());
 });

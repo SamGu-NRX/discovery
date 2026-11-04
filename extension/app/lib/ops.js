@@ -17,14 +17,17 @@ const OPS = {
   ListLatestTweetsTimeline: { op: "ListLatestTweetsTimeline", surface: "list" },
 };
 
+// Only an absolute https URL on X's own hosts names an operation; a data: or
+// blob: URL can carry any path.
 export function operationFromUrl(url) {
-  let path;
+  let parsed;
   try {
-    path = new URL(url, "https://x.com").pathname;
+    parsed = new URL(url);
   } catch {
     return null;
   }
-  const m = /\/graphql\/[^/]+\/([A-Za-z]+)$/.exec(path);
+  if (parsed.protocol !== "https:" || !["x.com", "api.x.com"].includes(parsed.hostname)) return null;
+  const m = /\/graphql\/[^/]+\/([A-Za-z]+)$/.exec(parsed.pathname);
   return m && Object.hasOwn(OPS, m[1]) ? m[1] : null;
 }
 

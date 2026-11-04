@@ -45,20 +45,32 @@ export function sessionInfo() {
 }
 
 // The stop is written to session storage at once, so a service worker that
-// dies before the session tears down still reports why it stopped.
+// dies before the session tears down still reports why it stopped. Returns
+// whether the running session will report it.
 export function requestStop(reason, detail) {
   const s = current;
-  // Once teardown starts the outcome is fixed; a late write would recreate
-  // the record teardown removes.
-  if (!s || s.stop || s.finishing) return;
+  if (!s) return false;
+  if (s.finishing) {
+    // A blocking stop (a 429 from the closing page, say) still decides the
+    // status until teardown has chosen it.
+    if (!BLOCKING.has(reason) || s.statusDecided) return false;
+    s.lateStop ??= { reason, detail };
+    return true;
+  }
+  if (s.stop) return true;
   s.stop = { reason, detail };
-  publish(s).catch(() => {});
+  // Before its first record the session may still be waiting for recovery
+  // to report the previous one; that record must not be overwritten. The
+  // first publish in startSession carries this stop.
+  if (s.recorded) publish(s).catch(() => {});
+  return true;
 }
 
-// Called for every capture from the session tab.
-export function noteSessionCapture({ operation, postIds }) {
+// Called for every capture from a session tab, with the id of the session
+// that was running when the capture arrived.
+export function noteSessionCapture(sessionId, { operation, postIds }) {
   const s = current;
-  if (!s) return;
+  if (!s || s.id !== sessionId) return;
   s.posts += postIds.length;
   s.operations.add(operation);
   if (operation === "Bookmarks" && postIds.some((id) => s.knownBookmarks.has(id))) {
@@ -85,6 +97,9 @@ export async function startSession(trigger) {
     stop: null,
     completed: false,
     finishing: false,
+    recorded: false,
+    statusDecided: false,
+    lateStop: null,
     notes: [],
     errorPages: 0,
     account: null,
@@ -105,7 +120,9 @@ export async function startSession(trigger) {
     const pause = await getPauseUntil();
     if (pause) return refuse(`Paused until ${new Date(pause).toLocaleString()}.`);
     s.knownBookmarks = new Set(await getLocal("sentBookmarkIds", []));
+    if (s.stop) return refuse("Stopped before it began.");
     await publish(s);
+    s.recorded = true;
   } catch (err) {
     return refuse(`Could not start: ${err.message}`);
   }
@@ -162,6 +179,11 @@ async function finish(s, outcome) {
     await sleep(1000);
     await chrome.windows.remove(s.windowId).catch(() => {});
   }
+  if (s.lateStop && !BLOCKING.has(outcome.reason)) {
+    outcome = s.lateStop;
+    await publish(s, outcome);
+  }
+  s.statusDecided = true;
   const status = BLOCKING.has(outcome.reason) ? outcome.reason : "ok";
   const detail = [
     `${outcome.reason}: ${outcome.detail}`,

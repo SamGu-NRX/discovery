@@ -98,10 +98,12 @@
     if (typeof pathPattern !== "string" || !new RegExp(pathPattern).test(location.pathname)) {
       return { scrolled: false, path: location.pathname };
     }
-    // Measured before scrolling: a smooth scroll has not moved yet on return.
     const root = document.scrollingElement ?? document.documentElement;
     const atBottom = window.scrollY + window.innerHeight >= root.scrollHeight - 8;
-    window.scrollBy({ top: Math.round(window.innerHeight * fraction), behavior: "smooth" });
+    // Instant, so the whole scroll happens inside this checked step; a smooth
+    // scroll would keep moving after the page changed its path. The human
+    // pace comes from the pause between screens.
+    window.scrollBy({ top: Math.round(window.innerHeight * fraction), behavior: "instant" });
     return { scrolled: true, atBottom };
   }
 

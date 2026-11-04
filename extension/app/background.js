@@ -137,7 +137,7 @@ async function handleCapture(message, tabId) {
   }
 
   const postIds = result.batch.posts.map((p) => p.id);
-  if (inSession) noteSessionCapture({ operation, postIds });
+  if (session) noteSessionCapture(session.id, { operation, postIds });
   await enqueue({
     account,
     session_id: session ? session.id : await passiveSessionId(),
@@ -157,11 +157,13 @@ async function handleXStatus(message, tabId) {
 }
 
 // X throttles the account, not the tab: any rate limit stops a running
-// session. One seen while Sam browses is reported once and holds sessions
-// off for the Worker's pause.
+// session. One the session will not report (seen while Sam browses, or too
+// late in a session's teardown) is reported once under the passive session
+// and holds sessions off for the Worker's pause.
 async function onRateLimited(tabId, detail) {
-  if (sessionTabId() !== null) requestStop("rate_limited", tabId === sessionTabId() ? detail : `${detail} in another tab`);
-  if (tabId === sessionTabId()) return;
+  const fromSession = tabId === sessionTabId();
+  const accepted = sessionTabId() !== null && requestStop("rate_limited", fromSession ? detail : `${detail} in another tab`);
+  if (fromSession && accepted) return;
   await recordProblem("x", detail);
   if (await getPauseUntil()) return;
   await setLocal({ pauseUntil: new Date(Date.now() + 24 * 3600_000).toISOString() });
