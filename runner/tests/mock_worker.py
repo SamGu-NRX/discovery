@@ -1,5 +1,10 @@
 """An in-memory Worker that follows docs/CONTRACT.md's runner endpoints, for tests and local runs.
 
+Where the deployed Worker (worker/src/candidates.ts, x.ts) settled a detail the contract leaves open, the
+mock does the same: candidate times are epoch milliseconds, a post's context nests its thread under
+`thread`, and the daily unbookmarked cap answers 429. One deliberate difference: complete accepts state
+"new", which the contract's deferral needs and the deployed Worker refuses (runner/README.md, Open issues).
+
 Embeddings are hashed bags of words (768 dims), so texts sharing words are similar; they stand in for
 bge-base only in shape. `routes_down` makes chosen routes answer 404, the way an undeployed slice does.
 Run standalone with `python3 runner/tests/mock_worker.py 8788`.
@@ -26,9 +31,19 @@ def iso(t):
     return t.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def ms(t):
+    return int(t.timestamp() * 1000)
+
+
+STOP = set("a an and are as at be but by for from has have i if in into is it its of on or that the this to was we "
+           "were will with you your our not just so can more all they he she them my me do what when how".split())
+
+
 def hashed_vector(text, dim=768):
     v = [0.0] * dim
     for w in re.findall(r"[a-z0-9]+", text.lower()):
+        if w in STOP or len(w) < 3:
+            continue
         h = int(hashlib.md5(w.encode()).hexdigest(), 16)
         v[h % dim] += 1.0 if (h >> 20) & 1 else -1.0
     n = math.sqrt(sum(x * x for x in v)) or 1.0
@@ -43,6 +58,7 @@ class State:
         self.candidates = {}  # id -> row
         self.proposals = {}
         self.routes_down = set()
+        self.daily_cap = 15
         self.lock = threading.Lock()
         self.log = []
 
@@ -53,7 +69,7 @@ class State:
         cid = uuid.uuid4().hex[:12]
         c = {"id": cid, "kind": kind, "ref": ref, "title": title, "url": url, "score": score, "score_parts": parts,
              "state": "new", "owner": None, "lease_until": None, "attempts": 0,
-             "created_at": created_at or iso(now()), "updated_at": iso(now()), "note": None}
+             "created_at": created_at or ms(now()), "updated_at": ms(now()), "note": None}
         self.candidates[cid] = c
         return c
 
@@ -93,7 +109,8 @@ def make_handler(state):
             if method == "POST" and path == "/embed":
                 return self.reply(200, {"vectors": [hashed_vector(t) for t in self.body()["texts"]]})
             if method == "GET" and path == "/positives":
-                return self.reply(200, {"items": s.positives})
+                off, lim = int(q.get("offset", 0)), int(q.get("limit", 2000))
+                return self.reply(200, {"total": len(s.positives), "offset": off, "items": s.positives[off:off + lim]})
             if method == "GET" and path == "/x/posts":
                 lim = int(q.get("limit", 200))
                 rows = [p for p in s.posts.values() if p.get("score") is None][:lim]
@@ -107,23 +124,29 @@ def make_handler(state):
                 if m[1] in s.contexts:
                     return self.reply(200, s.contexts[m[1]])
                 if m[1] in s.posts:
-                    return self.reply(200, {"post": s.posts[m[1]], "quoted": None, "op_self_thread": [],
-                                            "replies": [], "thread_captured": False})
+                    return self.reply(200, {"post": s.posts[m[1]], "quoted": None, "thread": None,
+                                            "thread_captured": False})
                 return self.reply(404, {"error": "no such post"})
             if method == "POST" and path == "/candidates":
                 b = self.body()
+                if b["kind"] == "x_post" and not s.posts.get(b["ref"], {}).get("bookmarked"):
+                    known = any(c["kind"] == "x_post" and c["ref"] == b["ref"] for c in s.candidates.values())
+                    made = sum(1 for c in s.candidates.values()
+                               if c["kind"] == "x_post" and not s.posts.get(c["ref"], {}).get("bookmarked"))
+                    if not known and made >= s.daily_cap:
+                        return self.reply(429, {"error": "daily cap reached"})
                 c = s.add_candidate(b["kind"], b["ref"], b["title"], b["url"], b.get("score"), b.get("score_parts"))
-                return self.reply(200, {"id": c["id"]})
+                return self.reply(201, {"created": True, "candidate": c})
             if method == "POST" and path == "/candidates/claim":
                 b = self.body()
                 out = []
                 for c in sorted(s.candidates.values(), key=lambda c: c["created_at"]):
                     if len(out) >= b["limit"]:
                         break
-                    expired = c["state"] == "claimed" and c["lease_until"] < iso(now())
+                    expired = c["state"] == "claimed" and c["lease_until"] < ms(now())
                     if c["state"] == "new" or expired:
                         c.update(state="claimed", owner=b["owner"], attempts=c["attempts"] + 1,
-                                 lease_until=iso(now() + dt.timedelta(seconds=b["ttl_s"])))
+                                 lease_until=ms(now() + dt.timedelta(seconds=b["ttl_s"])))
                         out.append(dict(c))
                 return self.reply(200, {"candidates": out})
             m = re.fullmatch(r"/candidates/([^/]+)/complete", path)
@@ -134,7 +157,7 @@ def make_handler(state):
                     return self.reply(404, {"error": "no such candidate"})
                 if c["owner"] != b["owner"] or c["state"] != "claimed":
                     return self.reply(409, {"error": "stale owner"})
-                c.update(state=b["state"], note=b.get("note"), updated_at=iso(now()), lease_until=None,
+                c.update(state=b["state"], note=b.get("note"), updated_at=ms(now()), lease_until=None,
                          owner=None if b["state"] == "new" else c["owner"])
                 return self.reply(200, {"ok": True})
             if method == "POST" and path == "/proposals":

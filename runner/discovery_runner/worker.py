@@ -82,7 +82,13 @@ class Worker:
         return out
 
     def positives(self):
-        return self._call("GET", "/positives")["items"]
+        items, offset = [], 0
+        while True:
+            page = self._call("GET", "/positives", query={"limit": 2000, "offset": offset})
+            items += page["items"]
+            offset += len(page["items"])
+            if not page["items"] or offset >= page.get("total", offset):
+                return items
 
     # Candidates
     def create_candidate(self, kind, ref, title, url, score, score_parts):

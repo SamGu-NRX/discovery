@@ -100,6 +100,8 @@ def _config_value(p: Path, key):
 def verify_claim(claim, roots):
     """Check one claim against this machine, read-only. Returns the claim with `status` and `detail`.
 
+    Models fill unused keys with null (a repo check carries "path": null), so every key is read as optional.
+
     status: verified (true now), false (checked and wrong), unverifiable (can't check safely or at all).
     claim: {"check": one of CHECKS, "path"|"repo", "text"?, "key"?, "value"?, "statement"}.
     """
@@ -110,7 +112,7 @@ def verify_claim(claim, roots):
             c.update(status="unverifiable", detail=f"no read-only check of kind {kind!r}")
             return c
         if kind == "repo_exists":
-            repo = c.get("repo", "")
+            repo = c.get("repo") or ""
             if "/" in repo.strip("/") and not repo.startswith(("~", "/")):
                 r = subprocess.run(["gh", "api", f"repos/{repo.strip('/')}", "--jq", ".full_name"], capture_output=True,
                                    text=True, timeout=30, stdin=subprocess.DEVNULL)
@@ -121,7 +123,7 @@ def verify_claim(claim, roots):
             c.update(status="verified" if hits else "false",
                      detail=str(hits[0]) if hits else f"no git repo named {repo!r} under {', '.join(roots)}")
             return c
-        cands = _resolve(c.get("path", ""), roots)
+        cands = _resolve(c.get("path") or "", roots)
         if any(_denied(p) for p in cands):
             c.update(status="unverifiable", detail="path is in a credential directory the runner never reads")
             return c
@@ -137,13 +139,13 @@ def verify_claim(claim, roots):
         elif not found[0].is_file():
             c.update(status="unverifiable", detail=f"{found[0]} is not a file")
         elif kind in ("file_contains", "file_lacks"):
-            has = c.get("text", "") in _read(found[0])
+            has = (c.get("text") or "") in _read(found[0])
             ok = has if kind == "file_contains" else not has
             c.update(status="verified" if ok else "false",
                      detail=f"{found[0]} {'contains' if has else 'lacks'} the text")
         elif kind == "config_equals":
             try:
-                v = _config_value(found[0], c.get("key", ""))
+                v = _config_value(found[0], c.get("key") or "")
             except KeyError:
                 c.update(status="false", detail=f"{c.get('key')} not set in {found[0]}")
                 return c
@@ -165,7 +167,7 @@ def paths_in(text):
 def verify_all(claims, texts, roots):
     """Verify declared claims, plus a path_exists check for every path named in `texts` but not declared."""
     out = [verify_claim(c, roots) for c in claims]
-    declared = {os.path.expanduser(c.get("path", "")) for c in claims}
+    declared = {os.path.expanduser(c["path"]) for c in claims if c.get("path")}
     for p in paths_in("\n".join(texts)):
         if os.path.expanduser(p) not in declared:
             out.append(verify_claim({"check": "path_exists", "path": p, "statement": f"named in the proposal: {p}",
@@ -188,16 +190,33 @@ def norm_target(t):
     return t.lower().rstrip("/")
 
 
-def find_duplicate(new, existing, vec_of, days, threshold):
+def specific_target(t, roots=()):
+    """A target narrow enough that sharing it means the same action: not a bare site, home, projects
+    folder or repo root. Round 1 merged three statechart saves into an eval proposal because all
+    named the same repo root."""
+    n = norm_target(t)
+    if not n:
+        return False
+    if n.startswith("/"):
+        p = Path(n)
+        broad = {Path.home(), *[Path(os.path.expanduser(r)) for r in roots]}
+        return p not in broad and not (p / ".git").exists()
+    if "/" not in n:
+        return ":" in n  # "anthropic.com:fellows program" names one program; a bare domain or repo name does not
+    # A URL with a path: an external repo or page is the thing acted on (trying that tool, that posting).
+    return bool(n.partition("/")[2])
+
+
+def find_duplicate(new, existing, vec_of, days, threshold, roots=()):
     """The existing proposal this one duplicates, or None.
 
     new/existing: {"id", "target", "created_at", "text"}; vec_of(text) returns a unit vector.
-    A match is the same normalized target (any age), or cosine >= threshold within `days`.
+    A match is the same specific target (any age), or cosine >= threshold within `days`.
     The closest match wins; a target match beats any cosine.
     """
     import datetime as dt
     cutoff = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    nt = norm_target(new.get("target"))
+    nt = norm_target(new.get("target")) if specific_target(new.get("target"), roots) else ""
     for e in existing:
         if nt and norm_target(e.get("target")) == nt and e.get("state") not in ("skipped", "expired", "failed"):
             return {**e, "match": "same_target"}

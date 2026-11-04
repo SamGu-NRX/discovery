@@ -18,7 +18,7 @@ from discovery_runner import config, policy, scoring  # noqa: E402
 from discovery_runner.llm import Gateway  # noqa: E402
 from discovery_runner.pipeline import Runner  # noqa: E402
 from discovery_runner.worker import Worker, flush_outbox  # noqa: E402
-from mock_worker import TOKEN, FakeGateway, MockWorker, hashed_vector, iso, now  # noqa: E402
+from mock_worker import TOKEN, FakeGateway, MockWorker, iso, ms, now  # noqa: E402
 
 
 class Home(unittest.TestCase):
@@ -54,11 +54,11 @@ class Home(unittest.TestCase):
         s = self.mock.state
         post = {"id": pid, "author_handle": "dev", "text": text, "urls": [], "media": [], "created_at": iso(now())}
         s.posts[pid] = {**post, "session_id": "s1", "bookmarked": 1}
-        s.contexts[pid] = {"post": post, "quoted": None, "thread_captured": True,
-                           "op_self_thread": [{"id": "112", "author_handle": "dev", "text": "the trick is replaying real recordings"}],
-                           "replies": [{"id": "113", "author_handle": "ann", "text": "this broke for us on long traces"}]}
+        s.contexts[pid] = {"post": post, "quoted": None, "thread_captured": True, "thread": {
+            "op_self_thread": [post, {"id": "112", "author_handle": "dev", "text": "the trick is replaying real recordings"}],
+            "replies": [{"id": "113", "author_handle": "ann", "text": "this broke for us on long traces"}], "missing_ids": []}}
         return s.add_candidate("x_post", pid, "t", f"https://x.com/dev/status/{pid}",
-                               created_at=iso(now() - dt.timedelta(hours=age_h)))
+                               created_at=ms(now() - dt.timedelta(hours=age_h)))
 
 
 TRIAGE_TRY = {"action_type": "try_tool", "why_it_matters": "ledger", "confidence": 0.8, "gist": "g"}
@@ -67,8 +67,10 @@ JUDGE_OK = {"verdict": "approve", "busywork": False, "reason": "useful"}
 
 
 def deep_read(target, claims=(), **kw):
-    return {"decline": False, "kind": "try_tool", "title": "Replay the watcher recordings", "why": "w",
+    # A message draft is a deliverable the runner writes itself, so these tests need no codex prep.
+    return {"decline": False, "kind": "reach_out", "title": "Replay the watcher recordings", "why": "w",
             "target": target, "claims": list(claims), "prep": {"needs_tools": False},
+            "draft": {"to": "@dev", "channel": "x_dm", "text": "Your replay trick caught a bug in my watcher."},
             "evidence": [{"quote": "the trick is replaying real recordings", "where": "op_followup"},
                          {"quote": "a sentence nobody wrote", "where": "op"}],
             "final_step_kind": "open_pr", "final_step": "open the PR", "approval_line": "Open it?", **kw}
@@ -116,6 +118,14 @@ class Duplicates(unittest.TestCase):
         old = iso(now() - dt.timedelta(days=20))
         self.assertIsNone(self.find({"text": "a2", "target": None}, [{"id": "p1", "text": "a", "created_at": old}]))
 
+    def test_shared_repo_root_alone_does_not_merge(self):
+        # fails if unrelated proposals merge because both name the same repo root (round 1 merged three
+        # statechart saves into an eval proposal this way)
+        with tempfile.TemporaryDirectory() as repo:
+            os.mkdir(os.path.join(repo, ".git"))
+            d = self.find({"text": "b", "target": repo}, [{"id": "p3", "text": "a", "target": repo, "created_at": iso(now())}])
+        self.assertIsNone(d)
+
     def test_same_target_merges_even_when_wording_differs(self):
         # fails if URL spelling (scheme, www, trailing slash) hides that two proposals act on the same thing
         d = self.find({"text": "b", "target": "https://www.github.com/acme/tool/"},
@@ -130,8 +140,11 @@ class PathVerification(unittest.TestCase):
         self.assertEqual(c["status"], "false")
 
     def test_path_named_only_in_prose_is_checked(self):
-        out = policy.verify_all([], ["edit ~/no-such-dir-xyz/app.py to add the gate"], ["/tmp"])
-        self.assertEqual([(c["path"], c["status"]) for c in out], [("~/no-such-dir-xyz/app.py", "false")])
+        # fails if prose can name a path no claim covers, or a claim with null keys (seen in round 1) crashes the run
+        claims = [{"check": "repo_exists", "repo": "no-such-repo-xyz", "path": None, "text": None}]
+        out = policy.verify_all(claims, ["edit ~/no-such-dir-xyz/app.py to add the gate"], ["/tmp"])
+        self.assertEqual([c["status"] for c in out], ["false", "false"])
+        self.assertEqual(out[1]["path"], "~/no-such-dir-xyz/app.py")
 
     def test_already_in_place_claim_is_checked_against_file(self):
         # fails if "setting X is not on yet" is believed when the file already has it (the Nov 4 cache case)
@@ -149,6 +162,21 @@ class PathVerification(unittest.TestCase):
         c = policy.verify_claim({"check": "file_contains", "path": "~/.agent-secrets/discovery-runner-token",
                                  "text": "a"}, [])
         self.assertEqual(c["status"], "unverifiable")
+
+
+class Manifest(unittest.TestCase):
+    def test_listed_but_missing_or_outside_deliverables_are_dropped(self):
+        # fails if a deliverable prep only claimed, or one pointing outside its folder, counts as prepared
+        from discovery_runner.pipeline import verify_manifest
+        with tempfile.TemporaryDirectory() as d:
+            w = Path(d)
+            (w / "report.md").write_text("measured 3 of 5")
+            (w / "empty.md").write_text("")
+            out = verify_manifest(w, [{"type": "file", "ref": "report.md"}, {"type": "file", "ref": "missing.mp4"},
+                                      {"type": "file", "ref": "empty.md"}, {"type": "file", "ref": "../../etc/hosts"},
+                                      {"type": "branch", "ref": "src/repo#fix"}])
+        self.assertEqual([Path(i["ref"]).name for i in out["verified"]], ["report.md"])
+        self.assertEqual(len(out["missing"]), 4)
 
 
 class Coursework(unittest.TestCase):
@@ -218,7 +246,7 @@ class Leases(Home):
         r = self.runner({})
         s = self.mock.state
         s.posts["222"] = {"id": "222", "author_handle": "a", "text": "x", "urls": [], "media": []}
-        c = s.add_candidate("x_post", "222", "t", "u", created_at=iso(now() - dt.timedelta(hours=1)))
+        c = s.add_candidate("x_post", "222", "t", "u", created_at=ms(now() - dt.timedelta(hours=1)))
         r.work()
         row = s.candidates[c["id"]]
         self.assertEqual(row["state"], "new")
@@ -229,7 +257,7 @@ class Leases(Home):
         r = self.runner({"You triage": TRIAGE_NONE})
         s = self.mock.state
         s.posts["223"] = {"id": "223", "author_handle": "a", "text": "x", "urls": [], "media": []}
-        s.add_candidate("x_post", "223", "t", "u", created_at=iso(now() - dt.timedelta(hours=7)))
+        s.add_candidate("x_post", "223", "t", "u", created_at=ms(now() - dt.timedelta(hours=7)))
         run = r.work()[0]
         self.assertIn("thread not captured: OP follow-ups and replies unseen", run["missing_context"])
 
@@ -271,15 +299,24 @@ class EndToEnd(Home):
         self.assertEqual(models["You deep-read"], "gpt-6.1-sol")
         self.assertEqual(models["independent"], "gpt-6-astra")
 
-    def test_judge_maybe_is_recorded_without_asking(self):
-        # fails if a proposal the independent judge only rated "maybe" notifies Sam (asks must stay rare)
+    def test_judge_maybe_reaches_sam_with_the_concern(self):
+        # fails if a "maybe" is silently recorded as done (round 1 hid every maybe that way) or loses its concern
         r = self.runner({"You triage": TRIAGE_TRY, "You deep-read": deep_read("~/x"),
-                         "independent": {"verdict": "maybe", "busywork": False, "reason": "later"}})
+                         "independent": {"verdict": "maybe", "busywork": False, "reason": "needs a real baseline"}})
         self.captured_post()
         r.work()
         (p,) = self.mock.state.proposals.values()
-        self.assertIsNone(p["final_step_kind"])
-        self.assertEqual(p["state"], "done")
+        self.assertEqual(p["final_step_kind"], "open_pr")
+        self.assertIn("needs a real baseline", p["why"])
+
+    def test_plan_without_deliverable_is_never_posted(self):
+        # fails if a proposal whose only output is a plan is recorded as finished work (round 1's main defect)
+        dr = deep_read("~/x", draft=None, prep={"needs_tools": False, "task": ""})
+        r = self.runner({"You triage": TRIAGE_TRY, "You deep-read": dr, "independent": JUDGE_OK})
+        self.captured_post()
+        run = r.work()[0]
+        self.assertEqual(self.mock.state.proposals, {})
+        self.assertIn("nothing to prepare", run["complete"]["note"])
 
     def test_second_candidate_with_same_target_merges(self):
         r = self.runner({"You triage": TRIAGE_TRY, "You deep-read": deep_read("https://github.com/acme/tool"),
@@ -319,11 +356,24 @@ class Scoring(Home):
         for i in range(20):
             self.mock.state.posts[str(i)] = {"id": str(i), "author_handle": "a", "text": "agent eval harness replay",
                                              "urls": [], "session_id": "s", "bookmarked": 1 if i == 0 else 0}
+        self.mock.state.daily_cap = 99  # the runner's own cap is under test, not the Worker's
         cfg = self.cfg(score_threshold=0.5)
         res = scoring.run_score(Worker.from_config(cfg), cfg, log=lambda m: None)
         made = {c["ref"] for c in self.mock.state.candidates.values()}
         self.assertEqual((res["scored"], res["candidates"], res["capped"]), (20, 15, 4))
         self.assertNotIn("0", made)
+
+    def test_worker_cap_refusal_does_not_abort_scoring(self):
+        # fails if the Worker's 429 at its own daily cap crashes the score pass before scores are written
+        self.mock.state.positives = [{"id": "p", "text": "agent eval harness replay", "author_handle": "x"}]
+        for i in range(5):
+            self.mock.state.posts[str(i)] = {"id": str(i), "author_handle": "a", "text": "agent eval harness replay",
+                                             "urls": [], "session_id": "s", "bookmarked": 0}
+        self.mock.state.daily_cap = 2
+        cfg = self.cfg(score_threshold=0.5)
+        res = scoring.run_score(Worker.from_config(cfg), cfg, log=lambda m: None)
+        self.assertEqual((res["candidates"], res["capped"]), (2, 3))
+        self.assertTrue(all(p["score"] is not None for p in self.mock.state.posts.values()))
 
 
 if __name__ == "__main__":

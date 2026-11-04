@@ -124,5 +124,8 @@ def now_iso() -> str:
     return dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def parse_iso(s: str) -> dt.datetime:
+def parse_iso(s) -> dt.datetime:
+    """An ISO string, or epoch milliseconds (the deployed Worker's candidate timestamps)."""
+    if isinstance(s, (int, float)):
+        return dt.datetime.fromtimestamp(s / 1000, dt.timezone.utc)
     return dt.datetime.fromisoformat(s.replace("Z", "+00:00"))

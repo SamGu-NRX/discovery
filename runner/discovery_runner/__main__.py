@@ -72,6 +72,10 @@ def main(argv=None):
     sub.add_parser("flush")
     c = sub.add_parser("calibrate")
     c.add_argument("--apply", action="store_true", help="write the suggested threshold to config.json")
+    c.add_argument("--archive", help="x-bookmarks-eval data.json: use its unsaved replies as sightings when the "
+                                     "Worker has none yet (harder negatives than random timeline posts)")
+    sp = sub.add_parser("seed-positives", help="POST Sam's saves from an x-bookmarks-eval archive to /positives")
+    sp.add_argument("archive")
     sub.add_parser("status")
     sub.add_parser("stop")
     sub.add_parser("resume")
@@ -103,8 +107,21 @@ def main(argv=None):
             print(r["candidate"]["id"], json.dumps(r.get("complete")))
     elif a.cmd == "flush":
         print(json.dumps(flush_outbox(worker)))
+    elif a.cmd == "seed-positives":
+        d = json.loads(open(a.archive).read())
+        items = [{"id": pid, "text": p["text"], "author_handle": p["author_handle"], "source": f"bookmark:{a.archive}"}
+                 for pid, p in d["posts"].items() if p.get("text")]
+        print(json.dumps(worker._call("POST", "/positives", {"items": items})))
     elif a.cmd == "calibrate":
-        res = calibrate(worker, cfg)
+        sightings, source = None, "x_posts scored by this runner"
+        if a.archive:
+            d = json.loads(open(a.archive).read())
+            saved = set(d["posts"])
+            sightings = [{"id": r["id"], "text": r["text"], "author_handle": r["author_handle"], "urls": [],
+                          "exclude_id": r["root_id"]}
+                         for r in d["replies"] if r["id"] not in saved and r.get("text")]
+            source = f"unsaved replies under saves in {a.archive}"
+        res = calibrate(worker, cfg, sightings=sightings, sighting_source=source)
         config.path("state", "calibration.json").write_text(json.dumps(res, indent=1))
         if a.apply and "suggested_threshold" in res:
             f = config.path("config.json")

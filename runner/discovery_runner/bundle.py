@@ -280,12 +280,19 @@ def x_post_bundle(worker, candidate):
         urls += [(u, "quoted") for u in ctx["quoted"].get("urls") or []]
     elif post.get("quoted_id"):
         b["missing_context"].append(f"quoted post {post['quoted_id']} not captured")
-    for i, t in enumerate(ctx.get("op_self_thread") or [], start=2):
+    # The contract lists op_self_thread and replies at the top level; the deployed Worker nests them under
+    # `thread`. Read either.
+    thread = ctx.get("thread") or {}
+    self_thread = [t for t in (thread.get("op_self_thread") or ctx.get("op_self_thread") or []) if t.get("id") != post.get("id")]
+    replies = thread.get("replies") or ctx.get("replies") or []
+    if thread.get("missing_ids"):
+        b["missing_context"].append(f"{len(thread['missing_ids'])} thread posts listed but not stored")
+    for i, t in enumerate(self_thread, start=2):
         e = _post(t, "op_followup")
         e["n"] = f"T{i}"
         b["op_followups"].append(e)
         urls += [(u, e["ref"]) for u in t.get("urls") or []]
-    for r in ctx.get("replies") or []:
+    for r in replies:
         e = _post(r, f"reply:@{r.get('author_handle')}")
         e["is_op"] = (r.get("author_handle") or "").lower() == (post.get("author_handle") or "").lower()
         if e["is_op"]:
@@ -307,6 +314,16 @@ def x_post_bundle(worker, candidate):
     return b, captured
 
 
+def board_jobs(board):
+    def get(url):
+        status, body, _ = curl(url)
+        if status != "200":
+            return {"ok": False, "error": f"HTTP {status}"}
+        return {"ok": True, "jobs": [{"id": str(j["id"]), "title": j["title"], "url": j.get("absolute_url"),
+                                      "location": (j.get("location") or {}).get("name")} for j in json.loads(body)["jobs"]]}
+    return cached(f"https://boards-api.greenhouse.io/v1/boards/{board}/jobs", get)
+
+
 def watcher_bundle(worker, candidate):
     b = {"kind": "watcher_event", "candidate_id": candidate["id"], "url": candidate.get("url"),
          "title": candidate.get("title"), "ref": candidate.get("ref"), "sources": [], "missing_context": []}
@@ -314,6 +331,14 @@ def watcher_bundle(worker, candidate):
         _attach_sources(b, [(candidate["url"], "watcher event")], worker)
     else:
         b["missing_context"].append("watcher event has no URL")
+    # Other open postings of the same program (title before the first comma), so tracks and locations of
+    # one program are compared in one proposal instead of judged one by one.
+    for s in b["sources"]:
+        if s.get("kind") == "job" and s.get("ok"):
+            jobs = board_jobs(s["board"])
+            family = (s.get("title") or "").split(",")[0].strip().lower()
+            b["sibling_postings"] = [j for j in jobs.get("jobs", []) if j["id"] != s["job_id"]
+                                     and j["title"].split(",")[0].strip().lower() == family]
     return b
 
 

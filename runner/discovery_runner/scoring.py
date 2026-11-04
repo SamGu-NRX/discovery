@@ -15,6 +15,7 @@ import sqlite3
 from urllib.parse import urlparse
 
 from . import config
+from .worker import WorkerError
 
 TOP_K = 5
 
@@ -158,8 +159,14 @@ def run_score(worker, cfg, log=print):
                 totals["capped"] += 1
                 continue
             title = f"@{c.get('author_handle')}: {(c.get('text') or '')[:90]}"
-            worker.create_candidate("x_post", c["id"], title, f"https://x.com/{c.get('author_handle')}/status/{c['id']}",
-                                    c["score"], c["parts"])
+            try:
+                worker.create_candidate("x_post", c["id"], title,
+                                        f"https://x.com/{c.get('author_handle')}/status/{c['id']}", c["score"], c["parts"])
+            except WorkerError as e:
+                if e.status != 429:  # the Worker enforces the same daily cap and answers 429
+                    raise
+                totals["capped"] += 1
+                continue
             totals["candidates"] += 1
         if len(posts) < 200:
             break
@@ -185,8 +192,12 @@ def calibrate(worker, cfg, positives=None, sightings=None, sighting_source="x_po
         others = set(authors[:i] + authors[i + 1:])
         loo.append(score(v, authors[i], rest, [], others, cfg["author_prior"])[0])
     pos_authors = set(authors)
-    rand = [score(v, (s.get("author_handle") or "").lower(), pv, [], pos_authors, cfg["author_prior"])[0]
-            for v, s in zip(sv, sightings)]
+    pos_ids = [p.get("id") for p in positives]
+    rand = []
+    for v, s in zip(sv, sightings):
+        # A reply under a save must not be compared with that save, the way each save leaves itself out.
+        refs = [x for x, pid in zip(pv, pos_ids) if pid != s.get("exclude_id")] if s.get("exclude_id") else pv
+        rand.append(score(v, (s.get("author_handle") or "").lower(), refs, [], pos_authors, cfg["author_prior"])[0])
     if not loo or not rand:
         return {"error": f"need saves and sightings, got {len(loo)} and {len(rand)}"}
     wins = sum((a > b) + 0.5 * (a == b) for a in loo for b in rand)
