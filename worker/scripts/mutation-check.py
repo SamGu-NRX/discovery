@@ -24,7 +24,7 @@ muts = [
  ("M19 unscored filter ignored", "src/x.ts", "WHERE p.score IS NULL ORDER BY", "WHERE 1 ORDER BY"),
  ("M20 thread replies in D1 order", "src/x.ts", "replies: inOrder(replyIds)", "replies: rows.filter((r) => replyIds.includes(r.id)).map(presentPost)"),
  ("M21 detail queue ignores captured threads", "src/x.ts", 'AND NOT EXISTS (SELECT 1 FROM x_threads t WHERE ${capturedFor("c.ref", "p.conversation_id")})', ""),
- ("M22 status pause ignored", "src/x.ts", "if (endedAt) return", "if (false) return"),
+ ("M22 status pause ignored", "src/x.ts", "if (pausedAt) return { post_ids: []", "if (false) return { post_ids: []"),
  ("M23 candidate claim ignores lease expiry", "src/candidates.ts", "OR (state = 'claimed' AND lease_until < ?3)", "OR state = 'claimed'"),
  # M24 (complete ignores owner) was retired in 10b06ac: lease_token now carries that guarantee (M44).
  ("M25 no expired-lease cap on candidates", "src/candidates.ts", "AND expired_leases + 1 >= ?2`", "AND expired_leases + 1 >= ?2 AND 0`"),
@@ -70,6 +70,12 @@ muts = [
  ("M58 deferral keeps the owner", "src/candidates.ts", "owner = CASE WHEN ?3 = 'new' THEN NULL ELSE ?2 END", "owner = ?2"),
  ("M59 claims ignore attempts", "src/candidates.ts", "ORDER BY attempts, score IS NOT NULL", "ORDER BY score IS NOT NULL"),
  ("M60 the crash guard counts deferrals", "src/candidates.ts", "AND expired_leases + 1 >= ?2`", "AND attempts >= ?2`"),
+ # session reservations, contract 36fbd71
+ ("M61 a replayed status overwrites the first", "src/x.ts", "const takes = `(x_sessions.status IS NULL OR (x_sessions.status IN ('ok', 'crash') AND excluded.status != 'ok'))`;", "const takes = `(1)`;"),
+ ("M62 unreported reservations never count as crashes", "src/x.ts", "WHERE account = ?1 AND reserved_at IS NOT NULL AND status IS NULL AND reserved_at < ?3`", "WHERE account = ?1 AND reserved_at IS NOT NULL AND status IS NULL AND reserved_at < ?3 AND 0`"),
+ ("M63 a refused start still reserves", "src/x.ts", "       WHERE NOT EXISTS (SELECT 1 FROM x_sessions WHERE account = ?2 AND status IS NOT NULL AND status != 'ok' AND ended_at > ?4)\n", ""),
+ ("M64 crash pause runs from the reservation", "src/x.ts", "SET status = 'crash', ended_at = ?2,", "SET status = 'crash', ended_at = reserved_at,"),
+ ("M65 a crash is never replaced by a later status", "src/x.ts", "x_sessions.status IN ('ok', 'crash') AND", "x_sessions.status IN ('ok') AND"),
  ("M37 malformed prepared URL breaks the card", "src/proposals.ts", "  } catch {\n    return null;\n  }\n}\n\nfunction preparedItem", "  } finally {\n  }\n}\n\nfunction preparedItem"),
 ]
 for name, path, old, new in muts:

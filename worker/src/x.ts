@@ -6,7 +6,7 @@
 // constant however many posts a request carries.
 
 import type { Env } from "./check";
-import { fail, HttpError, intParam, isStr, oneOf, optStr, readJson, str } from "./http";
+import { fail, HttpError, intParam, isStr, json, oneOf, optStr, readJson, str } from "./http";
 
 // docs/CONTRACT.md: at most 128 KB. A 245 KB ingest took 15 to 17 ms of CPU
 // on a cold request in production, over the Free plan's 10 ms.
@@ -268,6 +268,17 @@ export async function ingest(env: Env, req: Request) {
 
 const clip = (s: string, n: number) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
 
+// The account is paused for 24 hours from its latest non-ok status, where a
+// detected crash counts as status 'crash' timed at detection.
+const PAUSED_SINCE = `SELECT max(ended_at) AS paused_at FROM x_sessions
+  WHERE account = ?1 AND status IS NOT NULL AND status != 'ok' AND ended_at > ?2`;
+const pauseUntil = (pausedAt: number | null | undefined) => (pausedAt ? new Date(pausedAt + PAUSE_MS).toISOString() : null);
+
+// A session's first status wins, so a replayed status moves nothing: not the
+// time (which would extend the pause) and not the status (an "ok" must never
+// clear a non-ok one). Two later reports do change it: a non-ok status after
+// "ok", and a real status after a detected crash, both timed when they arrive,
+// so the pause runs from the later event.
 export async function ingestStatus(env: Env, req: Request) {
   const b = await readJson<Record<string, unknown>>(req);
   const account = str(b.account, "account", 64);
@@ -277,13 +288,59 @@ export async function ingestStatus(env: Env, req: Request) {
   const screens = b.screens === undefined || b.screens === null ? null : b.screens;
   if (screens !== null && !Number.isInteger(screens)) fail("screens must be an integer");
   const now = Date.now();
-  await env.DB.prepare(
-    `INSERT INTO x_sessions (session_id, account, started_at, ended_at, status, detail, screens) VALUES (?1, ?2, ?3, ?3, ?4, ?5, ?6)
-     ON CONFLICT (session_id) DO UPDATE SET ended_at = ?3, status = ?4, detail = ?5, screens = coalesce(?6, x_sessions.screens)`,
-  )
-    .bind(sessionId, account, now, status, detail, screens)
-    .run();
-  return { session_id: sessionId, status, pause_until: status === "ok" ? null : new Date(now + PAUSE_MS).toISOString() };
+  const takes = `(x_sessions.status IS NULL OR (x_sessions.status IN ('ok', 'crash') AND excluded.status != 'ok'))`;
+  const [stored, paused] = await env.DB.batch<{ status?: string; ended_at?: number; paused_at?: number }>([
+    env.DB.prepare(
+      `INSERT INTO x_sessions (session_id, account, started_at, ended_at, status, detail, screens) VALUES (?1, ?2, ?3, ?3, ?4, ?5, ?6)
+       ON CONFLICT (session_id) DO UPDATE SET
+         ended_at = CASE WHEN ${takes} THEN excluded.ended_at ELSE x_sessions.ended_at END,
+         detail = CASE WHEN ${takes} THEN excluded.detail ELSE x_sessions.detail END,
+         status = CASE WHEN ${takes} THEN excluded.status ELSE x_sessions.status END,
+         screens = coalesce(excluded.screens, x_sessions.screens)
+       RETURNING status, ended_at`,
+    ).bind(sessionId, account, now, status, detail, screens),
+    env.DB.prepare(PAUSED_SINCE).bind(account, now - PAUSE_MS),
+  ]);
+  return { session_id: sessionId, status: stored.results[0].status, pause_until: pauseUntil(paused.results[0]?.paused_at) };
+}
+
+// A reservation that reports no status within this long is taken as a crash.
+export const RESERVATION_TIMEOUT_MS = 30 * 60 * 1000;
+
+// docs/CONTRACT.md 36fbd71. The extension must get 200 here before it opens
+// any X window. The Worker refuses (423) while the account is paused, so the
+// pause holds even when the extension loses its own state. One D1 batch:
+// record crashes, then reserve only if nothing pauses the account.
+export async function startSession(env: Env, req: Request): Promise<Response> {
+  const b = await readJson<Record<string, unknown>>(req);
+  const account = str(b.account, "account", 64);
+  const sessionId = str(b.session_id, "session_id", 128);
+  const now = Date.now();
+  const [, reserved, paused, existing] = await env.DB.batch<Record<string, unknown>>([
+    env.DB.prepare(
+      `UPDATE x_sessions SET status = 'crash', ended_at = ?2,
+         detail = 'no status ' || ((?2 - reserved_at) / 60000) || ' min after its reservation'
+       WHERE account = ?1 AND reserved_at IS NOT NULL AND status IS NULL AND reserved_at < ?3`,
+    ).bind(account, now, now - RESERVATION_TIMEOUT_MS),
+    env.DB.prepare(
+      `INSERT INTO x_sessions (session_id, account, mode, started_at, reserved_at)
+       SELECT ?1, ?2, 'active', ?3, ?3
+       WHERE NOT EXISTS (SELECT 1 FROM x_sessions WHERE account = ?2 AND status IS NOT NULL AND status != 'ok' AND ended_at > ?4)
+       ON CONFLICT (session_id) DO UPDATE SET reserved_at = coalesce(x_sessions.reserved_at, excluded.reserved_at), mode = 'active'
+         WHERE x_sessions.status IS NULL AND x_sessions.account = excluded.account
+       RETURNING reserved_at`,
+    ).bind(sessionId, account, now, now - PAUSE_MS),
+    env.DB.prepare(PAUSED_SINCE).bind(account, now - PAUSE_MS),
+    env.DB.prepare("SELECT account, status FROM x_sessions WHERE session_id = ?1").bind(sessionId),
+  ]);
+  const pausedAt = paused.results[0]?.paused_at as number | null | undefined;
+  if (pausedAt) return json({ pause_until: pauseUntil(pausedAt) }, 423);
+  const row = reserved.results[0];
+  if (!row) {
+    const s = existing.results[0];
+    throw new HttpError(409, `session ${sessionId} is ${s?.account !== account ? `another account's` : `already closed with status ${s?.status}`}; start a new session_id`);
+  }
+  return json({ session_id: sessionId, reserved_at: new Date(row.reserved_at as number).toISOString(), pause_until: null });
 }
 
 // A capture covers a post when it was taken on that post's permalink (the
@@ -300,10 +357,8 @@ export async function detailQueue(env: Env, url: URL) {
   const account = url.searchParams.get("account");
   if (!isStr(account)) fail("account query parameter is required");
   const now = Date.now();
-  const [paused, queue] = await env.DB.batch<{ ended_at?: number; ref?: string }>([
-    env.DB.prepare(
-      `SELECT max(ended_at) AS ended_at FROM x_sessions WHERE account = ?1 AND status IS NOT NULL AND status != 'ok' AND ended_at > ?2`,
-    ).bind(account, now - PAUSE_MS),
+  const [paused, queue] = await env.DB.batch<{ paused_at?: number; ref?: string }>([
+    env.DB.prepare(PAUSED_SINCE).bind(account, now - PAUSE_MS),
     env.DB.prepare(
       `SELECT c.ref FROM candidates c JOIN x_posts p ON p.id = c.ref
        WHERE c.kind = 'x_post' AND c.state IN ('new', 'claimed')
@@ -312,8 +367,8 @@ export async function detailQueue(env: Env, url: URL) {
        ORDER BY c.created_at, c.id LIMIT ?2`,
     ).bind(account, DETAIL_QUEUE_SIZE),
   ]);
-  const endedAt = paused.results[0]?.ended_at;
-  if (endedAt) return { post_ids: [], pause_until: new Date(endedAt + PAUSE_MS).toISOString() };
+  const pausedAt = paused.results[0]?.paused_at;
+  if (pausedAt) return { post_ids: [], pause_until: pauseUntil(pausedAt) };
   return { post_ids: queue.results.map((r) => r.ref!), pause_until: null };
 }
 

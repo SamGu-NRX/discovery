@@ -14,8 +14,8 @@ Results and raw logs are in [EVIDENCE.md](EVIDENCE.md).
 
 ```sh
 npm install
-npm test                         # 23 tests against two real wrangler dev stacks and the fixture server, about 12 s
-python3 scripts/mutation-check.py # breaks the code 56 ways, one at a time; every break must fail a test, about 8 min
+npm test                         # 24 tests against two real wrangler dev stacks and the fixture server, about 12 s
+python3 scripts/mutation-check.py # breaks the code 61 ways, one at a time; every break must fail a test, about 8 min
 npm run evidence                 # live sources plus the fixture phases, about 2 min; writes evidence/<timestamp>/
 ```
 
@@ -58,7 +58,8 @@ No secret is printed. Then `node scripts/verify-production.mjs <base-url> ~/.age
 | Route | Notes |
 | --- | --- |
 | `POST /ingest/x` | At most 128 KB, counted in bytes as the body arrives, with or without a Content-Length. Every batch needs a `batch_id`. A `batch_id` the Worker has already recorded is skipped whole: no sightings, no counter changes. Returns `posts_upserted` (unique posts written), `sightings`, `new_posts`, `candidates_created`, and `duplicate_batch_ids` (the skipped ones). Fails with 400 naming the first bad field, such as `batches[0].posts[3].author_handle`. |
-| `POST /ingest/x/status` | A status other than `ok` pauses that account's detail queue for 24 hours. |
+| `POST /ingest/x/status` | Closes the session's reservation. A status other than `ok` pauses that account's sessions and detail queue for 24 hours. A session's first status wins: a replay changes nothing, and `ok` never clears a non-ok status. A non-ok status after `ok`, or a real status after a detected crash, replaces it and restarts the 24 hours. Returns the stored status and the account's `pause_until`. |
+| `POST /x/sessions/start` | `{account, session_id}`. The extension needs 200 here before it opens any X window. 423 `{pause_until}` when the account reported a status other than `ok` in the last 24 hours, or when an earlier reservation is over 30 minutes old with no status: that one is recorded as status `crash`, and the 24 hours run from when the crash is detected. A refused start reserves nothing. 409 for a session id that is already closed or belongs to another account. |
 | `GET /x/detail-queue?account=` | Up to 5 candidate post ids this account has seen whose thread isn't captured yet. |
 | `GET /x/posts?unscored=1&limit=` | At most 200 per page, oldest first, each with its latest `account`, `surface` and `session_id`. Without `unscored=1`, newest first. |
 | `POST /x/posts/scores` | Up to 1000 `{id, score, parts}`. |

@@ -206,6 +206,72 @@ test("a captured thread leaves the detail queue and reads back in server order; 
   assert.ok(pauseMs > 23.9 * 3600_000 && pauseMs <= 24 * 3600_000, `pause_until should be 24 h out, was ${pauseMs} ms`);
 });
 
+test("session reservations: a non-ok status or an unreported reservation pauses the account for 24 h, and replays neither extend nor clear it", async () => {
+  const start = async (account, session_id) => {
+    const res = await s.call("POST", "/x/sessions/start", { account, session_id }, { raw: true, token: "ingest" });
+    return { status: res.status, body: await res.json() };
+  };
+  const report = (account, session_id, status) => s.call("POST", "/ingest/x/status", { account, session_id, status }, { token: "ingest" });
+  const hour = 3600_000;
+  // Moves a session's times into the past instead of waiting.
+  const age = (session_id, column, ms) => s.d1(`UPDATE x_sessions SET ${column} = ${column} - ${ms} WHERE session_id = '${session_id}'`);
+  const until = (r) => Date.parse(r.body.pause_until);
+
+  // A clean session, then the next one starts.
+  assert.equal((await start("acct-ok", "ok-1")).status, 200);
+  await report("acct-ok", "ok-1", "ok");
+  assert.equal((await start("acct-ok", "ok-2")).status, 200);
+
+  // rate_limited pauses the account for 24 h from the report.
+  assert.equal((await start("acct-rl", "rl-1")).status, 200);
+  await report("acct-rl", "rl-1", "rate_limited");
+  let r = await start("acct-rl", "rl-2");
+  assert.equal(r.status, 423);
+  assert.ok(Math.abs(until(r) - (Date.now() + 24 * hour)) < 60_000);
+  // A refused start leaves no reservation, which would otherwise read as a
+  // crash 30 minutes later and pause the account again.
+  assert.deepEqual(await s.d1("SELECT session_id FROM x_sessions WHERE session_id = 'rl-2'"), []);
+
+  // A replayed status, an hour later, neither extends nor clears the pause.
+  await age("rl-1", "ended_at", hour);
+  const before = until(await start("acct-rl", "rl-3"));
+  await report("acct-rl", "rl-1", "rate_limited");
+  await report("acct-rl", "rl-1", "ok");
+  r = await start("acct-rl", "rl-4");
+  assert.equal(r.status, 423, "a replayed ok must not clear the pause");
+  assert.equal(until(r), before, "a replayed status must not extend the pause");
+
+  // 24 h after the status, sessions start again.
+  await age("rl-1", "ended_at", 23 * hour + 60_000);
+  assert.equal((await start("acct-rl", "rl-5")).status, 200);
+
+  // A reservation that never reports is a crash once it is 30 min old,
+  // and the 24 h run from when the crash is detected.
+  assert.equal((await start("acct-crash", "cr-1")).status, 200);
+  await age("cr-1", "reserved_at", 29 * 60_000);
+  assert.equal((await start("acct-crash", "cr-2")).status, 200, "29 minutes without a status is not a crash yet");
+  await report("acct-crash", "cr-2", "ok");
+  await age("cr-1", "reserved_at", 2 * 60_000);
+  r = await start("acct-crash", "cr-3");
+  assert.equal(r.status, 423);
+  const crashUntil = until(r);
+  assert.ok(Math.abs(crashUntil - (Date.now() + 24 * hour)) < 60_000);
+  // A late ok for the crashed session does not clear it; a late real status
+  // starts the clock from its own, later time.
+  await report("acct-crash", "cr-1", "ok");
+  assert.equal(until(await start("acct-crash", "cr-4")), crashUntil);
+  await age("cr-1", "ended_at", hour);
+  await report("acct-crash", "cr-1", "rate_limited");
+  assert.ok(until(await start("acct-crash", "cr-5")) > crashUntil - hour + 30 * 60_000, "a real status after the crash restarts the 24 h");
+  await age("cr-1", "ended_at", 24 * hour + 60_000);
+  assert.equal((await start("acct-crash", "cr-6")).status, 200);
+
+  // The guard is per account, and a closed session id can't be reserved again.
+  assert.equal((await start("acct-other", "other-1")).status, 200);
+  assert.equal((await start("acct-ok", "ok-1")).status, 409);
+  assert.equal((await s.call("POST", "/x/sessions/start", { account: "a", session_id: "b" }, { raw: true, token: "runner" })).status, 403);
+});
+
 test("a reply is covered only by a capture of its own permalink, not by the root's capture listing it among replies", async () => {
   const root = post("t-root", { author_handle: "bob" });
   const self = post("t-self", { author_handle: "bob", conversation_id: "t-root", in_reply_to_id: "t-root" });
