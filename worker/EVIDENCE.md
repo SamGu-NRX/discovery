@@ -398,3 +398,25 @@ All 56 mutations are caught and 23 tests pass.
 **A two-minute window with a missing column.** The first `migrations apply` for 0005 did not apply, and I deployed without checking. Version `4ca1b01a` ran from about 11:03 to 11:05 UTC without `candidates.expired_leases`, and every claim in that window would have failed with 500. A failing D1 batch is one transaction, so no partial write is possible. I confirmed the column after applying the migration again.
 
 In production after the fix, a synthetic `watcher_event` candidate deferred with `state: "new"` returned `owner: null`, `lease_until: null`, `attempts: 1` and the note. The next claim returned it with `attempts: 2` and `expired_leases: 0`, and the deferred lease's token got 409. The row was deleted.
+
+## Session reservations (contract 36fbd71)
+
+Deployed as `ed72ea3a` with migration 0006, then `16ffe7c2`, which only rounds the crash detail to whole minutes. `POST /x/sessions/start` reserves an active session, or answers 423 `{pause_until}` in two cases: the account reported a non-ok status in the last 24 hours, or an earlier reservation is over 30 minutes old with no status. That reservation is recorded as status `crash`, timed at detection. A session's first status wins: replays change nothing, and `ok` never clears a non-ok status. A real status after a crash replaces it, so the 24 hours run from the later event. A refused start reserves nothing, because an unreported reservation made during a pause would read as a crash 30 minutes later and re-pause the account.
+
+The test fails on b39f1ee, where the route doesn't exist. It moves time by updating rows in local D1, with no timers. Mutations M61 to M65 each put back one rule, and all 61 mutations are caught. There are 24 tests.
+
+In production with account `test` (times moved by updating only `test` rows):
+
+| Step | Result |
+| --- | --- |
+| start, then `ok` | 200 |
+| start after `ok` | 200 |
+| start after `rate_limited` | 423, pause 24.00 h; the refused start wrote no row |
+| replayed `rate_limited` and `ok` an hour later | 423, `pause_until` unchanged (23.00 h left) |
+| start 24 h after the status | 200 |
+| start after an unreported reservation aged 31 min | 423, pause 24.00 h; that row reads `crash`, "no status 31 min after its reservation" |
+| runner token | 403 |
+
+The `test` rows were deleted afterward.
+
+**Migrations.** `wrangler d1 migrations apply --remote` exited after printing only its banner for both 0005 and 0006, and a second run applied each. For 0006 I checked before deploying. `scripts/deploy-production.sh` now stops when a migration is still pending after the apply step.
