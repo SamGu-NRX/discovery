@@ -1,0 +1,202 @@
+
+ ⛅️ wrangler 4.19.1 (update available 4.157.0)
+──────────────────────────────────────────────
+Using vars defined in .dev.vars
+Your Worker has access to the following bindings:
+Binding                                Resource                  Mode
+env.WATCHER (WatcherDO)                Durable Object            local
+env.DB (watcher-proto)                 D1 Database               local
+env.ADMIN_TOKEN ("(hidden)")           Environment Variable      local
+env.WEBSUB_SECRET ("(hidden)")         Environment Variable      local
+
+⎔ Starting local server...
+[wrangler:info] Ready on http://127.0.0.1:8787
+[wrangler:info] GET /admin/stats 200 OK (9ms)
+[wrangler:info] POST /admin/watchers 201 Created (7ms)
+[wrangler:info] POST /admin/watchers 201 Created (6ms)
+[wrangler:info] POST /admin/watchers 201 Created (3ms)
+[wrangler:info] POST /admin/watchers 201 Created (3ms)
+[wrangler:info] POST /admin/watchers 201 Created (23ms)
+[wrangler:info] POST /admin/watchers 201 Created (40ms)
+[wrangler:info] GET /admin/watchers/yt-theo 200 OK (42ms)
+[yt-theo] check trigger=alarm status=404 bytes=0 latency=295ms conditional=false outcome=error items=0 events=0 model_calls=0 next=+1800s mode=normal error=HTTP 404
+[page-anthropic-careers] check trigger=alarm status=200 bytes=227050 latency=238ms conditional=false outcome=seeded items=0 events=0 model_calls=0 next=+21600s mode=normal
+[hn-anthropic] check trigger=alarm status=200 bytes=27174 latency=291ms conditional=false outcome=seeded items=20 events=0 model_calls=0 next=+900s mode=normal
+[greenhouse-anthropic] check trigger=alarm status=200 bytes=487698 latency=327ms conditional=false outcome=seeded items=681 events=0 model_calls=0 next=+3600s mode=normal
+[yt-theo-page] check trigger=alarm status=200 bytes=1313393 latency=483ms conditional=false outcome=seeded items=30 events=0 model_calls=0 next=+1800s mode=normal
+[gh-claude-code] check trigger=alarm status=200 bytes=122343 latency=548ms conditional=false outcome=seeded items=10 events=0 model_calls=0 next=+1800s mode=normal
+[wrangler:info] GET /admin/watchers/yt-theo 200 OK (44ms)
+[wrangler:info] GET /admin/watchers/gh-claude-code 200 OK (6ms)
+[wrangler:info] GET /admin/watchers/yt-theo-page 200 OK (8ms)
+[wrangler:info] GET /admin/watchers/greenhouse-anthropic 200 OK (3ms)
+[wrangler:info] GET /admin/watchers/hn-anthropic 200 OK (2ms)
+[wrangler:info] GET /admin/watchers/page-anthropic-careers 200 OK (5ms)
+[yt-theo] check trigger=manual status=404 bytes=0 latency=223ms conditional=false outcome=error items=0 events=0 model_calls=0 next=+3600s mode=normal error=HTTP 404
+[wrangler:info] POST /admin/watchers/yt-theo/check 200 OK (226ms)
+[yt-theo-page] check trigger=manual status=200 bytes=1303659 latency=228ms conditional=false outcome=same_fingerprint items=30 events=0 model_calls=0 next=+1800s mode=normal
+[wrangler:info] POST /admin/watchers/yt-theo-page/check 200 OK (294ms)
+[wrangler:info] POST /admin/watchers/gh-claude-code/check 200 OK (50ms)
+[gh-claude-code] check trigger=manual status=304 bytes=0 latency=40ms conditional=true outcome=not_modified items=0 events=0 model_calls=0 next=+1800s mode=normal
+[greenhouse-anthropic] check trigger=manual status=304 bytes=0 latency=105ms conditional=true outcome=not_modified items=0 events=0 model_calls=0 next=+3600s mode=normal
+[wrangler:info] POST /admin/watchers/greenhouse-anthropic/check 200 OK (122ms)
+[hn-anthropic] check trigger=manual status=200 bytes=27174 latency=210ms conditional=false outcome=same_fingerprint items=20 events=0 model_calls=0 next=+900s mode=normal
+[wrangler:info] POST /admin/watchers/hn-anthropic/check 200 OK (219ms)
+[wrangler:info] POST /admin/watchers/page-anthropic-careers/check 200 OK (98ms)
+[page-anthropic-careers] check trigger=manual status=200 bytes=227050 latency=89ms conditional=false outcome=same_fingerprint items=0 events=0 model_calls=0 next=+21600s mode=normal
+[wrangler:info] GET /admin/watchers/yt-theo 200 OK (6ms)
+[wrangler:info] GET /admin/watchers/yt-theo-page 200 OK (3ms)
+[wrangler:info] GET /admin/watchers/gh-claude-code 200 OK (5ms)
+[wrangler:info] GET /admin/watchers/greenhouse-anthropic 200 OK (4ms)
+[wrangler:info] GET /admin/watchers/hn-anthropic 200 OK (5ms)
+[wrangler:info] GET /admin/watchers/page-anthropic-careers 200 OK (5ms)
+[wrangler:info] POST /admin/watchers 201 Created (3ms)
+[wrangler:info] GET /admin/watchers/fx-feed 200 OK (4ms)
+[fx-feed] check trigger=alarm status=200 bytes=416 latency=4ms conditional=false outcome=seeded items=2 events=0 model_calls=0 next=+5s mode=normal
+[wrangler:info] GET /admin/watchers/fx-feed 200 OK (4ms)
+[wrangler:info] GET /admin/watchers/fx-feed 200 OK (9ms)
+[wrangler:info] GET /admin/watchers/fx-feed 200 OK (6ms)
+[wrangler:info] GET /admin/watchers/fx-feed 200 OK (7ms)
+[wrangler:info] GET /admin/watchers/fx-feed 200 OK (6ms)
+[wrangler:info] GET /admin/watchers/fx-feed 200 OK (20ms)
+[wrangler:info] GET /admin/watchers/fx-feed 200 OK (14ms)
+[wrangler:info] GET /admin/watchers/fx-feed 200 OK (6ms)
+[wrangler:info] GET /admin/watchers/fx-feed 200 OK (8ms)
+[wrangler:info] GET /admin/watchers/fx-feed 200 OK (5ms)
+[wrangler:info] GET /admin/watchers/fx-feed 200 OK (5ms)
+[wrangler:info] GET /admin/watchers/fx-feed 200 OK (7ms)
+[wrangler:info] GET /admin/watchers/fx-feed 200 OK (7ms)
+[wrangler:info] GET /admin/watchers/fx-feed 200 OK (10ms)
+[wrangler:info] GET /admin/watchers/fx-feed 200 OK (10ms)
+[wrangler:info] GET /admin/watchers/fx-feed 200 OK (5ms)
+[wrangler:info] GET /admin/watchers/fx-feed 200 OK (8ms)
+[wrangler:info] GET /admin/watchers/fx-feed 200 OK (6ms)
+[wrangler:info] GET /admin/watchers/fx-feed 200 OK (8ms)
+[fx-feed] check trigger=alarm status=304 bytes=0 latency=1ms conditional=true outcome=not_modified items=0 events=0 model_calls=0 next=+5s mode=normal
+[wrangler:info] GET /admin/watchers/fx-feed 200 OK (6ms)
+[wrangler:info] GET /admin/watchers/fx-feed 200 OK (6ms)
+[wrangler:info] GET /admin/watchers/fx-feed 200 OK (8ms)
+[wrangler:info] GET /admin/watchers/fx-feed 200 OK (4ms)
+[wrangler:info] GET /admin/watchers/fx-feed 200 OK (7ms)
+[wrangler:info] GET /admin/watchers/fx-feed 200 OK (5ms)
+[wrangler:info] GET /admin/watchers/fx-feed 200 OK (33ms)
+[wrangler:info] GET /admin/watchers/fx-feed 200 OK (7ms)
+[wrangler:info] GET /admin/watchers/fx-feed 200 OK (17ms)
+[wrangler:info] GET /admin/watchers/fx-feed 200 OK (50ms)
+[wrangler:info] GET /admin/watchers/fx-feed 200 OK (842ms)
+[wrangler:info] GET /admin/watchers/fx-feed 200 OK (11ms)
+[wrangler:info] GET /admin/watchers/fx-feed 200 OK (13ms)
+[wrangler:info] GET /admin/watchers/fx-feed 200 OK (5ms)
+[wrangler:info] GET /admin/watchers/fx-feed 200 OK (6ms)
+[fx-feed] check trigger=alarm status=304 bytes=0 latency=2ms conditional=true outcome=not_modified items=0 events=0 model_calls=0 next=+5s mode=normal
+[wrangler:info] GET /admin/watchers/fx-feed 200 OK (6ms)
+[wrangler:info] GET /admin/watchers/fx-feed 200 OK (14ms)
+[wrangler:info] GET /admin/watchers/fx-feed 200 OK (5ms)
+[wrangler:info] GET /admin/watchers/fx-feed 200 OK (3ms)
+[wrangler:info] GET /admin/watchers/fx-feed 200 OK (5ms)
+[wrangler:info] GET /admin/watchers/fx-feed 200 OK (14ms)
+[wrangler:info] GET /admin/watchers/fx-feed 200 OK (4ms)
+[wrangler:info] GET /admin/watchers/fx-feed 200 OK (8ms)
+[wrangler:info] GET /admin/watchers/fx-feed 200 OK (5ms)
+[wrangler:info] GET /admin/watchers/fx-feed 200 OK (23ms)
+[wrangler:info] GET /admin/watchers/fx-feed 200 OK (12ms)
+[wrangler:info] GET /admin/watchers/fx-feed 200 OK (10ms)
+[wrangler:info] GET /admin/watchers/fx-feed 200 OK (4ms)
+[wrangler:info] GET /admin/watchers/fx-feed 200 OK (5ms)
+[wrangler:info] GET /admin/watchers/fx-feed 200 OK (5ms)
+[wrangler:info] GET /admin/watchers/fx-feed 200 OK (24ms)
+[wrangler:info] GET /admin/watchers/fx-feed 200 OK (16ms)
+[wrangler:info] GET /admin/watchers/fx-feed 200 OK (100ms)
+[wrangler:info] GET /admin/watchers/fx-feed 200 OK (73ms)
+[fx-feed] check trigger=alarm status=200 bytes=690 latency=4ms conditional=true outcome=changed items=4 events=2 model_calls=0 next=+5s mode=normal
+[wrangler:info] GET /admin/watchers/fx-feed 200 OK (15ms)
+[wrangler:info] GET /admin/watchers/fx-feed 200 OK (17ms)
+[wrangler:info] GET /admin/watchers/fx-feed 200 OK (255ms)
+[wrangler:info] GET /admin/watchers/fx-feed 200 OK (41ms)
+[wrangler:info] GET /admin/watchers/fx-feed 200 OK (35ms)
+[wrangler:info] GET /admin/watchers/fx-feed 200 OK (20ms)
+[wrangler:info] GET /admin/watchers/fx-feed 200 OK (34ms)
+[wrangler:info] GET /admin/watchers/fx-feed 200 OK (68ms)
+[wrangler:info] GET /admin/watchers/fx-feed 200 OK (20ms)
+[wrangler:info] GET /admin/watchers/fx-feed 200 OK (8ms)
+[wrangler:info] GET /admin/watchers/fx-feed 200 OK (7ms)
+[wrangler:info] GET /admin/watchers/fx-feed 200 OK (31ms)
+[wrangler:info] GET /admin/watchers/fx-feed 200 OK (5ms)
+[wrangler:info] GET /admin/watchers/fx-feed 200 OK (4ms)
+[wrangler:info] GET /admin/watchers/fx-feed 200 OK (14ms)
+[wrangler:info] GET /admin/watchers/fx-feed 200 OK (37ms)
+[wrangler:info] GET /admin/watchers/fx-feed 200 OK (9ms)
+[wrangler:info] GET /admin/watchers/fx-feed 200 OK (5ms)
+[fx-feed] check trigger=alarm status=304 bytes=0 latency=2ms conditional=true outcome=not_modified items=0 events=0 model_calls=0 next=+5s mode=normal
+[wrangler:info] GET /admin/watchers/fx-feed 200 OK (7ms)
+[websub] fx-feed delivery signature=valid bytes=690 entries=4 events=0
+[wrangler:info] POST /websub/fx-feed 202 Accepted (18ms)
+[websub] fx-feed delivery signature=valid bytes=690 entries=4 events=0
+[wrangler:info] POST /websub/fx-feed 202 Accepted (4ms)
+[websub] fx-feed delivery signature=valid bytes=690 entries=4 events=0
+[wrangler:info] POST /websub/fx-feed 202 Accepted (5ms)
+[websub] fx-feed delivery signature=INVALID bytes=690 entries=0 events=0
+[wrangler:info] POST /websub/fx-feed 202 Accepted (3ms)
+[wrangler:info] GET /admin/watchers/fx-feed 200 OK (5ms)
+[wrangler:info] POST /admin/watchers 201 Created (5ms)
+[fx-jobs] check trigger=alarm status=200 bytes=265 latency=1ms conditional=false outcome=seeded items=2 events=0 model_calls=0 next=+600s mode=normal
+[wrangler:info] GET /admin/watchers/fx-jobs 200 OK (6ms)
+[fx-jobs] check trigger=manual status=200 bytes=265 latency=1ms conditional=false outcome=same_fingerprint items=2 events=0 model_calls=0 next=+600s mode=normal
+[wrangler:info] POST /admin/watchers/fx-jobs/check 200 OK (6ms)
+[wrangler:info] POST /admin/watchers/fx-jobs/check 200 OK (4ms)
+[fx-jobs] check trigger=manual status=200 bytes=358 latency=0ms conditional=false outcome=changed items=3 events=1 model_calls=0 next=+600s mode=normal
+[wrangler:info] GET /admin/watchers/fx-jobs 200 OK (9ms)
+[fx-jobs] interval switch normal(600s) -> hot(30s) hot_until=2026-11-04T05:38:25.444Z
+[fx-jobs] check trigger=manual status=200 bytes=467 latency=2ms conditional=false outcome=changed items=4 events=1 model_calls=0 next=+30s mode=hot
+[wrangler:info] POST /admin/watchers/fx-jobs/check 200 OK (26ms)
+[wrangler:info] GET /admin/watchers/fx-jobs 200 OK (8ms)
+[wrangler:info] POST /admin/watchers 201 Created (14ms)
+[fx-page] check trigger=alarm status=200 bytes=241 latency=1ms conditional=false outcome=seeded items=0 events=0 model_calls=0 next=+600s mode=normal
+[wrangler:info] GET /admin/watchers/fx-page 200 OK (8ms)
+[fx-page] check trigger=manual status=200 bytes=241 latency=0ms conditional=false outcome=same_fingerprint items=0 events=0 model_calls=0 next=+600s mode=normal
+[wrangler:info] POST /admin/watchers/fx-page/check 200 OK (3ms)
+[fx-page] interval switch normal(600s) -> hot(60s) hot_until=2026-11-04T05:38:25.508Z
+[fx-page] check trigger=manual status=200 bytes=227 latency=0ms conditional=false outcome=changed items=0 events=1 model_calls=0 next=+60s mode=hot
+[wrangler:info] POST /admin/watchers/fx-page/check 200 OK (5ms)
+[wrangler:info] GET /admin/watchers/fx-page 200 OK (4ms)
+[backstop] cron="*/15 * * * *" overdue_watchers=0
+[wrangler:info] GET /__scheduled 200 OK (6ms)
+[wrangler:info] POST /admin/watchers/fx-feed/drop-alarm 200 OK (2ms)
+[wrangler:info] GET /admin/watchers/fx-feed 200 OK (4ms)
+[fx-jobs] check trigger=alarm status=200 bytes=467 latency=7ms conditional=false outcome=same_fingerprint items=4 events=0 model_calls=0 next=+30s mode=hot
+[fx-page] check trigger=alarm status=200 bytes=227 latency=13ms conditional=false outcome=same_fingerprint items=0 events=0 model_calls=0 next=+60s mode=hot
+[fx-jobs] check trigger=alarm status=200 bytes=467 latency=30ms conditional=false outcome=same_fingerprint items=4 events=0 model_calls=0 next=+30s mode=hot
+[wrangler:info] GET /admin/watchers/fx-feed 200 OK (69ms)
+[backstop] cron="*/15 * * * *" overdue_watchers=1
+[backstop] fx-feed overdue by 66s; alarm presumed lost, checking now
+[fx-feed] check trigger=backstop status=304 bytes=0 latency=1ms conditional=true outcome=not_modified items=0 events=0 model_calls=0 next=+5s mode=normal
+[backstop] fx-feed re-armed, next check in 5s
+[wrangler:info] GET /__scheduled 200 OK (13ms)
+[wrangler:info] GET /admin/watchers/fx-feed 200 OK (13ms)
+[wrangler:info] GET /admin/watchers/fx-jobs 200 OK (11ms)
+[wrangler:info] POST /jobs 201 Created (6ms)
+[wrangler:info] POST /jobs/claim 200 OK (23ms)
+[wrangler:info] POST /jobs/claim 204 No Content (5ms)
+[wrangler:info] POST /jobs/claim 200 OK (9ms)
+[wrangler:info] POST /jobs/6/complete 409 Conflict (10ms)
+[wrangler:info] POST /jobs/6/complete 200 OK (28ms)
+[fx-feed] check trigger=alarm status=304 bytes=0 latency=6ms conditional=true outcome=not_modified items=0 events=0 model_calls=0 next=+5s mode=normal
+[wrangler:info] POST /jobs/claim 204 No Content (4ms)
+[yt-theo] check trigger=manual status=404 bytes=0 latency=202ms conditional=false outcome=error items=0 events=0 model_calls=0 next=+7200s mode=normal error=HTTP 404
+[wrangler:info] POST /admin/watchers/yt-theo/check 200 OK (216ms)
+[yt-theo-page] check trigger=manual status=200 bytes=1306544 latency=332ms conditional=false outcome=same_fingerprint items=30 events=0 model_calls=0 next=+1800s mode=normal
+[wrangler:info] POST /admin/watchers/yt-theo-page/check 200 OK (496ms)
+[gh-claude-code] check trigger=manual status=304 bytes=0 latency=300ms conditional=true outcome=not_modified items=0 events=0 model_calls=0 next=+1800s mode=normal
+[wrangler:info] POST /admin/watchers/gh-claude-code/check 200 OK (307ms)
+[greenhouse-anthropic] check trigger=manual status=304 bytes=0 latency=204ms conditional=true outcome=not_modified items=0 events=0 model_calls=0 next=+3600s mode=normal
+[wrangler:info] POST /admin/watchers/greenhouse-anthropic/check 200 OK (209ms)
+[hn-anthropic] check trigger=manual status=200 bytes=27156 latency=270ms conditional=false outcome=same_fingerprint items=20 events=0 model_calls=0 next=+900s mode=normal
+[wrangler:info] POST /admin/watchers/hn-anthropic/check 200 OK (297ms)
+[page-anthropic-careers] check trigger=manual status=200 bytes=227072 latency=185ms conditional=false outcome=same_fingerprint items=0 events=0 model_calls=0 next=+21600s mode=normal
+[wrangler:info] POST /admin/watchers/page-anthropic-careers/check 200 OK (200ms)
+[wrangler:info] GET /admin/watchers/yt-theo 200 OK (4ms)
+[wrangler:info] GET /admin/watchers/yt-theo-page 200 OK (16ms)
+[wrangler:info] GET /admin/watchers/gh-claude-code 200 OK (4ms)
+[wrangler:info] GET /admin/watchers/greenhouse-anthropic 200 OK (8ms)
+[wrangler:info] GET /admin/watchers/hn-anthropic 200 OK (3ms)
+[wrangler:info] GET /admin/watchers/page-anthropic-careers 200 OK (11ms)
+[wrangler:info] GET /admin/stats 200 OK (2ms)

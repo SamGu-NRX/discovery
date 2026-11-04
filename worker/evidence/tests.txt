@@ -1,0 +1,20 @@
+
+> test
+> node --test test/
+
+✔ unchanged sources emit no events: 304, volatile JSON metadata, per-request page nonces (997.136333ms)
+✔ a change emits exactly one event per new item, and seeded items never emit (25.960083ms)
+✔ duplicate WebSub delivery creates one event and one notification, a bad signature none, and the poller agrees (37.550667ms)
+✔ an expired lease is reclaimed by a second claimant; a done job and a stale owner are refused (2424.495541ms)
+✔ a matching new item switches the watcher to the hot interval, and it returns to normal after the window (2241.716541ms)
+✔ a seeded rule match notifies once, never sets hot, and later checks notify only new matches, one POST per check (36.364667ms)
+✔ notifications: a failed POST is recorded and retried by the cron with the same event_id, pause holds them, and at most 5 go out per day (49.95425ms)
+✔ a failing primary URL falls back without counting as a failure, and the switch emits nothing (13.754458ms)
+ℹ tests 8
+ℹ suites 0
+ℹ pass 8
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 5946.541042

@@ -1,0 +1,18 @@
+{
+  "name": "watcher-proto",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "db:init": "wrangler d1 migrations apply DB --local",
+    "dev": "wrangler dev --test-scheduled",
+    "fixture": "node fixtures/server.mjs",
+    "evidence": "node scripts/evidence.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test test/"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250601.0",
+    "typescript": "^5.8.0",
+    "wrangler": "4.19.1"
+  }
+}

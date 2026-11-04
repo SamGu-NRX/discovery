@@ -1,0 +1,29 @@
+{
+  "register": "greenhouse-anthropic: 201 { \"id\": \"greenhouse-anthropic\", \"first_check_at\": 1793779335020 }\ngh-claude-code: 201 { \"id\": \"gh-claude-code\", \"first_check_at\": 1793779335053 }\nhn-anthropic: 201 { \"id\": \"hn-anthropic\", \"first_check_at\": 1793779335058 }\npage-anthropic-news: 201 { \"id\": \"page-anthropic-news\", \"first_check_at\": 1793779335085 }\nyt-theo: 201 { \"id\": \"yt-theo\", \"first_check_at\": 1793779335089 }\n",
+  "webhooks_after_seed": [
+    {
+      "status": 200,
+      "event_id": "greenhouse-anthropic:05a78e075466dbc9",
+      "kind": "seed.match",
+      "watcher_id": "greenhouse-anthropic",
+      "title": "11 matching items already open: Anthropic Fellows Program, AI Safety & Security; Anthropic Fellows Program, ML Systems & Reinforcement Lear…",
+      "url": "https://job-boards.greenhouse.io/anthropic/jobs/5183044008",
+      "detected_at": "2026-11-04T08:02:15.224Z",
+      "reason": "already open at first check: 11 of 680 match /fellow|intern|new grad|university|residen/i"
+    }
+  ],
+  "cron_status": 200,
+  "verify_recheck": "recheck gh-claude-code: source=primary status=304 outcome=not_modified events=0 notified=false\nrecheck greenhouse-anthropic: source=primary status=304 outcome=not_modified events=0 notified=false\nrecheck hn-anthropic: source=primary status=200 outcome=same_fingerprint events=0 notified=false\nrecheck page-anthropic-news: source=primary status=200 outcome=same_fingerprint events=0 notified=false\nrecheck yt-theo: source=primary status=200 outcome=same_fingerprint events=0 notified=false\nhealth: {\"ok\":true,\"last_cron_at\":\"2026-11-04T08:02:15.910Z\",\"last_cron\":{\"id\":1,\"ts\":1793779335910,\"cron\":\"*/15 * * * *\",\"overdue_checked\":0,\"notifications_retried\":0},\"notifications_paused\":false}\n\ngh-claude-code  seen_items=10  alarm_at=2026-11-04T09:02:16.023Z  mode=normal  failures=0\n  2026-11-04T08:02:15.477Z via=alarm source=primary status=200 bytes=122343 420ms outcome=seeded items=10 events=0 model_calls=0\n  2026-11-04T08:02:16.023Z via=manual source=primary status=304 bytes=0 38ms outcome=not_modified items=0 events=0 model_calls=0\n\ngreenhouse-anthropic  seen_items=680  alarm_at=2026-11-04T08:32:16.094Z  mode=normal  failures=0\n  2026-11-04T08:02:15.240Z via=alarm source=primary status=200 bytes=486942 196ms outcome=seeded items=680 events=1 model_calls=0\n  2026-11-04T08:02:16.094Z via=manual source=primary status=304 bytes=0 66ms outcome=not_modified items=0 events=0 model_calls=0\n  event 1 seed.match greenhouse-anthropic:seed.match\n\nhn-anthropic  seen_items=20  alarm_at=2026-11-04T09:02:16.482Z  mode=normal  failures=0\n  2026-11-04T08:02:15.731Z via=alarm source=primary status=200 bytes=27311 669ms outcome=seeded items=20 events=0 model_calls=0\n  2026-11-04T08:02:16.482Z via=manual source=primary status=200 bytes=27311 384ms outcome=same_fingerprint items=20 events=0 model_calls=0\n\npage-anthropic-news  seen_items=0  alarm_at=2026-11-04T11:02:16.591Z  mode=normal  failures=0\n  2026-11-04T08:02:15.220Z via=alarm source=primary status=200 bytes=348904 129ms outcome=seeded items=0 events=0 model_calls=0\n  2026-11-04T08:02:16.591Z via=manual source=primary status=200 bytes=348988 102ms outcome=same_fingerprint items=0 events=0 model_calls=0\n\nyt-theo  seen_items=15  alarm_at=2026-11-04T09:02:16.616Z  mode=normal  failures=0\n  2026-11-04T08:02:15.147Z via=alarm source=primary status=200 bytes=22245 50ms outcome=seeded items=15 events=0 model_calls=0\n  2026-11-04T08:02:16.616Z via=manual source=primary status=200 bytes=22245 16ms outcome=same_fingerprint items=15 events=0 model_calls=0\n\nnotifications day=2026-11-04 used_today=1/5\n  1 sent last_status=200 attempts=1 seed.match greenhouse-anthropic:05a78e075466dbc9 \"11 matching items already open: Anthropic Fellows Program, AI Safety & Security; Anthropic Fellows Program, ML Systems & Reinforcement Lear…\"\n\nnotifications before recheck=1 after=1\n",
+  "webhooks_after_recheck": [
+    {
+      "status": 200,
+      "event_id": "greenhouse-anthropic:05a78e075466dbc9",
+      "kind": "seed.match",
+      "watcher_id": "greenhouse-anthropic",
+      "title": "11 matching items already open: Anthropic Fellows Program, AI Safety & Security; Anthropic Fellows Program, ML Systems & Reinforcement Lear…",
+      "url": "https://job-boards.greenhouse.io/anthropic/jobs/5183044008",
+      "detected_at": "2026-11-04T08:02:15.224Z",
+      "reason": "already open at first check: 11 of 680 match /fellow|intern|new grad|university|residen/i"
+    }
+  ]
+}

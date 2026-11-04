@@ -1,0 +1,86 @@
+{
+  "steps": [
+    {
+      "ts": "2026-11-04T04:39:56.723Z",
+      "name": "tunnel_started",
+      "public_url": "https://indexed-premier-traditions-cotton.trycloudflare.com"
+    },
+    {
+      "ts": "2026-11-04T04:40:56.942Z",
+      "name": "exposure_probe_admin_route",
+      "status": "unreachable"
+    },
+    {
+      "ts": "2026-11-04T04:40:57.904Z",
+      "name": "subscribe_requested",
+      "hub": "https://pubsubhubbub.appspot.com/",
+      "hub_status": 202,
+      "hub_body": "",
+      "topic": "https://www.youtube.com/xml/feeds/videos.xml?channel_id=UCbRP3c757lWg9M-U7TyEkXA"
+    },
+    {
+      "ts": "2026-11-04T04:40:58.927Z",
+      "name": "subscription_state_after_verify",
+      "state": "subscribed"
+    },
+    {
+      "ts": "2026-11-04T04:40:59.034Z",
+      "name": "hub_subscription_details",
+      "status": 400,
+      "text": "PubSubHubbub Hub code { padding: 2px 4px; border-radius: 4px; color: #c7254e; background-color: #f9f2f4; font-size: 100%; } .lead { margin-bottom: 20px; font-size: 16px; font-weight: 300; line-height: 1.4; } Subscription Details https://www.youtube.com/xml/feeds/videos.xml?channel_id=UCbRP3c757lWg9M-U7TyEkXA Error The specified secret is incorrect These legal disclaimers are here because this hub is run by Google as a service. If you don't want to agree to these terms you can use a different hub or even run your own. The PubSubHubbub protocol is decentralized and free. &copy;2022 Google - Terms of Service - Privacy Policy svg4everybody(); document.querySelectorAll('.mdc-text-field').forEach(textField => mdc.textField.MDCTextField.attachTo(textField)); document.querySelectorAll('.mdc-select').forEach(selectField => mdc.select.MDCSelect.attachTo(selectField));"
+    },
+    {
+      "ts": "2026-11-04T04:40:59.034Z",
+      "name": "waiting_for_delivery",
+      "seconds": 60
+    },
+    {
+      "ts": "2026-11-04T04:41:59.871Z",
+      "name": "unsubscribe_requested",
+      "hub_status": 202,
+      "hub_body": ""
+    },
+    {
+      "ts": "2026-11-04T04:42:00.883Z",
+      "name": "subscription_state_after_unsubscribe",
+      "state": "unsubscribed"
+    },
+    {
+      "ts": "2026-11-04T04:42:00.909Z",
+      "name": "tunnel_stopped",
+      "exit_code": 0,
+      "signal": null
+    }
+  ],
+  "gate_log": [
+    {
+      "ts": "2026-11-04T04:40:58.094Z",
+      "method": "GET",
+      "path": "/websub/yt-theo",
+      "forwarded": true
+    },
+    {
+      "ts": "2026-11-04T04:42:00.198Z",
+      "method": "GET",
+      "path": "/websub/yt-theo",
+      "forwarded": true
+    }
+  ],
+  "tunnel_log_tail": [
+    "2026-11-04T04:40:06Z INF +-----------------------------------------------------------------------------------------------+",
+    "2026-11-04T04:40:06Z INF precheck component=\"DNS Resolution\" details=\"DNS Resolved successfully\" run_id=2ec93b97-dba1-496e-99fa-a0e346c70b49 status=pass target=region1.v2.argotunnel.com",
+    "2026-11-04T04:40:06Z INF precheck component=\"DNS Resolution\" details=\"DNS Resolved successfully\" run_id=2ec93b97-dba1-496e-99fa-a0e346c70b49 status=pass target=region2.v2.argotunnel.com",
+    "2026-11-04T04:40:06Z INF precheck component=\"UDP Connectivity\" details=\"QUIC connection successful\" run_id=2ec93b97-dba1-496e-99fa-a0e346c70b49 status=pass target=region1.v2.argotunnel.com",
+    "2026-11-04T04:40:06Z INF precheck component=\"UDP Connectivity\" details=\"QUIC connection failed\" run_id=2ec93b97-dba1-496e-99fa-a0e346c70b49 status=fail target=region2.v2.argotunnel.com",
+    "2026-11-04T04:40:06Z INF precheck component=\"TCP Connectivity\" details=\"HTTP/2 connection successful\" run_id=2ec93b97-dba1-496e-99fa-a0e346c70b49 status=pass target=region1.v2.argotunnel.com",
+    "2026-11-04T04:40:06Z INF precheck component=\"TCP Connectivity\" details=\"HTTP/2 connection successful\" run_id=2ec93b97-dba1-496e-99fa-a0e346c70b49 status=pass target=region2.v2.argotunnel.com",
+    "2026-11-04T04:40:06Z INF precheck component=\"Cloudflare API\" details=\"API is reachable\" run_id=2ec93b97-dba1-496e-99fa-a0e346c70b49 status=pass target=api.cloudflare.com:443",
+    "2026-11-04T04:40:06Z INF precheck complete hard_fail=false run_id=2ec93b97-dba1-496e-99fa-a0e346c70b49 suggested_protocol=http2",
+    "2026-11-04T04:42:00Z INF Initiating graceful shutdown due to signal terminated ...",
+    "2026-11-04T04:42:00Z INF Retrying connection in up to 2s connIndex=0 event=0 ip=198.41.192.227",
+    "2026-11-04T04:42:00Z ERR Connection terminated connIndex=0",
+    "2026-11-04T04:42:00Z ERR no more connections active and exiting",
+    "2026-11-04T04:42:00Z INF Tunnel server stopped",
+    "2026-11-04T04:42:00Z INF Metrics server stopped"
+  ]
+}

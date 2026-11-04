@@ -1,0 +1,57 @@
+
+ ⛅️ wrangler 4.19.1 (update available 4.157.0)
+──────────────────────────────────────────────
+Using vars defined in .dev.vars
+Your Worker has access to the following bindings:
+Binding                                     Resource                  Mode
+env.WATCHER (WatcherDO)                     Durable Object            local
+env.DB (discovery-watcher)                  D1 Database               local
+env.ADMIN_TOKEN ("(hidden)")                Environment Variable      local
+env.WEBSUB_SECRET ("(hidden)")              Environment Variable      local
+env.T3_WEBHOOK_URL ("(hidden)")             Environment Variable      local
+
+⎔ Starting local server...
+[wrangler:info] Ready on http://127.0.0.1:8787
+[wrangler:info] GET /admin/stats 200 OK (12ms)
+[wrangler:info] POST /admin/watchers 201 Created (4ms)
+[wrangler:info] POST /admin/watchers 201 Created (3ms)
+[wrangler:info] POST /admin/watchers 201 Created (8ms)
+[wrangler:info] POST /admin/watchers 201 Created (3ms)
+[wrangler:info] POST /admin/watchers 201 Created (3ms)
+[wrangler:info] GET /admin/watchers/greenhouse-anthropic 200 OK (4ms)
+[wrangler:info] GET /admin/watchers/greenhouse-anthropic 200 OK (3ms)
+[yt-theo] check trigger=alarm source=primary status=200 bytes=22245 latency=275ms conditional=false outcome=seeded items=15 events=0 notified=false model_calls=0 next=+3600s mode=normal
+[hn-anthropic] check trigger=alarm source=primary status=200 bytes=27311 latency=285ms conditional=false outcome=seeded items=20 events=0 notified=false model_calls=0 next=+3600s mode=normal
+[page-anthropic-news] check trigger=alarm source=primary status=200 bytes=348861 latency=301ms conditional=false outcome=seeded items=0 events=0 notified=false model_calls=0 next=+10800s mode=normal
+[notify] greenhouse-anthropic event_id=greenhouse-anthropic:05a78e075466dbc9 kind=seed.match status=200 state=sent
+[greenhouse-anthropic] check trigger=alarm source=primary status=200 bytes=486942 latency=336ms conditional=false outcome=seeded items=680 events=1 notified=true model_calls=0 next=+1800s mode=normal
+[wrangler:info] GET /admin/watchers/greenhouse-anthropic 200 OK (4ms)
+[wrangler:info] GET /admin/watchers/gh-claude-code 200 OK (3ms)
+[gh-claude-code] check trigger=alarm source=primary status=200 bytes=122343 latency=803ms conditional=false outcome=seeded items=10 events=0 notified=false model_calls=0 next=+3600s mode=normal
+[wrangler:info] GET /admin/watchers/gh-claude-code 200 OK (4ms)
+[wrangler:info] GET /admin/watchers/hn-anthropic 200 OK (3ms)
+[wrangler:info] GET /admin/watchers/page-anthropic-news 200 OK (5ms)
+[wrangler:info] GET /admin/watchers/yt-theo 200 OK (4ms)
+[backstop] cron="*/15 * * * *" overdue_watchers=0
+[cron] done overdue_checked=0 notifications_retried=0
+[wrangler:info] GET /__scheduled 200 OK (4ms)
+[wrangler:info] GET /admin/notifications 200 OK (3ms)
+[wrangler:info] GET /admin/watchers 200 OK (2ms)
+[gh-claude-code] check trigger=manual source=primary status=304 bytes=0 latency=43ms conditional=true outcome=not_modified items=0 events=0 notified=false model_calls=0 next=+3600s mode=normal
+[wrangler:info] POST /admin/watchers/gh-claude-code/check 200 OK (45ms)
+[greenhouse-anthropic] check trigger=manual source=primary status=304 bytes=0 latency=66ms conditional=true outcome=not_modified items=0 events=0 notified=false model_calls=0 next=+1800s mode=normal
+[wrangler:info] POST /admin/watchers/greenhouse-anthropic/check 200 OK (69ms)
+[hn-anthropic] check trigger=manual source=primary status=200 bytes=27311 latency=299ms conditional=false outcome=same_fingerprint items=20 events=0 notified=false model_calls=0 next=+3600s mode=normal
+[wrangler:info] POST /admin/watchers/hn-anthropic/check 200 OK (305ms)
+[page-anthropic-news] check trigger=manual source=primary status=200 bytes=348988 latency=78ms conditional=false outcome=same_fingerprint items=0 events=0 notified=false model_calls=0 next=+10800s mode=normal
+[wrangler:info] POST /admin/watchers/page-anthropic-news/check 200 OK (88ms)
+[yt-theo] check trigger=manual source=primary status=200 bytes=22245 latency=31ms conditional=false outcome=same_fingerprint items=15 events=0 notified=false model_calls=0 next=+3600s mode=normal
+[wrangler:info] POST /admin/watchers/yt-theo/check 200 OK (34ms)
+[wrangler:info] GET /health 200 OK (2ms)
+[wrangler:info] GET /admin/watchers 200 OK (1ms)
+[wrangler:info] GET /admin/watchers/gh-claude-code 200 OK (3ms)
+[wrangler:info] GET /admin/watchers/greenhouse-anthropic 200 OK (3ms)
+[wrangler:info] GET /admin/watchers/hn-anthropic 200 OK (2ms)
+[wrangler:info] GET /admin/watchers/page-anthropic-news 200 OK (3ms)
+[wrangler:info] GET /admin/watchers/yt-theo 200 OK (3ms)
+[wrangler:info] GET /admin/notifications 200 OK (2ms)

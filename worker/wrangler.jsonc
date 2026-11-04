@@ -1,0 +1,26 @@
+// Production name is discovery-watcher. database_id stays the all-zero
+// placeholder until scripts/deploy-production.sh creates the D1 database and
+// writes the real id here; local dev and the tests work with either.
+{
+  "name": "discovery-watcher",
+  "workers_dev": true,
+  "main": "src/index.ts",
+  // The newest date the pinned wrangler 4.19.1 runtime (workerd 1.20250525.0) accepts.
+  "compatibility_date": "2025-05-20",
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "discovery-watcher",
+      "database_id": "c6ecbfda-6f88-4acc-a674-d3810d520411",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "durable_objects": {
+    "bindings": [{ "name": "WATCHER", "class_name": "WatcherDO" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["WatcherDO"] }],
+  // The single dispatcher cron (Workers Free allows 5 per account). Each
+  // watcher's Durable Object alarm drives its checks; this sweep catches lost
+  // alarms, retries failed T3 notifications and records itself for /health.
+  "triggers": { "crons": ["*/15 * * * *"] }
+}

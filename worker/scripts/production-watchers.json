@@ -1,0 +1,36 @@
+[
+  {
+    "id": "greenhouse-anthropic",
+    "kind": "greenhouse",
+    "url": "https://boards-api.greenhouse.io/v1/boards/anthropic/jobs",
+    "interval_s": 1800,
+    "notify_rule": "\\bfellow(s|ship|ships)?\\b|\\bintern(s|ship|ships)?\\b|\\bnew grad|\\buniversit|\\bresiden(t|ts|cy|cies)\\b"
+  },
+  {
+    "id": "gh-claude-code",
+    "kind": "atom",
+    "url": "https://github.com/anthropics/claude-code/releases.atom",
+    "interval_s": 3600
+  },
+  {
+    "id": "hn-anthropic",
+    "kind": "hn",
+    "url": "https://hn.algolia.com/api/v1/search_by_date?query=anthropic&tags=story",
+    "interval_s": 3600
+  },
+  {
+    "id": "page-anthropic-news",
+    "kind": "page",
+    "url": "https://www.anthropic.com/news",
+    "interval_s": 10800
+  },
+  {
+    "id": "yt-theo",
+    "kind": "atom",
+    "url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCbRP3c757lWg9M-U7TyEkXA",
+    "fallback_url": "https://www.youtube.com/@t3dotgg/videos",
+    "fallback_kind": "youtube_page",
+    "interval_s": 3600,
+    "notify_all_new": true
+  }
+]

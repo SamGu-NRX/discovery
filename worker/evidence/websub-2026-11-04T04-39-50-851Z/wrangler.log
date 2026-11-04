@@ -1,0 +1,37 @@
+
+ ⛅️ wrangler 4.19.1 (update available 4.157.0)
+──────────────────────────────────────────────
+Using vars defined in .dev.vars
+Your Worker has access to the following bindings:
+Binding                                Resource                  Mode
+env.WATCHER (WatcherDO)                Durable Object            local
+env.DB (watcher-proto)                 D1 Database               local
+env.ADMIN_TOKEN ("(hidden)")           Environment Variable      local
+env.WEBSUB_SECRET ("(hidden)")         Environment Variable      local
+
+⎔ Starting local server...
+[wrangler:info] Ready on http://127.0.0.1:8787
+[wrangler:info] GET /admin/stats 200 OK (17ms)
+[wrangler:info] POST /admin/watchers 201 Created (7ms)
+[wrangler:info] POST /admin/watchers/yt-theo/websub 200 OK (941ms)
+[wrangler:info] GET /admin/websub 200 OK (8ms)
+[websub] yt-theo verified mode=subscribe lease_seconds=86400
+[wrangler:info] GET /websub/yt-theo 200 OK (28ms)
+[wrangler:info] GET /admin/websub 200 OK (4ms)
+[wrangler:info] GET /admin/watchers/yt-theo 200 OK (14ms)
+[wrangler:info] GET /admin/watchers/yt-theo 200 OK (8ms)
+[wrangler:info] GET /admin/watchers/yt-theo 200 OK (23ms)
+[wrangler:info] GET /admin/watchers/yt-theo 200 OK (23ms)
+[wrangler:info] GET /admin/watchers/yt-theo 200 OK (17ms)
+[wrangler:info] GET /admin/watchers/yt-theo 200 OK (30ms)
+[wrangler:info] GET /admin/watchers/yt-theo 200 OK (35ms)
+[wrangler:info] GET /admin/watchers/yt-theo 200 OK (20ms)
+[wrangler:info] GET /admin/watchers/yt-theo 200 OK (14ms)
+[wrangler:info] GET /admin/watchers/yt-theo 200 OK (11ms)
+[wrangler:info] GET /admin/watchers/yt-theo 200 OK (13ms)
+[wrangler:info] GET /admin/watchers/yt-theo 200 OK (13ms)
+[wrangler:info] POST /admin/watchers/yt-theo/websub 200 OK (511ms)
+[wrangler:info] GET /admin/websub 200 OK (2ms)
+[websub] yt-theo verified mode=unsubscribe lease_seconds=0
+[wrangler:info] GET /websub/yt-theo 200 OK (11ms)
+[wrangler:info] GET /admin/websub 200 OK (5ms)
