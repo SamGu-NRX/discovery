@@ -23,6 +23,7 @@ const BLOCKING = new Set(["login_wall", "rate_limited", "challenge", "error"]);
 // the popup, a closed window, Off); a generic error, such as a tab call
 // failing because Sam closed the window, does not.
 const X_SIGNALS = new Set(["login_wall", "rate_limited", "challenge"]);
+const statusFor = (reason) => (BLOCKING.has(reason) ? reason : reason === "interrupted" ? "error" : "ok");
 
 let current = null;
 // The session restart recovery is reporting, while it runs: a back-off
@@ -56,11 +57,13 @@ export function sessionInfo() {
 // whether the running session will report it.
 export function requestStop(reason, detail) {
   const s = current;
-  if (!s) {
-    // During restart recovery, until it has chosen the old session's outcome,
-    // a back-off signal joins that outcome. It is written into the old record
-    // at once, so a second restart still reports it.
-    if (!recovering || recovering.decided || !X_SIGNALS.has(reason)) return false;
+  // During restart recovery, until it has chosen the old session's outcome,
+  // a back-off signal joins that outcome, even if a new session is already
+  // reserved (it cannot have a record yet: it waits for recovery). It is
+  // written into the old record at once. If the worker stops before that
+  // write lands, the old record still lacks a `final` mark, so the next
+  // recovery reports it as interrupted, never as ok.
+  if (X_SIGNALS.has(reason) && recovering && !recovering.decided) {
     if (!recovering.lateStop) {
       recovering.lateStop = { reason, detail };
       recovering.saved = chrome.storage.session
@@ -68,6 +71,14 @@ export function requestStop(reason, detail) {
         .catch(() => {});
     }
     return true;
+  }
+  if (!s) return false;
+  if (!s.recorded) {
+    // A session still starting has nothing durable to carry a signal. The
+    // stop makes it refuse to start; a back-off signal is left to the caller
+    // to report and pause on (returning false).
+    if (!s.stop || (X_SIGNALS.has(reason) && !BLOCKING.has(s.stop.reason))) s.stop = { reason, detail };
+    return !X_SIGNALS.has(reason);
   }
   if (s.finishing) {
     // A back-off signal (a 429 from the closing page, say) still decides the
@@ -229,7 +240,11 @@ async function finish(s, outcome) {
   }
   s.statusDecided = true;
   outcome = finalOutcome(s);
-  const status = BLOCKING.has(outcome.reason) ? outcome.reason : "ok";
+  // `final` is the only mark that lets recovery report ok: it is written
+  // once no later signal can join this session (one arriving now is reported
+  // by the caller instead).
+  await publish(s, outcome, { final: true });
+  const status = statusFor(outcome.reason);
   if (s.operations.has("HomeLatestTimeline") && !s.operations.has("HomeTimeline")) {
     s.notes.push("home opened on Following; choose For you once in this browser and X keeps it");
   }
@@ -244,9 +259,13 @@ async function finish(s, outcome) {
   try {
     await postStatus(s.config, { account, session_id: s.id, status, detail });
     reported = true;
+    // The receipt is the first write after the Worker's answer, so a restart
+    // after it does not send the status again.
+    await publish(s, outcome, { final: true, statusSent: true });
   } catch (err) {
+    if (reported) throw err;
     await recordProblem("worker", `session status not reported: ${err.message}`);
-    await publish(s, outcome, { awaitingReport: true });
+    await publish(s, outcome, { final: true, awaitingReport: true });
   }
   await setLocal({
     lastSession: {
@@ -278,7 +297,13 @@ export function recoverInterruptedSession() {
 async function recover() {
   const { activeSession } = await chrome.storage.session.get("activeSession");
   if (!activeSession || activeSession.id === current?.id) return;
-  recovering = { record: activeSession, lateStop: null, decided: false, saved: Promise.resolve() };
+  // A record whose status the Worker already accepted only needs removing.
+  if (activeSession.statusSent) {
+    await removeRecord(activeSession.id);
+    return;
+  }
+  // A final record's outcome is settled: no signal joins it any more.
+  recovering = { record: activeSession, lateStop: null, decided: activeSession.final === true, saved: Promise.resolve() };
   try {
     await recoverRecord(activeSession);
   } finally {
@@ -286,38 +311,49 @@ async function recover() {
   }
 }
 
-async function recoverRecord(activeSession) {
-  if (activeSession.windowId != null) await chrome.windows.remove(activeSession.windowId).catch(() => {});
+// The outcome of a session the worker lost track of. Only a `final` record
+// (teardown chose its outcome and stopped taking signals) can be ok. In any
+// other record a recorded back-off signal wins, and without one the session
+// is reported as interrupted, status error: whatever ended it was not
+// recorded, and a signal may have been lost with a write in flight.
+function recoveredOutcome(record, lateStop) {
+  if (record.final && record.outcome) return record.outcome;
+  const signals = [record.outcome, record.stop, record.lateStop, lateStop].filter(Boolean);
+  return (
+    signals.find((o) => BLOCKING.has(o.reason)) ?? {
+      reason: "interrupted",
+      detail: record.completed
+        ? "the service worker restarted while the session was closing"
+        : "the extension's service worker restarted mid-session",
+    }
+  );
+}
+
+async function recoverRecord(record) {
+  if (record.windowId != null) await chrome.windows.remove(record.windowId).catch(() => {});
   // From here a signal is no longer part of the old session; once the write
-  // of one that is has landed, the outcome is chosen.
+  // of one that is has landed, the outcome is chosen and written, final.
   recovering.decided = true;
   await recovering.saved;
-  // A recorded blocking outcome or stop wins over everything else,
-  // including the completion checkpoint, and so does a back-off signal that
-  // arrived while the old window closed, in this recovery or in one a
-  // restart cut short.
-  const recorded = [activeSession.outcome, activeSession.stop, activeSession.lateStop, recovering.lateStop].filter(Boolean);
-  const outcome =
-    recorded.find((o) => BLOCKING.has(o.reason)) ??
-    recorded[0] ??
-    (activeSession.completed
-      ? { reason: "completed", detail: "finished before the service worker restarted" }
-      : { reason: "interrupted", detail: "the extension's service worker restarted mid-session" });
-  const status = BLOCKING.has(outcome.reason) ? outcome.reason : outcome.reason === "interrupted" ? "error" : "ok";
+  const outcome = recoveredOutcome(record, recovering.lateStop);
+  const settled = { ...record, windowId: null, outcome, final: true };
+  await chrome.storage.session.set({ activeSession: settled });
+  const status = statusFor(outcome.reason);
   const detail = `${outcome.reason}: ${outcome.detail}`.slice(0, 1000);
   if (status !== "ok") await extendPause();
   const config = await loadConfig();
-  const account = activeSession.account ?? (await getLocal("lastAccount", null)) ?? config.account;
-  const reported = await postStatus(config, { account, session_id: activeSession.id, status, detail }).then(
+  const account = record.account ?? (await getLocal("lastAccount", null)) ?? config.account;
+  const reported = await postStatus(config, { account, session_id: record.id, status, detail }).then(
     () => true,
     () => false,
   );
+  // The receipt first; without one the record stays, marked for the popup,
+  // and the next start or restart reports it again.
+  await chrome.storage.session.set({ activeSession: { ...settled, ...(reported ? { statusSent: true } : { awaitingReport: true }) } });
   await setLocal({
-    lastSession: { ...activeSession, endedAt: new Date().toISOString(), status, reason: outcome.reason, detail, reported },
+    lastSession: { ...record, endedAt: new Date().toISOString(), status, reason: outcome.reason, detail, reported },
   });
-  // Removed only once the Worker has the report. Otherwise it stays, and the
-  // next start or restart reports it again.
-  if (reported) await removeRecord(activeSession.id);
+  if (reported) await removeRecord(record.id);
 }
 
 async function hasRecordOtherThan(id) {
@@ -367,17 +403,17 @@ async function pause(s, min, max) {
   checkpoint(s);
 }
 
+// The window opens empty and is recorded before X loads in it. A worker that
+// stops between creating it and recording it leaves a blank window, which
+// captures nothing, rather than an X page no record points to.
 async function openWindow(s) {
   // A stop (Off, say) that arrived while the session was starting.
   checkpoint(s);
-  const url = homeUrl();
-  const href = checkedHref(s, url);
-  await loadAndWait(s, async () => {
-    const win = await chrome.windows.create({ url: href, focused: false, type: "normal", width: 1200, height: 900 });
-    s.windowId = win.id;
-    s.tabId = win.tabs[0].id;
-    await publish(s);
-  });
+  const win = await chrome.windows.create({ url: "about:blank", focused: false, type: "normal", width: 1200, height: 900 });
+  s.windowId = win.id;
+  s.tabId = win.tabs[0].id;
+  await publish(s);
+  await navigate(s, homeUrl());
 }
 
 async function navigate(s, url) {
@@ -459,12 +495,19 @@ async function agent(s, name, arg) {
 
 async function inspect(s) {
   const seen = await agent(s, "inspect");
+  // A blocker is recorded before anything else is awaited, so a stop
+  // in between cannot leave only a harmless reason on record.
+  if (seen.blocker) {
+    const blocker = { reason: seen.blocker, detail: `${seen.evidence} at ${seen.path}` };
+    if (!BLOCKING.has(s.stop?.reason)) s.stop = blocker;
+    await publish(s);
+    throw new StopSession(s.stop.reason, s.stop.detail);
+  }
   if (seen.account && !s.account) {
     s.account = seen.account;
     await setLocal({ lastAccount: seen.account });
     await publish(s);
   }
-  if (seen.blocker) throw new StopSession(seen.blocker, `${seen.evidence} at ${seen.path}`);
   await onExpectedPage(s);
   // X's generic error page often means throttling; three in a row ends the visit.
   s.errorPages = seen.errorPage ? s.errorPages + 1 : 0;

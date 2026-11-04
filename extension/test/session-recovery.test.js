@@ -44,8 +44,17 @@ test("a session with no recorded ending is reported as interrupted with status e
   assert.equal(paused, true);
 });
 
-test("a session that reached its completion checkpoint is reported ok", async () => {
-  const { status, paused } = await recover({ stop: null, completed: true });
+test("a session whose teardown recorded a final outcome is reported with it", async () => {
+  const { status, paused } = await recover({ stop: null, completed: true, final: true, outcome: { reason: "completed", detail: "finished" } });
   assert.equal(status.status, "ok");
   assert.equal(paused, false);
+});
+
+// A worker can stop with a write still in flight, so a record that never
+// reached its final mark may be missing a signal. Found in review at 2511cbb.
+test("a session that completed but never recorded a final outcome is reported as interrupted", async () => {
+  const { status, paused } = await recover({ stop: null, completed: true, outcome: { reason: "completed", detail: "finished" } });
+  assert.equal(status.status, "error");
+  assert.match(status.detail, /^interrupted/);
+  assert.equal(paused, true);
 });

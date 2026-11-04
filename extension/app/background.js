@@ -3,7 +3,7 @@
 
 import { captureToBatch } from "./lib/capture.js";
 import { focalTweetIdFromUrl, operationFromUrl } from "./lib/ops.js";
-import { enqueue, flush } from "./lib/outbox.js";
+import { dropStoredSince, enqueue, flush } from "./lib/outbox.js";
 import { ParseError } from "./lib/parse.js";
 import { SESSION_ALARM, intervalElapsed, scheduleNext } from "./lib/schedule.js";
 import {
@@ -36,11 +36,21 @@ async function setUp() {
   if (!(await chrome.alarms.get(SESSION_ALARM))) await scheduleNext();
 }
 
+// Serializes passive back-off reporting: one report per pause.
+const backOffLock = createLock();
+
 recoverInterruptedSession().catch((err) => recordProblem("session", err.message));
+// Work a stopped worker may have left: a passive back-off report not yet
+// sent, and captures stored after capture was turned Off.
+backOffLock(sendPendingBackOff).catch((err) => recordProblem("worker", err.message));
+loadConfig()
+  .then((config) => config.mode === "off" && config.modeChangedAt && dropStoredSince(config.modeChangedAt))
+  .catch((err) => recordProblem("outbox", err.message));
 
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name === FLUSH_ALARM) {
     await flush().catch((err) => recordProblem("worker", err.message));
+    await backOffLock(sendPendingBackOff).catch((err) => recordProblem("worker", err.message));
   } else if (alarm.name === SESSION_ALARM) {
     const result = (await intervalElapsed()) ? await startSession("alarm") : { started: false };
     if (!result.started) await scheduleNext();
@@ -49,8 +59,12 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === "local" && changes.config && changes.config.oldValue?.mode !== changes.config.newValue?.mode) {
-    // Off means nothing is captured, including by a session already running.
-    if (changes.config.newValue?.mode === "off") requestStop("capture_off", "capture was turned off");
+    // Off means nothing is captured, including by a session already running
+    // or a capture being stored at that moment.
+    if (changes.config.newValue?.mode === "off") {
+      requestStop("capture_off", "capture was turned off");
+      dropStoredSince(changes.config.newValue.modeChangedAt ?? Date.now()).catch((err) => recordProblem("outbox", err.message));
+    }
     scheduleNext().catch((err) => recordProblem("session", err.message));
   }
 });
@@ -170,14 +184,30 @@ async function handleXStatus(message, tabId) {
 async function onBackOff(tabId, reason, detail) {
   const fromSession = tabId === sessionTabId();
   if (requestStop(reason, fromSession ? detail : `${detail} in another tab`)) return;
-  await recordProblem("x", detail);
-  if (await getPauseUntil()) return;
-  await setLocal({ pauseUntil: new Date(Date.now() + 24 * 3600_000).toISOString() });
-  const config = await loadConfig();
-  const account = (await getLocal("lastAccount", null)) ?? config.account;
-  if (account) {
-    await postStatus(config, { account, session_id: await passiveSessionId(), status: reason, detail })
-      .catch((err) => recordProblem("worker", err.message));
+  await backOffLock(async () => {
+    await recordProblem("x", detail);
+    // One report per pause: a second signal finds the pause and stops here.
+    if (await getPauseUntil()) return;
+    const config = await loadConfig();
+    const account = (await getLocal("lastAccount", null)) ?? config.account;
+    const report = account ? { account, session_id: await passiveSessionId(), status: reason, detail } : null;
+    // The pause and the report to send are one write, so a stopped worker
+    // leaves either neither or both, and the next start sends the report.
+    await setLocal({ pauseUntil: new Date(Date.now() + 24 * 3600_000).toISOString(), pendingBackOff: report });
+    await sendPendingBackOff();
+  });
+}
+
+// Sends the stored passive back-off report, if any, and clears it once the
+// Worker has it. Runs under backOffLock.
+async function sendPendingBackOff() {
+  const report = await getLocal("pendingBackOff", null);
+  if (!report) return;
+  try {
+    await postStatus(await loadConfig(), report);
+    await setLocal({ pendingBackOff: null });
+  } catch (err) {
+    await recordProblem("worker", `back-off status not reported yet: ${err.message}`);
   }
 }
 

@@ -57,15 +57,16 @@ export function localDay(date = new Date()) {
   return date.toLocaleDateString("en-CA");
 }
 
-// Per-day counters shown in the popup.
+// Per-day counters shown in the popup. `with` is written in the same storage
+// call as the counters, so the two cannot be split by a stopped worker.
 const statsLock = createLock();
-export function bumpStats(change) {
+export function bumpStats(change, { with: values = {} } = {}) {
   return statsLock(async () => {
     const today = localDay();
     const stats = await getLocal("stats", null);
     const next = stats?.day === today ? { ...stats } : { day: today, postsSent: 0, parseErrors: 0 };
     for (const [k, v] of Object.entries(change)) next[k] = (next[k] ?? 0) + v;
-    await setLocal({ stats: next });
+    await setLocal({ ...values, stats: next });
   });
 }
 

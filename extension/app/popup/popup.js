@@ -31,7 +31,7 @@ async function render() {
   ]);
   const { activeSession: record } = await chrome.storage.session.get("activeSession");
   // A finished session kept only until its status reaches the Worker is not running.
-  const activeSession = record && !record.awaitingReport ? record : null;
+  const activeSession = record && !record.awaitingReport && !record.statusSent ? record : null;
   const today = new Date().toLocaleDateString("en-CA");
 
   $("account").textContent = local.lastAccount ? `@${local.lastAccount}` : "";
@@ -119,8 +119,12 @@ async function updateConfig(change) {
   await chrome.storage.local.set({ config: { ...config, ...change } });
 }
 
+// modeChangedAt tells the service worker which stored captures came after
+// a switch to Off.
+const setMode = (mode) => updateConfig({ mode, modeChangedAt: Date.now() });
+
 for (const button of document.querySelectorAll(".segmented button")) {
-  button.addEventListener("click", () => updateConfig({ mode: button.dataset.mode }));
+  button.addEventListener("click", () => setMode(button.dataset.mode));
 }
 
 // Arrow keys move between modes, as in any radio group.
@@ -132,12 +136,12 @@ document.querySelector(".segmented").addEventListener("keydown", (event) => {
   const index = buttons.findIndex((b) => b.getAttribute("aria-checked") === "true");
   const next = buttons[(index + step + buttons.length) % buttons.length];
   next.focus();
-  updateConfig({ mode: next.dataset.mode });
+  setMode(next.dataset.mode);
 });
 
 $("run").addEventListener("click", async () => {
   const { activeSession } = await chrome.storage.session.get("activeSession");
-  const running = activeSession && !activeSession.awaitingReport;
+  const running = activeSession && !activeSession.awaitingReport && !activeSession.statusSent;
   const reply = await chrome.runtime.sendMessage({ type: running ? "stopSession" : "runSession" });
   $("run-note").textContent = reply?.error ?? reply?.reason ?? (reply?.stopping ? "Stopping…" : "");
 });

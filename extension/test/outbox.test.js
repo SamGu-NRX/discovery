@@ -118,21 +118,26 @@ test("one capture larger than the outbox budget keeps only its newest pieces wit
   assert.equal(outbox.at(-1).piece.posts.at(-1).id, "big79");
 });
 
-test("an accepted piece is out of storage before any other bookkeeping runs", async () => {
+test("an accepted piece leaves storage in the same write as the counts and bookmark memory it changes", async () => {
   await freshStore();
-  await enqueue(capture("k", 1, 100));
-  // Hold the first write after acceptance that is not the outbox itself.
-  const entered = deferredLocal();
+  await enqueue({ ...capture("bm", 3, 100), batch: { op: "Bookmarks", surface: "bookmarks", posts: [0, 1, 2].map((i) => ({ ...post(`bm${i}`, 100), position: i })) } });
+  const writes = [];
   const set = chrome.storage.local.set;
   chrome.storage.local.set = async (values) => {
-    if (!("outbox" in values) && !("lastProblem" in values)) {
-      chrome.storage.local.set = set;
-      entered.resolve((await chrome.storage.local.get("outbox")).outbox);
-    }
+    writes.push(structuredClone(values));
     return set(values);
   };
-  await flush();
-  assert.deepEqual(await entered.promise, []);
+  try {
+    await flush();
+  } finally {
+    chrome.storage.local.set = set;
+  }
+  // A worker stopped after any one write leaves the piece and its
+  // bookkeeping together: both done or both not.
+  const removal = writes.find((values) => Array.isArray(values.outbox) && values.outbox.length === 0);
+  assert.ok(removal, "the piece was removed");
+  assert.equal(removal.stats.postsSent, 3);
+  assert.deepEqual(removal.sentBookmarkIds.slice(0, 3), ["bm0", "bm1", "bm2"]);
 });
 
 test("when storage is completely full, the outbox frees space before recording why, and keeps the new capture", async () => {

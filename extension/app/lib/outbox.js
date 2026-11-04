@@ -37,9 +37,11 @@ export function enqueue({ account, session_id, mode, batch }) {
     }
     const captured_at = new Date().toISOString();
     const outbox = await getLocal("outbox", []);
+    // After the last await before the write; see dropStoredSince().
+    const storedAt = Date.now();
     for (const piece of pieces) {
       const entry = { account, session_id, mode, captured_at, piece };
-      outbox.push({ ...entry, bytes: sizeOf(entry) });
+      outbox.push({ ...entry, bytes: sizeOf(entry), storedAt });
     }
     let total = outbox.reduce((sum, entry) => sum + entry.bytes, 0);
     let overflow = 0;
@@ -113,36 +115,52 @@ export function flush() {
           await recordProblem("worker", permanent ? `dropped pieces the Worker rejected: ${err.message}` : err.message);
           if (!permanent) return;
         }
-        // Settled pieces leave storage first, before any other bookkeeping,
-        // so the window in which a stopped service worker would resend them
-        // is this one write. A resend inside it is harmless: the Worker
-        // ignores a batch_id it has already applied.
+        // Settled pieces leave storage in one write together with what their
+        // acceptance changes (posts sent today, sent bookmark ids), so the
+        // window in which a stopped service worker would resend them is that
+        // write, and the bookkeeping is never lost without them. A resend
+        // inside the window is harmless: the Worker ignores a batch_id it has
+        // already applied.
         const settled = new Set(pieceIndexes.map((i) => entries[i]));
         outbox = outbox.filter((entry) => !settled.has(entry));
-        await setLocal({ outbox });
-        if (accepted) await afterAccepted(body);
+        if (accepted) await bumpStats({ postsSent: postCount(body) }, { with: { outbox, ...(await bookmarkMemory(body)) } });
+        else await setLocal({ outbox });
       }
     }
   });
 }
 
-async function afterAccepted(body) {
-  let posts = 0;
+const postCount = (body) => body.batches.reduce((sum, batch) => sum + batch.posts.length, 0);
+
+// The newest 200 bookmark ids already delivered, newest first, updated with
+// an accepted body's bookmarks: `{ sentBookmarkIds }`, or nothing when the
+// body has none. A session stops scrolling bookmarks once it reaches one of
+// them. A page that starts at the top of the list (position 0) holds the
+// newest bookmarks; later pages are older and go to the back, where the cap
+// trims.
+async function bookmarkMemory(body) {
+  let memory = null;
   for (const batch of body.batches) {
-    posts += batch.posts.length;
-    if (batch.surface === "bookmarks" && batch.posts.length) await rememberBookmarks(batch.posts);
+    if (batch.surface !== "bookmarks" || !batch.posts.length) continue;
+    memory ??= await getLocal("sentBookmarkIds", []);
+    const ids = [...batch.posts].sort((a, b) => a.position - b.position).map((p) => p.id);
+    const fresh = new Set(ids);
+    const known = memory.filter((id) => !fresh.has(id));
+    memory = (batch.posts.some((p) => p.position === 0) ? [...ids, ...known] : [...known, ...ids]).slice(0, BOOKMARK_MEMORY);
   }
-  await bumpStats({ postsSent: posts });
+  return memory ? { sentBookmarkIds: memory } : {};
 }
 
-// The newest 200 bookmark ids already delivered, newest first. A session
-// stops scrolling bookmarks once it reaches one of them. A page that starts at
-// the top of the list (position 0) holds the newest bookmarks; later pages
-// are older and go to the back, where the cap trims.
-async function rememberBookmarks(posts) {
-  const ids = [...posts].sort((a, b) => a.position - b.position).map((p) => p.id);
-  const fresh = new Set(ids);
-  const known = (await getLocal("sentBookmarkIds", [])).filter((id) => !fresh.has(id));
-  const merged = posts.some((p) => p.position === 0) ? [...ids, ...known] : [...known, ...ids];
-  await setLocal({ sentBookmarkIds: merged.slice(0, BOOKMARK_MEMORY) });
+// Switching to Off drops captures stored at or after the switch: one already
+// past enqueue's mode check when Off was chosen finishes storing, and this,
+// queued behind it on the same lock, removes it. Run again at startup in
+// case the worker stopped before it ran.
+export function dropStoredSince(time) {
+  return serial(async () => {
+    const outbox = await getLocal("outbox", []);
+    const kept = outbox.filter((entry) => !(entry.storedAt >= time));
+    if (kept.length === outbox.length) return;
+    await setLocal({ outbox: kept });
+    await recordProblem("outbox", `capture is off: dropped ${outbox.length - kept.length} piece(s) stored after it was turned off`);
+  });
 }

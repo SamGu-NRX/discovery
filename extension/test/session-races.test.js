@@ -11,6 +11,14 @@ import { homeResponse } from "./fixtures/x-shapes.js";
 
 const realSetTimeout = setTimeout;
 globalThis.setTimeout = (fn, ms, ...args) => realSetTimeout(fn, Math.min(ms ?? 0, 3), ...args);
+// A session's keep-alive interval must not hold the process open after a
+// crash test abandons that session.
+const realSetInterval = setInterval;
+globalThis.setInterval = (...args) => {
+  const timer = realSetInterval(...args);
+  timer.unref?.();
+  return timer;
+};
 
 const deferred = () => {
   let resolve;
@@ -483,7 +491,15 @@ test("Off while a session is starting stops it before any window opens", async (
 test("an old session whose report failed is kept, retried, and blocks new sessions until reported", async () => {
   await reset();
   await chrome.storage.session.set({
-    activeSession: { id: "old", windowId: 7, account: "owner", stop: { reason: "stopped_by_user", detail: "Stop" }, completed: false },
+    activeSession: {
+      id: "old",
+      windowId: 7,
+      account: "owner",
+      stop: { reason: "stopped_by_user", detail: "Stop" },
+      completed: false,
+      final: true,
+      outcome: { reason: "stopped_by_user", detail: "Stop" },
+    },
   });
   statusDown = true;
   await session.recoverInterruptedSession();
@@ -604,4 +620,249 @@ test("a 429 from another X tab during a session is reported once, on the session
   assert.equal(report.status, "rate_limited");
   assert.deepEqual(log.filter((entry) => entry.startsWith("status:")), [`status:${started.id}:rate_limited`]);
   assert.ok(Date.parse(fake.local.get("pauseUntil")) > Date.now());
+});
+
+// Crash windows found in review at 2511cbb.
+
+// From the moment `trigger()` is called, storage writes hang forever, as if
+// the worker stopped with them in flight; `afterWrites` writes still land
+// first. `stuck` resolves when the first write hangs. `restart()` gives later
+// code working storage.
+function killer() {
+  const areas = [chrome.storage.local, chrome.storage.session];
+  const originals = areas.map((area) => ({ set: area.set, remove: area.remove }));
+  const stuck = deferred();
+  let allowed = Infinity;
+  const gate = (original, area) =>
+    function (values) {
+      if (allowed <= 0) {
+        stuck.resolve();
+        return new Promise(() => {});
+      }
+      allowed -= 1;
+      return original.call(area, values);
+    };
+  return {
+    stuck: stuck.promise,
+    trigger(afterWrites = 0) {
+      allowed = afterWrites;
+      areas.forEach((area, i) => {
+        area.set = gate(originals[i].set, area);
+        area.remove = gate(originals[i].remove, area);
+      });
+    },
+    restart() {
+      areas.forEach((area, i) => Object.assign(area, originals[i]));
+    },
+  };
+}
+
+const statuses = (id) => log.filter((entry) => entry.startsWith(`status:${id}:`));
+
+test("a 429 while a new start waits for recovery is reported on the recovered session", async () => {
+  await reset();
+  await chrome.storage.session.set({
+    activeSession: { id: "old", windowId: 7, account: "owner", stop: { reason: "stopped_by_user", detail: "Stop" }, completed: false },
+  });
+  const closing = hold(chrome.windows, "remove");
+  const recovering = session.recoverInterruptedSession();
+  await closing.entered;
+  const starting = session.startSession("manual");
+  await fromTab(500, { type: "x-status", operation: "HomeTimeline", status: 429 });
+  closing.release();
+  await recovering;
+  const started = await starting;
+  assert.deepEqual(statuses("old"), ["status:old:rate_limited"]);
+  assert.equal(started.started, false);
+  assert.ok(Date.parse(fake.local.get("pauseUntil")) > Date.now());
+});
+
+test("a 429 while a session is still starting pauses sessions and is reported", async () => {
+  await reset();
+  const reading = hold(chrome.storage.local, "get", (key) => key === "config");
+  const starting = session.startSession("manual");
+  await reading.entered;
+  await fromTab(500, { type: "x-status", operation: "HomeTimeline", status: 429 });
+  reading.release();
+  const started = await starting;
+  assert.equal(started.started, false);
+  assert.ok(Date.parse(fake.local.get("pauseUntil")) > Date.now());
+  assert.ok(log.some((entry) => /^status:.+:rate_limited$/.test(entry)), log.join(" "));
+});
+
+test("a worker killed before a late 429's write lands never recovers the session as ok", async () => {
+  await reset();
+  const doomed = await workerCopy();
+  await doomed.startSession("manual");
+  const closing = hold(chrome.windows, "remove");
+  await closing.entered;
+  const kill = killer();
+  kill.trigger(0);
+  doomed.requestStop("rate_limited", "HomeTimeline answered HTTP 429");
+  kill.restart();
+
+  const restarted = await workerCopy();
+  await restarted.recoverInterruptedSession();
+  const reported = log.filter((entry) => entry.startsWith("status:"));
+  assert.equal(reported.length, 1, reported.join(" "));
+  assert.doesNotMatch(reported[0], /:ok$/);
+  assert.ok(Date.parse(fake.local.get("pauseUntil")) > Date.now());
+});
+
+test("a worker killed before a recovery-time 429's write lands never recovers the old session as ok", async () => {
+  await reset();
+  await chrome.storage.session.set({
+    activeSession: { id: "old", windowId: 7, account: "owner", stop: { reason: "stopped_by_user", detail: "Stop" }, completed: false },
+  });
+  const doomed = await workerCopy();
+  const closing = hold(chrome.windows, "remove");
+  doomed.recoverInterruptedSession();
+  await closing.entered;
+  const kill = killer();
+  kill.trigger(0);
+  doomed.requestStop("rate_limited", "HomeTimeline answered HTTP 429");
+  kill.restart();
+
+  const restarted = await workerCopy();
+  await restarted.recoverInterruptedSession();
+  assert.equal(statuses("old").length, 1, log.join(" "));
+  assert.doesNotMatch(statuses("old")[0], /:ok$/);
+});
+
+test("a challenge the page showed is on record before any other write, so a kill right after reports it", async () => {
+  await reset();
+  const doomed = await workerCopy();
+  const kill = killer();
+  const execute = chrome.scripting.executeScript;
+  chrome.scripting.executeScript = async (options) => {
+    if (options.args?.[0]?.name !== "inspect") return execute(options);
+    chrome.scripting.executeScript = execute;
+    doomed.requestStop("stopped_by_user", "Sam pressed Stop");
+    // The worker stops after its next storage write.
+    kill.trigger(1);
+    return [{ result: { ok: { account: "someone_new", blocker: "challenge", evidence: "CAPTCHA", path: "/home" } } }];
+  };
+  doomed.startSession("manual");
+  await kill.stuck;
+  kill.restart();
+
+  const restarted = await workerCopy();
+  await restarted.recoverInterruptedSession();
+  assert.ok(log.some((entry) => /^status:.+:challenge$/.test(entry)), log.join(" "));
+});
+
+test("two simultaneous 429s while Sam browses are reported once", async () => {
+  await reset();
+  await Promise.all([
+    fromTab(500, { type: "x-status", operation: "HomeTimeline", status: 429 }),
+    fromTab(501, { type: "x-status", operation: "HomeTimeline", status: 429 }),
+  ]);
+  assert.equal(log.filter((entry) => entry.startsWith("status:")).length, 1, log.join(" "));
+});
+
+test("a passive back-off report and its pause are stored together before the report is sent", async () => {
+  await reset();
+  fake.local.delete("pendingBackOff");
+  statusDown = true;
+  await fromTab(500, { type: "x-status", operation: "HomeTimeline", status: 429 });
+  // The report failed; it waits in storage beside the pause for the next try.
+  assert.ok(Date.parse(fake.local.get("pauseUntil")) > Date.now());
+  assert.equal(fake.local.get("pendingBackOff")?.status, "rate_limited");
+  statusDown = false;
+  fake.local.delete("pendingBackOff");
+});
+
+test("a capture past the outbox's mode check when Off is chosen is dropped", async () => {
+  await reset();
+  const reading = hold(chrome.storage.local, "get", (key) => key === "outbox");
+  const reply = fromTab(500, capture());
+  await reading.entered;
+  await switchOff();
+  reading.release();
+  await reply;
+  const { flush } = await import("../app/lib/outbox.js");
+  await flush();
+  assert.equal((fake.local.get("outbox") ?? []).length, 0);
+  assert.equal(ingests.length, 0);
+});
+
+test("a session window is recorded before X loads in it", async () => {
+  await reset();
+  const doomed = await workerCopy();
+  const kill = killer();
+  const create = chrome.windows.create;
+  let createdUrl = null;
+  chrome.windows.create = async (options) => {
+    chrome.windows.create = create;
+    createdUrl = options.url;
+    const win = await create(options);
+    kill.trigger(0);
+    return win;
+  };
+  doomed.startSession("manual");
+  await kill.stuck;
+  kill.restart();
+  assert.equal(createdUrl, "about:blank");
+  assert.equal(tab.url, "about:blank", "X never loaded in a window no record points to");
+});
+
+test("a status the Worker accepted is not sent again after a kill at the next write", async () => {
+  await reset();
+  const doomed = await workerCopy();
+  const kill = killer();
+  const original = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    const response = await original(url, init);
+    if (new URL(url).pathname === "/ingest/x/status") {
+      globalThis.fetch = original;
+      kill.trigger(1);
+    }
+    return response;
+  };
+  const started = await doomed.startSession("manual");
+  await kill.stuck;
+  kill.restart();
+  globalThis.fetch = original;
+
+  const restarted = await workerCopy();
+  await restarted.recoverInterruptedSession();
+  assert.deepEqual(statuses(started.id), [`status:${started.id}:ok`]);
+});
+
+test("a recovery whose report failed marks the record as waiting, not running", async () => {
+  await reset();
+  await chrome.storage.session.set({
+    activeSession: { id: "old", windowId: 7, account: "owner", stop: { reason: "stopped_by_user", detail: "Stop" }, completed: false },
+  });
+  statusDown = true;
+  await session.recoverInterruptedSession();
+  statusDown = false;
+  assert.equal(fake.session.get("activeSession").awaitingReport, true);
+  fake.session.clear();
+});
+
+test("a recovered status the Worker accepted is not sent again after a kill at the next write", async () => {
+  await reset();
+  await chrome.storage.session.set({
+    activeSession: { id: "old", windowId: 7, account: "owner", stop: { reason: "challenge", detail: "CAPTCHA" }, completed: false },
+  });
+  const doomed = await workerCopy();
+  const kill = killer();
+  const original = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    const response = await original(url, init);
+    if (new URL(url).pathname === "/ingest/x/status") {
+      globalThis.fetch = original;
+      kill.trigger(1);
+    }
+    return response;
+  };
+  doomed.recoverInterruptedSession();
+  await kill.stuck;
+  kill.restart();
+  globalThis.fetch = original;
+
+  const restarted = await workerCopy();
+  await restarted.recoverInterruptedSession();
+  assert.deepEqual(statuses("old"), ["status:old:challenge"]);
 });
