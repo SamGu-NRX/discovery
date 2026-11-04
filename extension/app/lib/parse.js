@@ -33,11 +33,13 @@ const RATE_LIMIT_CODE = 88;
 
 /**
  * @returns {{ items: Item[], rateLimited: boolean }}
- *   Item: { post, authorId, role, slot }. `role` is "timeline" outside
- *   TweetDetail; there it is "focal", "ancestor", "reply" or "related".
- *   Quoted and reposted originals come back with role "embedded" and the slot
- *   of the post that carried them. `slot` orders the primary posts as X
- *   displays them.
+ *   Item: { post, authorId, role, slot, module, prepend }. `role` is
+ *   "timeline" outside TweetDetail; there it is "focal", "ancestor", "reply"
+ *   or "related". Quoted and reposted originals come back with role
+ *   "embedded" and the slot of the post that carried them. `slot` orders the
+ *   primary posts as X displays them. `module` is the entryId of the module
+ *   the post came in (null for a single entry), and `prepend` is true when a
+ *   TimelineAddToModule put it in front of that module's earlier items.
  */
 export function parseResponse(operation, json, { focalId = null } = {}) {
   const path = INSTRUCTION_PATHS[operation];
@@ -110,17 +112,18 @@ function readEntry(ctx, entry, out) {
   const entryType = content.entryType ?? content.__typename;
   if (entryType === "TimelineTimelineCursor") return;
   if (entryType === "TimelineTimelineItem") {
-    readItemContent(ctx, content.itemContent, roleForItem(ctx, entryId), entryId, out);
+    const place = { role: roleForItem(ctx, entryId), module: null, prepend: false };
+    readItemContent(ctx, content.itemContent, place, entryId, out);
     return;
   }
   if (entryType === "TimelineTimelineModule") {
     if (!Array.isArray(content.items)) throw new ParseError(`${ctx.operation}: module ${entryId} without items[]`);
-    const role = roleForModule(ctx, entryId);
+    const place = { role: roleForModule(ctx, entryId), module: entryId, prepend: false };
     for (const item of content.items) {
       if (!isObject(item) || typeof item.entryId !== "string" || !isObject(item.item)) {
         throw new ParseError(`${ctx.operation}: module ${entryId} has a malformed item`);
       }
-      readItemContent(ctx, item.item.itemContent, role, item.entryId, out);
+      readItemContent(ctx, item.item.itemContent, place, item.entryId, out);
     }
     return;
   }
@@ -132,12 +135,12 @@ function readAddToModule(ctx, instruction, out) {
   if (typeof moduleEntryId !== "string" || !Array.isArray(moduleItems)) {
     throw new ParseError(`${ctx.operation}: TimelineAddToModule without moduleEntryId or moduleItems[]`);
   }
-  const role = roleForModule(ctx, moduleEntryId);
+  const place = { role: roleForModule(ctx, moduleEntryId), module: moduleEntryId, prepend: instruction.prepend === true };
   for (const item of moduleItems) {
     if (!isObject(item) || typeof item.entryId !== "string" || !isObject(item.item)) {
       throw new ParseError(`${ctx.operation}: module ${moduleEntryId} has a malformed item`);
     }
-    readItemContent(ctx, item.item.itemContent, role, item.entryId, out);
+    readItemContent(ctx, item.item.itemContent, place, item.entryId, out);
   }
 }
 
@@ -155,7 +158,7 @@ function roleForModule(ctx, entryId) {
   return entryId.startsWith("conversationthread-") ? "reply" : "related";
 }
 
-function readItemContent(ctx, itemContent, role, entryId, out) {
+function readItemContent(ctx, itemContent, place, entryId, out) {
   if (!isObject(itemContent)) throw new ParseError(`${ctx.operation}: ${entryId} without itemContent`);
   const kind = itemContent.__typename ?? itemContent.itemType;
   // Users, prompts, cursors, lists, topics: not posts.
@@ -168,7 +171,14 @@ function readItemContent(ctx, itemContent, role, entryId, out) {
   const result = itemContent.tweet_results.result;
   if (result === undefined || result === null) return;
   const tweet = unwrapTweet(ctx, result, entryId);
-  if (tweet) out.push({ tweet, role });
+  if (!tweet) return;
+  // X sometimes delivers the permalink's own post inside a conversation
+  // module rather than as a tweet-<id> entry; it is the focal post either way.
+  if (ctx.detail && ctx.focalId && tweet.rest_id === ctx.focalId) {
+    out.push({ tweet, role: "focal", module: null, prepend: false });
+  } else {
+    out.push({ tweet, ...place });
+  }
 }
 
 // T in the contract appendix: the tweet itself, or the .tweet inside a
@@ -192,19 +202,30 @@ function unwrapTweet(ctx, result, where) {
   }
 }
 
+// When one post appears in several places, the thread needs its strongest
+// role: a post shown under "Discover more" and in a conversation module is
+// still a reply.
+const ROLE_RANK = { focal: 4, ancestor: 3, reply: 2, related: 1, timeline: 0 };
+
 function assemble(ctx, primaries) {
   const items = [];
-  const primaryIds = new Set();
+  const byId = new Map();
   let slot = 0;
-  for (const { tweet, role } of primaries) {
+  for (const { tweet, role, module, prepend } of primaries) {
     const { post, authorId } = normalizeTweet(ctx, tweet);
-    // One sighting per post per batch: a post repeated in a response (a
-    // module and a single entry, say) keeps its first place.
-    if (primaryIds.has(post.id)) continue;
-    primaryIds.add(post.id);
-    items.push({ post, authorId, role, slot, tweet });
+    // One sighting per post per batch: a post repeated in a response keeps
+    // its first position.
+    const seen = byId.get(post.id);
+    if (seen) {
+      if (ROLE_RANK[role] > ROLE_RANK[seen.role]) Object.assign(seen, { role, module, prepend });
+      continue;
+    }
+    const item = { post, authorId, role, module, prepend, slot, tweet };
+    byId.set(post.id, item);
+    items.push(item);
     slot += 1;
   }
+  const primaryIds = new Set(byId.keys());
 
   const embeddedIds = new Set();
   const embedded = [];
@@ -269,8 +290,12 @@ function normalizeTweet(ctx, t) {
   const inReplyTo = optionalId(legacy.in_reply_to_status_id_str, () => fail("legacy.in_reply_to_status_id_str"));
 
   if (!isObject(legacy.entities)) fail("legacy.entities");
+  const noteUrls = note?.entity_set?.urls ?? [];
+  const legacyUrls = legacy.entities.urls ?? [];
+  if (!Array.isArray(noteUrls)) fail("note_tweet entity_set.urls");
+  if (!Array.isArray(legacyUrls)) fail("legacy.entities.urls");
   const urls = [];
-  for (const u of [...(note?.entity_set?.urls ?? []), ...(legacy.entities.urls ?? [])]) {
+  for (const u of [...noteUrls, ...legacyUrls]) {
     const url = u?.expanded_url;
     if (typeof url === "string" && url && !urls.includes(url)) urls.push(url);
   }
@@ -279,7 +304,9 @@ function normalizeTweet(ctx, t) {
   if (!Array.isArray(mediaList)) fail("legacy media[]");
   const media = mediaList.map((m) => {
     if (typeof m?.type !== "string" || typeof m.media_url_https !== "string") fail("media type or media_url_https");
-    return { type: m.type, url: mediaUrl(m) };
+    const variants = m.video_info?.variants ?? [];
+    if (!Array.isArray(variants)) fail("media video_info.variants");
+    return { type: m.type, url: mediaUrl(m, variants) };
   });
 
   const quoted = t.quoted_status_result?.result;
@@ -287,9 +314,10 @@ function normalizeTweet(ctx, t) {
   const original = legacy.retweeted_status_result?.result;
   const retweetOf = (original && (original.rest_id ?? original.tweet?.rest_id)) ?? null;
 
+  // twitter-web-exporter types these five counts as always present. Views
+  // are optional there (`views.count?`) and X omits them on older posts.
   const count = (value, field) => {
-    if (value === undefined || value === null) return null;
-    if (!Number.isInteger(value) || value < 0) fail(field);
+    if (!Number.isInteger(value) || value < 0) fail(`legacy.${field}`);
     return value;
   };
   let views = null;
@@ -333,10 +361,10 @@ function optionalId(value, fail) {
 
 // Videos and GIFs: the highest-bitrate variant, as twitter-web-exporter's
 // getMediaOriginalUrl does. Photos: the image itself.
-function mediaUrl(m) {
+function mediaUrl(m, variants) {
   if (m.type === "video" || m.type === "animated_gif") {
     let best = null;
-    for (const v of m.video_info?.variants ?? []) {
+    for (const v of variants) {
       if (typeof v?.url !== "string") continue;
       if (!best || (v.bitrate ?? 0) > (best.bitrate ?? 0)) best = v;
     }
@@ -347,12 +375,15 @@ function mediaUrl(m) {
 
 const MONTHS = { Jan: "01", Feb: "02", Mar: "03", Apr: "04", May: "05", Jun: "06", Jul: "07", Aug: "08", Sep: "09", Oct: "10", Nov: "11", Dec: "12" };
 
-// "Sat Oct 25 13:28:50 +0000 2026" -> "2026-10-25T13:28:50Z"
+// "Sat Oct 25 13:28:50 +0000 2026" -> "2026-10-25T13:28:50Z". A date that
+// does not exist (Oct 99, 77:88) does not survive the round trip through Date.
 function twitterDateToIso(value) {
   if (typeof value !== "string") return null;
   const m = /^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) (\w{3}) (\d{2}) (\d{2}:\d{2}:\d{2}) \+0000 (\d{4})$/.exec(value);
   if (!m || !MONTHS[m[1]]) return null;
-  return `${m[4]}-${MONTHS[m[1]]}-${m[2]}T${m[3]}Z`;
+  const iso = `${m[4]}-${MONTHS[m[1]]}-${m[2]}T${m[3]}Z`;
+  const parsed = new Date(iso);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString() === iso.replace("Z", ".000Z") ? iso : null;
 }
 
 // legacy.full_text escapes these three characters as HTML entities;

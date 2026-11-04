@@ -291,6 +291,10 @@ async function clickTab(s, target) {
       if (result.clicked) await pause(s, 1500, 2500);
       return true;
     }
+    if (result.refused) {
+      s.notes.push(result.refused);
+      return false;
+    }
     await pause(s, 900, 1300);
   }
   s.notes.push(`${target} tab not found`);

@@ -12,7 +12,10 @@ import {
   detailResponse,
   detailUrl,
   homeResponse,
+  itemEntry,
   midThreadDetailResponse,
+  moduleEntry,
+  tweet,
 } from "./fixtures/x-shapes.js";
 
 const home = (json = homeResponse(), offset = 0) =>
@@ -140,4 +143,75 @@ test("a later permalink page seen without its first page keeps its posts but bui
   assert.equal(result.batch.thread, undefined);
   assert.deepEqual(result.batch.posts.map((p) => p.id), ["207", "208"]);
   assert.match(result.threadError, /focal post/);
+});
+
+// Thread edge cases found in review. `op` is the permalink's author.
+const op = (id, inReplyTo) => tweet({ id, handle: "op", userId: "u-op", conversationId: "200", inReplyTo });
+const other = (id, inReplyTo = "200") => tweet({ id, handle: "x", userId: "u-x", conversationId: "200", inReplyTo });
+const detailOf = (instructions) => ({ data: { threaded_conversation_with_injections_v2: { instructions } } });
+const addEntries = (entries) => ({ type: "TimelineAddEntries", entries });
+const addToModule = (moduleEntryId, prepend, posts) => ({
+  type: "TimelineAddToModule",
+  moduleEntryId,
+  prepend,
+  moduleItems: moduleEntry(moduleEntryId, "0", posts).content.items,
+});
+function permalink(instructions, previous = null) {
+  return captureToBatch({
+    operation: "TweetDetail",
+    json: detailOf(instructions),
+    url: detailUrl("200"),
+    offset: previous?.advance ?? 0,
+    threadState: previous?.threadState ?? null,
+  });
+}
+
+test("posts added to an earlier conversation module keep that module's place, before or after its items", () => {
+  const first = () =>
+    permalink([
+      addEntries([
+        itemEntry(op("200"), "9000"),
+        moduleEntry("conversationthread-a", "8990", [other("202")]),
+        moduleEntry("conversationthread-b", "8980", [other("203")]),
+      ]),
+    ]);
+  assert.deepEqual(permalink([addToModule("conversationthread-a", false, [other("201")])], first()).batch.thread.reply_ids, ["202", "201", "203"]);
+  assert.deepEqual(permalink([addToModule("conversationthread-a", true, [other("201")])], first()).batch.thread.reply_ids, ["201", "202", "203"]);
+
+  const selfFirst = permalink([addEntries([itemEntry(op("200"), "9000"), moduleEntry("conversationthread-a", "8990", [op("202", "201")])])]);
+  const selfNext = permalink([addToModule("conversationthread-a", true, [op("201", "200")])], selfFirst);
+  assert.deepEqual(selfNext.batch.thread.op_self_thread_ids, ["200", "201", "202"]);
+});
+
+test("a reply also shown under Discover more stays a reply", () => {
+  const { batch } = permalink([
+    addEntries([
+      itemEntry(op("200"), "9000"),
+      moduleEntry("tweetdetailrelatedtweets-1", "8990", [other("201")]),
+      moduleEntry("conversationthread-201", "8980", [other("201")]),
+    ]),
+  ]);
+  assert.deepEqual(batch.posts.map((p) => p.id), ["200", "201"]);
+  assert.deepEqual(batch.thread, { root_id: "200", op_self_thread_ids: ["200"], reply_ids: ["201"] });
+});
+
+test("a focal post delivered inside a conversation module still roots the thread", () => {
+  const { batch, threadError } = permalink([addEntries([moduleEntry("conversationthread-200", "9000", [op("200"), op("201", "200"), other("202")])])]);
+  assert.equal(threadError, null);
+  assert.deepEqual(batch.thread, { root_id: "200", op_self_thread_ids: ["200", "201"], reply_ids: ["202"] });
+});
+
+test("an impossible date, a missing count or a malformed list fails loudly", () => {
+  const cases = {
+    "legacy.created_at": (t) => (t.legacy.created_at = "Sat Oct 99 77:88:99 +0000 2026"),
+    "legacy.favorite_count": (t) => delete t.legacy.favorite_count,
+    "legacy.entities.urls": (t) => (t.legacy.entities.urls = {}),
+    "video_info.variants": (t) => (t.legacy.extended_entities = { media: [{ type: "video", media_url_https: "https://pbs.twimg.com/t.jpg", video_info: { variants: {} } }] }),
+  };
+  for (const [field, mutate] of Object.entries(cases)) {
+    const t = op("200");
+    mutate(t);
+    const json = { data: { home: { home_timeline_urt: { instructions: [addEntries([itemEntry(t, "9000")])] } } } };
+    assert.throws(() => home(json), (err) => err instanceof ParseError && err.message.includes(field), field);
+  }
 });

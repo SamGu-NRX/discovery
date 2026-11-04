@@ -26,7 +26,7 @@ The service worker turns each response into one contract batch:
 - `position` counts down the whole feed on that page load, so the 30th post on the second page has position 29.
 - Quoted and reposted originals go in the same batch at the position of the post that carried them. Bookmark batches are the exception, because the Worker marks every post in one as bookmarked.
 - Ads, cursors, who-to-follow cards, deleted posts and visibility-limited entries without a result are skipped.
-- On a permalink (TweetDetail), the batch also carries `thread`. `root_id` is the permalink's post. `op_self_thread_ids` is that post plus every post by the same author linked to it by `in_reply_to`: the earlier posts it continues and the continuations below it. `reply_ids` is every other post in the conversation, in X's order. Each later page of the permalink sends the thread so far, because the Worker overwrites the thread row.
+- On a permalink (TweetDetail), the batch also carries `thread`. `root_id` is the permalink's post. `op_self_thread_ids` is that post plus every post by the same author linked to it by `in_reply_to`: the earlier posts it continues and the continuations below it. `reply_ids` is every other post in the conversation, in X's order: module by module, and within a module in item order, with "show more" items placed where `TimelineAddToModule` puts them. Each later page of the permalink sends the thread so far, because the Worker overwrites the thread row.
 
 If a response lacks a field the contract needs, or has an entry type the parser does not know, the whole response is dropped and the popup shows the error. The parser never fills in a guess. X changes these payloads without notice, and a loud failure is easier to fix than months of wrong rows.
 
@@ -58,12 +58,12 @@ Session code can do three things to X: open a URL it built, scroll, and click on
 
 - `app/lib/xurl.js` is the only source of URLs. `navigate()` and `openWindow()` in `app/lib/session.js` refuse any value that module did not build. The detail queue supplies ids only, and an id must be all digits before it goes into `https://x.com/i/status/<id>`.
 - `app/content/page-agent.js` is the only code that runs inside a session page. Its command table has `inspect`, `scroll` and `click`, nothing else. It has no command that types, submits, focuses an input or clicks an arbitrary element.
-- `click` takes the id of an entry in a frozen `CLICK_TARGETS` table, either `for_you` or `bookmarks`. The element must be a `role="tab"` inside a tablist with the right label or link, on the right page, and exactly one element may match. Then it must not be inside a post, form, button, label, link, dialog or menu, and neither it nor an ancestor may carry a like, repost, reply, bookmark, follow-menu, compose or login `data-testid`. Neither the page nor the Worker can add to that table.
+- `click` takes the id of an entry in a frozen `CLICK_TARGETS` table, either `for_you` or `bookmarks`. The element must be a `role="tab"` inside a tablist with the right label or link, on the right page, and exactly one element may match. A click bubbles through every ancestor, so no ancestor may be a control: no link, button, label, form, post, `role="button"`, menu item or other interactive role, `aria-haspopup`, `onclick` or focusable `tabindex`. No element on the path may carry a `data-testid` containing an action word such as like, retweet, reply, bookmark, follow or caret, in any variant such as `123-follow`. A tab that fails these checks is not clicked; the session notes it and keeps reading whichever tab is selected. Neither the page nor the Worker can add to that table.
 - Sam's own tabs never receive the page agent. Content scripts there only copy responses.
 
 Passive capture never acts on the page at all.
 
-The page-to-extension channel is a detached DOM element handed over during `document_start`, before any X script runs. This differs from the brief's `window.postMessage` plus nonce: X's scripts can read every `postMessage`, and with it the nonce, which would let them forge captures. Captured text is treated as data. Nothing in the extension follows instructions found in a post.
+The page-to-extension channel is a detached DOM element handed over during `document_start`, before any X script runs. This differs from the brief's `window.postMessage` plus nonce: X's scripts can read every `postMessage`, and with it the nonce, which would let them forge captures. Page scripts share the hook's world and can replace built-ins later, so the hook keeps its own references to every built-in it calls (`dispatchEvent`, `addEventListener`, the XHR and `Response` getters, `JSON.stringify`, `Promise.prototype.then`), taken before any page script runs, and reads XHR results only from trusted load events. `test/hook.test.js` replaces those built-ins and fires a fake XHR load, and checks that only X's real response arrives. Captured text is treated as data. Nothing in the extension follows instructions found in a post.
 
 ## Install in Helium
 
@@ -99,9 +99,10 @@ npm install
 npm test
 ```
 
-- `test/capture.test.js` covers normalization, note tweets, the visibility wrapper, cursor and module entries, display order, quoted and reposted posts, the bookmark rule, loud failures, and self-thread versus replies across permalink pages.
+- `test/capture.test.js` covers normalization, note tweets, the visibility wrapper, cursor and module entries, display order, quoted and reposted posts, the bookmark rule, loud failures, and self-thread versus replies across permalink pages, including posts added to an earlier module, a reply also shown under Discover more, and a focal post inside a module.
 - `test/batch.test.js` covers the 128 KB split.
-- `test/page-agent.test.js` runs the click allowlist against real Chromium DOM. It must refuse a like button, including one dressed as the For You tab.
+- `test/page-agent.test.js` runs the click allowlist against real Chromium DOM. It must refuse a like button, including one dressed as the For You tab, and a tab nested in a post, link, follow button, menu or reply button.
+- `test/hook.test.js` loads `hook.js` and `bridge.js` into a page the way the extension does and checks that page scripts cannot forge a capture or take the channel.
 - `test/e2e.test.js` loads `app/` into a throwaway Chromium profile and deletes the profile afterward. Chromium resolves `x.com` to a local HTTPS server holding fixture pages and fails every other hostname, so the test cannot reach the real X. It checks passive capture through both `fetch` and XHR, a full session (pages visited, tabs clicked, thread sent, status `ok`), and that a login wall or a GraphQL 429 stops a session.
 
 ## Not yet checked against live X

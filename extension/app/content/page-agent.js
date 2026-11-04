@@ -40,32 +40,46 @@
     }),
   });
 
-  // Checked for every click on top of the target's own match. A click on an
-  // element inside a link, button, label or form activates that ancestor, and
-  // post actions (like, repost, reply, bookmark, follow, the "..." menu) live
-  // inside articles, dialogs and menus.
-  const ACTION_TESTIDS = new Set([
-    "like", "unlike", "retweet", "unretweet", "reply", "bookmark", "removeBookmark", "caret",
-    "tweetButton", "tweetButtonInline", "SideNav_NewTweet_Button", "sendDMFromProfile",
-    "confirmationSheetConfirm", "loginButton", "signupButton", "LoginForm_Login_Button",
+  // Checked for every click on top of the target's own match. A click event
+  // bubbles through every ancestor, and clicking inside a link, button, label
+  // or summary activates that ancestor. So the tab may sit only in plain
+  // wrappers: no ancestor may be a control or look like one, and nothing on
+  // the path may carry a post-action test id (like, repost, reply, bookmark,
+  // follow, the "..." caret, compose, login), in any variant such as
+  // "123-follow".
+  const CONTROL_TAGS = new Set(["A", "BUTTON", "LABEL", "FORM", "ARTICLE", "SUMMARY", "DETAILS", "SELECT", "OPTION", "INPUT", "TEXTAREA"]);
+  const CONTROL_ROLES = new Set([
+    "button", "link", "menuitem", "menuitemcheckbox", "menuitemradio", "checkbox", "switch", "radio", "option",
+    "menu", "menubar", "dialog", "alertdialog", "combobox", "textbox", "listbox", "slider", "spinbutton",
+    "treeitem", "gridcell", "row", "article",
   ]);
+  const ACTION_TESTID = /like|retweet|repost|reply|bookmark|caret|follow|block|mute|share|report|delete|tweetbutton|newtweet|senddm|confirmationsheet|login|signup|logout/i;
 
   function refuseReason(el) {
     if (!(el instanceof HTMLElement) || !el.isConnected) return "not an element in the page";
-    if (el.closest("article, form, label, button, [role='dialog'], [role='menu'], [role='alertdialog'], [contenteditable]")) {
-      return "inside a post, form, button, label, dialog or menu";
+    for (let node = el; node && node !== document.body; node = node.parentElement) {
+      const testid = node.getAttribute("data-testid");
+      if (testid && ACTION_TESTID.test(testid)) return `action control ${testid}`;
+      if (node === el) continue;
+      const role = node.getAttribute("role");
+      if (CONTROL_TAGS.has(node.tagName)) return `inside a ${node.tagName.toLowerCase()} element`;
+      if (role && CONTROL_ROLES.has(role)) return `inside role=${role}`;
+      if (node.isContentEditable || node.hasAttribute("onclick") || node.hasAttribute("aria-haspopup")) {
+        return "inside an interactive element";
+      }
+      const tabindex = node.getAttribute("tabindex");
+      if (role !== "tablist" && tabindex !== null && Number(tabindex) >= 0) return "inside a focusable element";
     }
-    const link = el.closest("a");
-    if (link && link !== el) return "inside a link";
-    for (let node = el; node; node = node.parentElement) {
-      if (ACTION_TESTIDS.has(node.getAttribute("data-testid"))) return `action control ${node.getAttribute("data-testid")}`;
+    if (el.querySelector("a, button, input, textarea, select, form, label, [role='button'], [role='link'], [role='menuitem']")) {
+      return "contains a control";
     }
-    if (el.querySelector("input, textarea, select, button, form")) return "contains a control";
     const box = el.getBoundingClientRect();
     if (box.width === 0 || box.height === 0) return "not visible";
     return null;
   }
 
+  // A refusal clicks nothing and is not an error: the session notes it and
+  // carries on reading whatever tab is selected.
   function clickTarget(id) {
     if (typeof id !== "string" || !Object.hasOwn(CLICK_TARGETS, id)) {
       throw new Error(`click refused: ${JSON.stringify(id)} is not an allowed target`);
@@ -77,7 +91,7 @@
     const el = candidates[0];
     if (el.getAttribute("aria-selected") === "true") return { found: true, selected: true, clicked: false };
     const refused = refuseReason(el);
-    if (refused) throw new Error(`click refused on ${id}: ${refused}`);
+    if (refused) return { found: false, refused: `click refused on ${id}: ${refused}` };
     el.click();
     return { found: true, selected: false, clicked: true };
   }

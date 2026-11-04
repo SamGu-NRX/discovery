@@ -67,7 +67,13 @@ async function handle(message, sender) {
 
   switch (message?.type) {
     case "capture":
-      return fromXTab ? handleCapture(message, sender.tab.id) : { error: "captures come from x.com tabs" };
+      if (!fromXTab) return { error: "captures come from x.com tabs" };
+      // Anything other than a ParseError is a bug here; it still belongs in
+      // the popup rather than only in the reply to the bridge.
+      return handleCapture(message, sender.tab.id).catch(async (err) => {
+        await recordProblem("capture", `${message.operation}: ${err.message}`);
+        return { error: err.message };
+      });
     case "x-status":
       return fromXTab ? handleXStatus(message, sender.tab.id) : { error: "statuses come from x.com tabs" };
     case "runSession":

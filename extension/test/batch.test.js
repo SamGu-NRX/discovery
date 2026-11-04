@@ -62,3 +62,13 @@ test("a post too large for any body is dropped and named, and the rest still go"
   assert.deepEqual(dropped, ["2"]);
   assert.deepEqual(bodies.flatMap((b) => b.batches.flatMap((x) => x.posts.map((p) => p.id))), ["1", "3"]);
 });
+
+test("a post that fits on its own is sent even when the thread it belongs to fills a body", () => {
+  const thread = { root_id: "1", op_self_thread_ids: ["1"], reply_ids: Array.from({ length: 4000 }, (_, i) => String(9_000_000_000_000_000_000n + BigInt(i))) };
+  const batch = { op: "TweetDetail", surface: "detail", posts: [post(1, 60_000)], thread };
+  const { bodies, dropped } = packRequests(envelope, [batch]);
+  assert.deepEqual(dropped, []);
+  assert.deepEqual(bodies.flatMap((b) => b.batches.flatMap((x) => x.posts.map((p) => p.id))), ["1"]);
+  assert.ok(bodies.at(-1).batches.at(-1).thread, "thread sent last");
+  for (const body of bodies) assert.ok(size(body) <= CONTRACT_CAP);
+});

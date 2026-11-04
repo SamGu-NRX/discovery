@@ -15,7 +15,8 @@ const bytes = (value) => encoder.encode(JSON.stringify(value)).length;
  * @param envelope { account, session_id, mode, captured_at }
  * @param batches  contract batches
  * @returns {{ bodies: object[], dropped: string[], finishedIn: number[] }}
- *   `dropped` lists ids of posts that cannot fit in a body on their own.
+ *   `dropped` lists ids of posts that cannot fit in a body on their own, and
+ *   "thread:<root_id>" for a thread that cannot.
  *   `finishedIn[i]` is the index of the body carrying the last piece of
  *   batches[i], or -1 when nothing of it was sent; once that body and every
  *   body before it are accepted, batches[i] is fully delivered.
@@ -34,9 +35,7 @@ export function packRequests(envelope, batches, limit = MAX_BODY_BYTES) {
 
   for (const batch of batches) {
     const { posts, thread, ...shell } = batch;
-    // Every piece reserves room for the thread, so whichever piece ends up
-    // last can carry it without going over.
-    const shellSize = bytes({ ...shell, posts: [], ...(thread ? { thread } : {}) });
+    const shellSize = bytes({ ...shell, posts: [] });
     let piece = null;
 
     const startPiece = () => {
@@ -66,8 +65,18 @@ export function packRequests(envelope, batches, limit = MAX_BODY_BYTES) {
       }
     }
     if (thread) {
-      if (!piece) startPiece();
-      piece.thread = thread;
+      // Bytes `,"thread":{...}` adds to a piece.
+      const threadSize = bytes({ ...shell, posts: [], thread }) - shellSize;
+      if (emptyBodySize + shellSize + threadSize > limit) {
+        dropped.push(`thread:${thread.root_id}`);
+      } else {
+        if (!piece || open.size + threadSize > limit) {
+          if (piece) closeBody();
+          startPiece();
+        }
+        piece.thread = thread;
+        open.size += threadSize;
+      }
     }
     finishedIn.push(piece ? bodies.length : -1);
   }

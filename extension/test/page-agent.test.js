@@ -59,7 +59,7 @@ test("the real For You tab is clicked", async () => {
 test("a like button is never a click target, even when it looks like the For You tab", async () => {
   const like = `<div role="tab" data-testid="like" aria-selected="false" data-name="like">For you</div>`;
   const disguised = await runAgent(homeTabs(like), { name: "click", arg: "for_you" });
-  assert.match(disguised.error, /click refused on for_you: action control like/);
+  assert.match(disguised.result.refused, /click refused on for_you: action control like/);
   assert.deepEqual(disguised.clicks, []);
 
   const named = await runAgent(`<button data-testid="like" data-name="like">Like</button>`, { name: "click", arg: "like" });
@@ -67,25 +67,30 @@ test("a like button is never a click target, even when it looks like the For You
   assert.deepEqual(named.clicks, []);
 });
 
-test("a For You lookalike inside a post or a link is refused", async () => {
-  const inPost = await runAgent(
-    `<article>${homeTabs(`<a href="/home" role="tab" aria-selected="false" data-name="for-you">For you</a>`)}</article>`,
-    { name: "click", arg: "for_you" },
-  );
-  assert.match(inPost.error, /inside a post/);
-
-  const inLink = await runAgent(
-    homeTabs(`<a href="/logout" data-name="logout"><span role="tab" aria-selected="false" data-name="for-you">For you</span></a>`),
-    { name: "click", arg: "for_you" },
-  );
-  assert.match(inLink.error, /inside a link/);
+// A click bubbles to every ancestor, so a tab nested in any control would
+// activate it.
+test("a For You lookalike nested in a post, link or other control is refused", async () => {
+  const tab = `<span role="tab" aria-selected="false" data-name="for-you">For you</span>`;
+  const wrap = (outer, close) => `${outer}<div role="tablist">${tab}</div>${close}`;
+  const cases = {
+    post: wrap("<article>", "</article>"),
+    link: `<div role="tablist"><a href="/logout" data-name="logout">${tab}</a></div>`,
+    follow: wrap(`<div role="button" data-testid="123-follow" data-name="follow">`, "</div>"),
+    menu: wrap(`<div aria-haspopup="menu" data-name="menu">`, "</div>"),
+    reply: wrap(`<div role="button" aria-label="Reply" data-name="reply">`, "</div>"),
+  };
+  for (const [name, html] of Object.entries(cases)) {
+    const out = await runAgent(html, { name: "click", arg: "for_you" });
+    assert.match(out.result?.refused ?? "", /click refused on for_you/, name);
+    assert.deepEqual(out.clicks, [], name);
+  }
 
   const offsite = await runAgent(homeTabs(`<a href="https://evil.example/home" role="tab" aria-selected="false" data-name="for-you">For you</a>`), {
     name: "click",
     arg: "for_you",
   });
   assert.equal(offsite.result.found, false);
-  assert.deepEqual([...inPost.clicks, ...inLink.clicks, ...offsite.clicks], []);
+  assert.deepEqual(offsite.clicks, []);
 });
 
 test("the agent has no command beyond inspect, scroll and the allowlisted click", async () => {
