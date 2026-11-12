@@ -120,7 +120,7 @@
       start = end + 1;
     }
     const [version, kind, operation, status, url] = fields;
-    if (version !== "dx1" || !["response", "status", "limit"].includes(kind)) return null;
+    if (version !== "dx1" || !["response", "status", "limit", "template"].includes(kind)) return null;
     if (!/^[A-Za-z]+$/.test(operation) || !/^\d{3}$/.test(status)) return null;
     return { kind, operation, status: Number(status), url, body: detail.slice(start) };
   }
@@ -150,9 +150,47 @@
     }
   };
 
+  // The last request X's page made for each read operation fetch mode may
+  // replay (hook.js, "Templates"). Kept in this isolated world only: the
+  // headers carry the CSRF token, so they are never sent to the service
+  // worker or stored. content/fetcher.js reads them through __dxTemplates,
+  // which page scripts cannot reach. A new page load starts empty.
+  const TEMPLATED = ["Bookmarks", "TweetDetail", "SearchTimeline", "UserTweets", "UserOriginalsTimeline", "UserRepliesTimeline"];
+  const templates = new Map();
+  function keepTemplate({ operation, url, body }) {
+    if (!TEMPLATED.includes(operation)) return;
+    const split = body.indexOf("\n\n");
+    if (split < 0) return;
+    const [method, ...lines] = body.slice(0, split).split("\n");
+    if (method !== "GET" && method !== "POST") return;
+    const headers = [];
+    for (const line of lines) {
+      const at = line.indexOf(": ");
+      if (at > 0) headers.push([line.slice(0, at), line.slice(at + 2)]);
+    }
+    templates.set(operation, { url, method, body: body.slice(split + 2), headers, learnedAt: Date.now() });
+  }
+  Object.defineProperty(globalThis, "__dxTemplates", {
+    value: Object.freeze({
+      // Everything but the headers' values: safe to hand to extension pages.
+      summary(operation) {
+        const t = templates.get(operation);
+        return t ? { url: t.url, method: t.method, body: t.body, headerNames: t.headers.map(([name]) => name), learnedAt: t.learnedAt } : null;
+      },
+      headers(operation) {
+        const t = templates.get(operation);
+        return t ? t.headers.map(([name, value]) => [name, value]) : null;
+      },
+    }),
+  });
+
   function onData(event) {
     const message = decode(event.detail);
     if (!message) return;
+    if (message.kind === "template") {
+      keepTemplate(message);
+      return;
+    }
     if (message.kind === "limit" || (message.kind === "status" && (message.status === 429 || message.status === 401))) {
       deliverBackOff({
         type: message.kind === "limit" ? "x-limit" : "x-status",

@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>X fetch mode</title>
+    <link rel="stylesheet" href="fetch.css" />
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>Fetch mode</h1>
+        <span id="account" class="mono muted"></span>
+      </header>
+      <p class="help">
+        Issues X's own read requests (Bookmarks, TweetDetail, SearchTimeline) from a separate x.com window, paced at least
+        1.5 s apart. Nothing on X is changed. Any rate limit, login wall or challenge stops the run and pauses the extension
+        for 24 hours.
+      </p>
+
+      <section aria-labelledby="job-label">
+        <div class="row">
+          <label id="job-label" for="job">Jobs</label>
+          <label class="file secondary">Load file<input id="job-file" type="file" accept="application/json,.json" /></label>
+        </div>
+        <textarea id="job" spellcheck="false" rows="14"></textarea>
+        <p id="job-note" class="help problem" role="alert"></p>
+        <label class="check"><input id="to-worker" type="checkbox" /> <span>Send batches to the Worker</span></label>
+        <p id="worker-note" class="help"></p>
+        <div class="row actions">
+          <button type="button" id="start" class="primary">Start</button>
+          <button type="button" id="stop" class="secondary" disabled>Stop</button>
+          <button type="button" id="download" class="secondary" disabled>Download bundle</button>
+        </div>
+      </section>
+
+      <section aria-live="polite">
+        <dl class="facts">
+          <div><dt>Status</dt><dd id="status">idle</dd></div>
+          <div><dt>Requests</dt><dd id="requests" class="mono">0</dd></div>
+          <div><dt>Posts seen</dt><dd id="posts" class="mono">0</dd></div>
+          <div><dt>Elapsed</dt><dd id="elapsed" class="mono">0 s</dd></div>
+        </dl>
+      </section>
+
+      <section aria-labelledby="ledger-label">
+        <h2 id="ledger-label">Ledger</h2>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>#</th><th>Operation</th><th>What</th><th>Status</th><th>ms</th></tr></thead>
+            <tbody id="ledger"></tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+    <script type="module" src="fetch.js"></script>
+  </body>
+</html>

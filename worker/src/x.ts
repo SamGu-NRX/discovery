@@ -18,7 +18,10 @@ export const TEST_ACCOUNT = "test";
 const PAUSE_MS = 24 * 3600 * 1000;
 const DETAIL_QUEUE_SIZE = 5;
 
-const MODES = ["passive", "active"] as const;
+// fetch: batches from the extension's fetch mode, which issues X's own read
+// operations instead of scrolling (extension/README.md, "Fetch mode").
+const MODES = ["passive", "active", "fetch"] as const;
+const RESERVED_MODES = ["active", "fetch"] as const;
 const OPS = ["HomeTimeline", "HomeLatestTimeline", "Bookmarks", "TweetDetail", "SearchTimeline", "UserTweets", "ListLatestTweetsTimeline"] as const;
 const SURFACES = ["home_for_you", "home_following", "bookmarks", "detail", "search", "profile", "list"] as const;
 const STATUSES = ["ok", "login_wall", "rate_limited", "challenge", "error"] as const;
@@ -324,6 +327,7 @@ export async function startSession(env: Env, req: Request): Promise<Response> {
   const b = await readJson<Record<string, unknown>>(req);
   const account = str(b.account, "account", 64);
   const sessionId = str(b.session_id, "session_id", 128);
+  const mode = b.mode === undefined ? "active" : oneOf(b.mode, RESERVED_MODES, "mode");
   const now = Date.now();
   const openElsewhere = `SELECT max(reserved_at) FROM x_sessions
     WHERE account = ?2 AND reserved_at IS NOT NULL AND status IS NULL AND session_id != ?1`;
@@ -335,13 +339,13 @@ export async function startSession(env: Env, req: Request): Promise<Response> {
     ).bind(account, now, now - RESERVATION_TIMEOUT_MS),
     env.DB.prepare(
       `INSERT INTO x_sessions (session_id, account, mode, started_at, reserved_at)
-       SELECT ?1, ?2, 'active', ?3, ?3
+       SELECT ?1, ?2, ?5, ?3, ?3
        WHERE NOT EXISTS (SELECT 1 FROM x_sessions WHERE account = ?2 AND status IS NOT NULL AND status != 'ok' AND ended_at > ?4)
          AND (${openElsewhere}) IS NULL
-       ON CONFLICT (session_id) DO UPDATE SET reserved_at = coalesce(x_sessions.reserved_at, excluded.reserved_at), mode = 'active'
+       ON CONFLICT (session_id) DO UPDATE SET reserved_at = coalesce(x_sessions.reserved_at, excluded.reserved_at), mode = excluded.mode
          WHERE x_sessions.status IS NULL AND x_sessions.account = excluded.account
        RETURNING reserved_at`,
-    ).bind(sessionId, account, now, now - PAUSE_MS),
+    ).bind(sessionId, account, now, now - PAUSE_MS, mode),
     env.DB.prepare(PAUSED_SINCE).bind(account, now - PAUSE_MS),
     env.DB.prepare(`SELECT (${openElsewhere}) AS open_at`).bind(sessionId, account),
     env.DB.prepare("SELECT account, status FROM x_sessions WHERE session_id = ?1").bind(sessionId),

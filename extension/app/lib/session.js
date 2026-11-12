@@ -172,6 +172,10 @@ export async function startSession(trigger) {
       await recoverInterruptedSession();
       if (await hasRecordOtherThan(s.id)) return refuse("The last session is not reported yet; is the Worker reachable?");
     }
+    // A fetch run (app/fetch/) keeps a heartbeat here while it works; the
+    // two never share the account's request budget.
+    const { fetchRun } = await chrome.storage.session.get("fetchRun");
+    if (fetchRun && Date.now() - fetchRun.heartbeatAt < 120_000) return refuse("A fetch run is going.");
     s.config = await loadConfig();
     if (!s.config.workerUrl || !s.config.ingestToken) return refuse("Add the Worker URL and token first.");
     if (s.config.mode === "off") return refuse("Capture is off.");

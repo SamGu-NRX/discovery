@@ -43,6 +43,16 @@ export function permalinkUrl(postId) {
   return mint(`https://x.com/i/status/${postId}`, `^/(i|[A-Za-z0-9_]{1,15})/status/${postId}$`);
 }
 
+// A search results page, for fetch mode to learn SearchTimeline's template.
+// The query comes from fetch mode's own job (quoted_tweet_id:<id>, url:...),
+// one line of at most 200 characters.
+export function searchUrl(query) {
+  if (typeof query !== "string" || !query || query.length > 200 || /[\r\n]/.test(query)) {
+    throw new Error(`refusing search URL for query ${JSON.stringify(query)}`);
+  }
+  return mint(`https://x.com/search?q=${encodeURIComponent(query)}&src=typed_query&f=live`, "^/search$");
+}
+
 export function isMintedXUrl(value) {
   return typeof value === "object" && value !== null && minted.has(value);
 }

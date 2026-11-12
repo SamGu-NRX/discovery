@@ -46,6 +46,14 @@
   const weakHas = WeakSet.prototype.has;
   const weakAdd = WeakSet.prototype.add;
   const xhrOpen = XMLHttpRequest.prototype.open;
+  const xhrSetHeader = XMLHttpRequest.prototype.setRequestHeader;
+  const xhrSend = XMLHttpRequest.prototype.send;
+  const reqMethod = getter(Request.prototype, "method");
+  const reqHeaders = getter(Request.prototype, "headers");
+  const headersForEach = Headers.prototype.forEach;
+  const weakGet = WeakMap.prototype.get;
+  const weakSet = WeakMap.prototype.set;
+  const toLower = String.prototype.toLowerCase;
   const xhrStatus = getter(XMLHttpRequest.prototype, "status");
   const xhrResponseType = getter(XMLHttpRequest.prototype, "responseType");
   const xhrResponseText = getter(XMLHttpRequest.prototype, "responseText");
@@ -67,6 +75,16 @@
     "UserTweets", "UserOriginalsTimeline", "UserRepliesTimeline", "ListLatestTweetsTimeline",
   ]);
   const captured = (operation) => apply(setHas, CAPTURED, [operation]);
+  // Read operations fetch mode may replay (lib/fetchops.js READ_OPERATIONS).
+  // For these the request X's page made is also sent to the bridge, which
+  // keeps it inside this tab: see "Templates" below.
+  const TEMPLATED = new Set([
+    "Bookmarks", "TweetDetail", "SearchTimeline", "UserTweets", "UserOriginalsTimeline", "UserRepliesTimeline",
+  ]);
+  const templated = (operation) => apply(setHas, TEMPLATED, [operation]);
+  // Only these request headers are kept: X's auth and client headers.
+  const TEMPLATE_HEADER = /^(authorization|content-type|x-[a-z0-9-]+)$/;
+  const LINE_BREAK = /[\r\n]/;
   const HELLO = "dx-capture-hello";
   const READY = "dx-capture-ready";
   const DATA = "dx-capture-data";
@@ -137,6 +155,32 @@
     }
   };
 
+  // Templates. Fetch mode (app/fetch/) replays X's own read requests, so it
+  // needs the query id, features and headers X's page used last. The page's
+  // request arguments are read here, unlike for responses: a page script
+  // that lies about them can only make fetch mode's own request fail. The
+  // headers (the CSRF token among them) go only to the bridge in this tab,
+  // which never sends them to the service worker. Format of the body:
+  // method, then one "name: value" line per header, a blank line, and the
+  // request body if it was a string.
+  const NL = "\n";
+  const templateBody = (method, headers, body) => {
+    let out = method + NL;
+    for (let i = 0; i < headers.length; i += 1) out += headers[i][0] + ": " + headers[i][1] + NL;
+    return out + NL + (typeof body === "string" ? body : "");
+  };
+  const keepHeader = (list, name, value) => {
+    if (typeof name !== "string" || typeof value !== "string") return;
+    const lower = apply(toLower, name, []);
+    if (!apply(exec, TEMPLATE_HEADER, [lower]) || value.length > 4096 || apply(exec, LINE_BREAK, [value])) return;
+    list[list.length] = [lower, value];
+  };
+  const methodOf = (value) => (typeof value === "string" && apply(toLower, value, []) === "post" ? "POST" : "GET");
+  const sendTemplate = (href, operation, status, request) => {
+    if (!request || !templated(operation) || status < 200 || status > 299) return;
+    send("template", operation, status, href, templateBody(request.method, request.headers, request.body));
+  };
+
   // Every GraphQL failure status is reported (a 429 stops a session); bodies
   // only for the captured operations. `body` is a string or a promise of one.
   const report = (url, operation, status, body) => {
@@ -159,6 +203,8 @@
   // One load listener per XHR, however many times it is opened; at load it
   // reads the URL the browser actually requested.
   const watched = new WeakSet();
+  // The method, headers and body each XHR was sent with, since its last open().
+  const requests = new WeakMap();
   const onXhrLoad = (event) => {
     if (!isTrusted(event)) return;
     const xhr = event.target;
@@ -180,6 +226,11 @@
       }
     }
     report(href, operation, status, body);
+    try {
+      sendTemplate(href, operation, status, apply(weakGet, requests, [xhr]));
+    } catch {
+      // Never let capture break X.
+    }
   };
 
   XMLHttpRequest.prototype.open = function () {
@@ -188,13 +239,75 @@
         apply(weakAdd, watched, [this]);
         apply(listen, this, ["load", onXhrLoad]);
       }
+      apply(weakSet, requests, [this, { method: methodOf(arguments[0]), headers: [], body: null }]);
     } catch {
       // Fall through to the real open().
     }
     return apply(xhrOpen, this, arguments);
   };
 
+  XMLHttpRequest.prototype.setRequestHeader = function (name, value) {
+    try {
+      const request = apply(weakGet, requests, [this]);
+      if (request) keepHeader(request.headers, name, value);
+    } catch {
+      // Fall through to the real setRequestHeader().
+    }
+    return apply(xhrSetHeader, this, arguments);
+  };
+
+  XMLHttpRequest.prototype.send = function (body) {
+    try {
+      const request = apply(weakGet, requests, [this]);
+      if (request && typeof body === "string") request.body = body;
+    } catch {
+      // Fall through to the real send().
+    }
+    return apply(xhrSend, this, arguments);
+  };
+
+  // What a fetch() call asked for: method, kept headers and a string body,
+  // from a Request, the init dictionary, or both (init wins, as in fetch).
+  const fetchRequest = (input, init) => {
+    let headers = [];
+    let method = "GET";
+    let body = null;
+    const fromHeaders = (h) => {
+      const list = [];
+      try {
+        apply(headersForEach, h, [(value, name) => keepHeader(list, name, value)]);
+        return list;
+      } catch {
+        // Not a Headers object.
+      }
+      if (isArray(h)) {
+        for (let i = 0; i < h.length; i += 1) if (isArray(h[i])) keepHeader(list, h[i][0], h[i][1]);
+      } else if (typeof h === "object" && h !== null) {
+        for (const name in h) keepHeader(list, name, h[name]);
+      }
+      return list;
+    };
+    try {
+      method = apply(reqMethod, input, []);
+      headers = fromHeaders(apply(reqHeaders, input, []));
+    } catch {
+      // Not a Request.
+    }
+    if (init && typeof init === "object") {
+      if (typeof init.method === "string") method = init.method;
+      if (init.headers) headers = fromHeaders(init.headers);
+      if (typeof init.body === "string") body = init.body;
+    }
+    return { method: methodOf(method), headers, body };
+  };
+
   window.fetch = function () {
+    let request = null;
+    try {
+      request = fetchRequest(arguments[0], arguments[1]);
+    } catch {
+      // The page gets its response either way.
+    }
     const pending = apply(realFetch, this, arguments);
     try {
       // This callback runs before the page's own, because it was attached
@@ -210,6 +323,7 @@
           const ok = status >= 200 && status <= 299;
           const body = ok ? apply(resText, apply(resClone, res, []), []) : null;
           report(href, operation, status, body);
+          sendTemplate(href, operation, status, request);
         } catch {
           // Not a real response.
         }

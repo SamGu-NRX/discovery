@@ -146,6 +146,11 @@ $("run").addEventListener("click", async () => {
   $("run-note").textContent = reply?.error ?? reply?.reason ?? (reply?.stopping ? "Stopping…" : "");
 });
 
+$("open-fetch").addEventListener("click", () => {
+  chrome.tabs.create({ url: chrome.runtime.getURL("fetch/fetch.html") });
+  window.close();
+});
+
 $("connection-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const note = $("save-note");
