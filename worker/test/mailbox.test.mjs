@@ -8,11 +8,13 @@ import { createHmac } from "node:crypto";
 import { after, before, test } from "node:test";
 import { freshFetch, startStack } from "../scripts/harness.mjs";
 
-const FIXTURE_PORT = 8862;
+// 8861, 8862 and 9361 were taken on the Zephyrus by a WSL listener on
+// 2026-11-12 (wslrelay), which hung the suite; these are free.
+const FIXTURE_PORT = 8962;
 const FIXTURE = `http://127.0.0.1:${FIXTURE_PORT}`;
 let s;
 before(async () => {
-  s = await startStack({ port: 8861, fixturePort: FIXTURE_PORT, inspectorPort: 9361 });
+  s = await startStack({ port: 8961, fixturePort: FIXTURE_PORT, inspectorPort: 9461 });
   // The migration seeds the mailbox paused.
   await s.call("POST", "/admin/mailbox/pause", { paused: false });
   // Room for every test's wakes and roots; the cap tests read grok's and

@@ -758,7 +758,8 @@ test("the dot's MCP surface adds get_brief and tell; no other agent sees them", 
   const rpc = async (path, method, params, token = "none") => (await s.call("POST", path, { jsonrpc: "2.0", id: 1, method, params }, { raw: true, token })).json();
   const dotPath = `/mcp/dot/${s.vars.MAIL_DOT_TOKEN}`;
   const names = (await rpc(dotPath, "tools/list", {})).result.tools.map((t) => t.name).sort();
-  assert.deepEqual(names, ["get_brief", "mailbox_ack", "mailbox_claim", "mailbox_complete", "mailbox_send", "tell"]);
+  // The knowledge store's four read-only tools (merged from #7) are on the same endpoint.
+  assert.deepEqual(names, ["get_brief", "knowledge_blob", "knowledge_bundle", "knowledge_has", "knowledge_search", "mailbox_ack", "mailbox_claim", "mailbox_complete", "mailbox_send", "tell"]);
   const t3 = (await rpc("/mcp", "tools/list", {}, "mail_t3")).result.tools.map((t) => t.name);
   assert.ok(!t3.includes("tell") && !t3.includes("get_brief"));
   const told = await rpc(dotPath, "tools/call", { name: "tell", arguments: { text: "The PR is up." } });

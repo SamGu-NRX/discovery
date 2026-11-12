@@ -7,7 +7,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { after, before, test } from "node:test";
-import { ROOT, startStack } from "../scripts/harness.mjs";
+import { freshFetch, ROOT, startStack } from "../scripts/harness.mjs";
 
 let s;
 let bare;
@@ -34,7 +34,9 @@ async function k(method, path, body, { token = "knowledge", stack = s, headers =
     payload = JSON.stringify(body);
     h["content-type"] = "application/json";
   }
-  const res = await fetch(stack.base + path, { method, headers: h, body: payload });
+  // A new connection per call: wrangler dev drops idle keep-alive sockets, and
+  // the d1 and r2 helpers between calls take long enough to hit that.
+  const res = await freshFetch(stack.base + path, { method, headers: h, body: payload });
   const type = res.headers.get("content-type") ?? "";
   const raw = Buffer.from(await res.arrayBuffer());
   return { status: res.status, headers: res.headers, raw, body: type.includes("json") && raw.length ? JSON.parse(raw) : null };
