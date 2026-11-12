@@ -67,3 +67,12 @@ def test_no_x_refuses_x_pages_and_apis_not_the_media_cdn():
     assert ctx.stats.fetches == {}
     ctx._allowed("https://video.twimg.com/a.mp4")  # the media CDN stays open
     ctx._allowed("https://api.fxtwitter.com/status/1")  # and fxtwitter, the lead's live source
+
+
+def test_long_data_uris_are_replaced_short_ones_kept():
+    from kworker.links import strip_data_uris
+
+    csv = "data:text/csv;charset=utf-8," + "a%2Cb%0A" * 500
+    out = strip_data_uris(f"[Download task data CSV]({csv}) and an icon data:image/png;base64,iVBORw0KGgo=")
+    assert out.startswith("[Download task data CSV](data:text/csv (inline file, 4,000 characters, not kept))")
+    assert "data:image/png;base64,iVBORw0KGgo=" in out

@@ -23,13 +23,27 @@ from .canon import canonical_url, is_immutable, url_hash
 from .ctx import X_HOSTS, Ctx
 from .models import cached_code
 
-EXTRACTOR = ("code/trafilatura", "trafilatura-2.3.1+v1")
+EXTRACTOR = ("code/trafilatura", "trafilatura-2.3.1+v2")  # v2: long data: URIs replaced
 # Characters of a page's extracted text kept in a bundle, in full in both
 # bundle.json and bundle.md. The first blind grade marked a page cut at 6,000
 # characters as not preserved. 200,000 keeps bundle.json well under the 1 MiB
 # knowledge_bundle reads.
 TEXT_MAX = 200_000
 THIN = 400  # extracted characters below which a page is probably a JS shell
+# A data: URI this long is a file inlined into the page, not text. The second
+# blind grade flagged a CSV download link on postplan.dev that filled a
+# bundle.md with one enormous line.
+DATA_URI_MAX = 200
+_DATA_URI = re.compile(r"data:([\w.+-]+/[\w.+-]+)?((?:;[\w.+-]+(?:=[\w.+-]+)?)*),([^\s)\]\"'<>]{%d,})" % DATA_URI_MAX)
+
+
+def strip_data_uris(text: str) -> str:
+    """Replaces each long inline data: URI with a note of its type and size."""
+
+    def note(m: re.Match) -> str:
+        return f"data:{m.group(1) or 'text/plain'} (inline file, {len(m.group(3)):,} characters, not kept)"
+
+    return _DATA_URI.sub(note, text)
 
 _GH_REPO = re.compile(r"https?://(?:www\.)?github\.com/([A-Za-z0-9-]+)/([A-Za-z0-9_.-]+)")
 _GH_NOT_OWNERS = {
@@ -379,16 +393,16 @@ def extract(ctx: Ctx, content_sha: str, data: bytes, mime: str, url: str) -> tup
 
     def compute() -> tuple[bytes, str]:
         if mime == ADAPTER_MIME:
-            return json.loads(data)["doc"].encode("utf-8"), "text/markdown; charset=utf-8"
+            return strip_data_uris(json.loads(data)["doc"]).encode("utf-8"), "text/markdown; charset=utf-8"
         if "html" not in mime:
-            return data, "text/markdown; charset=utf-8"
+            return strip_data_uris(data.decode("utf-8", "replace")).encode("utf-8"), "text/markdown; charset=utf-8"
         import trafilatura
 
         html = data.decode("utf-8", "replace")
         text = trafilatura.extract(html, url=url, output_format="markdown", include_links=True, include_tables=True, favor_recall=True) or ""
         meta = trafilatura.extract_metadata(html, default_url=url)
         title = meta.title if meta and meta.title else ""
-        return (f"# {title}\n\n{text}" if title else text).encode("utf-8"), "text/markdown; charset=utf-8"
+        return strip_data_uris(f"# {title}\n\n{text}" if title else text).encode("utf-8"), "text/markdown; charset=utf-8"
 
     sha, _ = cached_code(ctx, "extract", content_sha, EXTRACTOR[0], EXTRACTOR[1], compute)
     text = ctx.api.get_blob(sha).decode("utf-8")
