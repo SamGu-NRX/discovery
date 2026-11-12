@@ -87,3 +87,28 @@ export async function reserveSession(config, { account, session_id, mode = "acti
 export function getDetailQueue(config, account) {
   return call(config, "GET", `/x/detail-queue?account=${encodeURIComponent(account)}`);
 }
+
+// Lens routes (docs/LENS.md), all with the INGEST token.
+export function listLenses(config, account) {
+  return call(config, "GET", `/lenses?account=${encodeURIComponent(account)}`);
+}
+
+export function labelLensPosts(config, lensId, posts) {
+  return call(config, "POST", `/lenses/${encodeURIComponent(lensId)}/label`, { posts });
+}
+
+export function sendLensReads(config, lensId, sessionId, reads) {
+  return call(config, "POST", `/lenses/${encodeURIComponent(lensId)}/reads`, { session_id: sessionId, reads });
+}
+
+export function sendLensBaseline(config, lensId, sessionId, posts) {
+  return call(config, "POST", `/lenses/${encodeURIComponent(lensId)}/baseline`, { session_id: sessionId, posts });
+}
+
+export function dueRepolls(config, account) {
+  return call(config, "GET", `/lenses/repolls/due?account=${encodeURIComponent(account)}`);
+}
+
+export function doneRepolls(config, account, postIds) {
+  return call(config, "POST", "/lenses/repolls/done", { account, post_ids: postIds });
+}

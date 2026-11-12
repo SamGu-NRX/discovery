@@ -28,7 +28,7 @@ const sizeOf = (entry) => encoder.encode(JSON.stringify(entry)).length + 32;
 // Returns false, storing nothing, when capture is Off by the time the write
 // happens; the mode is read under the outbox lock, after every earlier await
 // in the capture's path.
-export function enqueue({ account, session_id, mode, batch }) {
+export function enqueue({ account, session_id, mode, lensId = null, batch }) {
   return serial(async () => {
     if ((await loadConfig()).mode === "off") return false;
     const { pieces, dropped } = splitCapture(crypto.randomUUID(), batch);
@@ -40,7 +40,7 @@ export function enqueue({ account, session_id, mode, batch }) {
     // After the last await before the write; see dropStoredSince().
     const storedAt = Date.now();
     for (const piece of pieces) {
-      const entry = { account, session_id, mode, captured_at, piece };
+      const entry = { account, session_id, mode, ...(lensId ? { lens_id: lensId } : {}), captured_at, piece };
       outbox.push({ ...entry, bytes: sizeOf(entry), storedAt });
     }
     let total = outbox.reduce((sum, entry) => sum + entry.bytes, 0);
@@ -87,16 +87,16 @@ export function flush() {
 
     const groups = new Map();
     for (const entry of outbox) {
-      const key = JSON.stringify([entry.account, entry.session_id, entry.mode]);
+      const key = JSON.stringify([entry.account, entry.session_id, entry.mode, entry.lens_id ?? null]);
       if (!groups.has(key)) groups.set(key, []);
       groups.get(key).push(entry);
     }
 
     for (const entries of groups.values()) {
-      const { account, session_id, mode, captured_at } = entries[0];
+      const { account, session_id, mode, lens_id, captured_at } = entries[0];
       let bodies;
       try {
-        bodies = packPieces({ account, session_id, mode, captured_at }, entries.map((e) => e.piece));
+        bodies = packPieces({ account, session_id, mode, ...(lens_id ? { lens_id } : {}), captured_at }, entries.map((e) => e.piece));
       } catch (err) {
         await recordProblem("batch", `kept ${entries.length} piece(s) that could not be packed: ${err.message}`);
         continue;

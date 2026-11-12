@@ -18,11 +18,25 @@ export function tweet({
   quoted,
   retweeted,
   views = "2300",
+  // relationship_perspectives.following on the author, when given.
+  following,
+  // legacy.following on the author (older payloads), when given.
+  legacyFollowing,
 }) {
   return {
     __typename: "Tweet",
     rest_id: id,
-    core: { user_results: { result: { __typename: "User", rest_id: userId, core: { screen_name: handle, name } } } },
+    core: {
+      user_results: {
+        result: {
+          __typename: "User",
+          rest_id: userId,
+          core: { screen_name: handle, name },
+          ...(following !== undefined && { relationship_perspectives: { following } }),
+          ...(legacyFollowing !== undefined && { legacy: { following: legacyFollowing } }),
+        },
+      },
+    },
     views: { count: views, state: "EnabledWithCount" },
     ...(note && {
       note_tweet: {

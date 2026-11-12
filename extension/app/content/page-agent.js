@@ -1,7 +1,7 @@
 // Injected by the service worker, after detect.js, into its own session
 // window only (never into tabs Sam uses). It is the session's only way to
 // touch a page, and it can do two things: read the page (inspect, from
-// detect.js) and scroll the window. It has
+// detect.js) and scroll the window, by screens or to one post. It has
 // no command that clicks, types, focuses or submits anything. A click would
 // run the page's own handlers on the clicked element and its ancestors, so
 // sessions reach every page by navigating to URLs the extension built.
@@ -29,9 +29,27 @@
     return { scrolled: true, atBottom };
   }
 
+  // A lens reader's dwell (lib/reader.js): brings one post into view, its top
+  // a little below the viewport's, so it stays visible while the reader
+  // pauses. The post is the article holding the time link to its own
+  // permalink. Only scrollBy runs, as in scroll(); nothing is clicked or
+  // focused.
+  function scrollToPost({ postId, pathPattern } = {}) {
+    if (typeof postId !== "string" || !/^\d{1,25}$/.test(postId)) throw new Error(`scrollToPost refused: post id ${postId}`);
+    if (typeof pathPattern !== "string" || !new RegExp(pathPattern).test(location.pathname)) {
+      return { found: false, wrongPath: true, path: location.pathname };
+    }
+    const link = [...document.querySelectorAll(`article a[href$="/status/${postId}"]`)].find((a) => a.querySelector("time"));
+    const article = link?.closest("article");
+    if (!article) return { found: false };
+    window.scrollBy({ top: Math.round(article.getBoundingClientRect().top - window.innerHeight * 0.15), behavior: "instant" });
+    return { found: true };
+  }
+
   const COMMANDS = Object.freeze({
     inspect: () => globalThis.__dxDetect.inspect(),
     scroll: (arg) => scroll(arg),
+    scrollToPost: (arg) => scrollToPost(arg),
   });
 
   Object.defineProperty(globalThis, "__dxAgent", {
