@@ -57,6 +57,13 @@ async function init() {
     setStatus("stopping after the current request…");
   });
   $("download").addEventListener("click", () => lastBundle && download(lastBundle));
+  // Lifts a pause that comes only from failed requests (lib/unpause.js); a
+  // pause X asked for stays. The status line says which, and why.
+  $("clear-pause").addEventListener("click", async () => {
+    const reply = await chrome.runtime.sendMessage({ type: "clear-error-pause" });
+    if (reply?.clearable) setStatus(`pause cleared (${reply.basis})`, "ok");
+    else setStatus(`pause not cleared: ${reply?.why ?? reply?.error ?? "no answer"}`, "bad");
+  });
 }
 
 function setStatus(text, tone = "") {

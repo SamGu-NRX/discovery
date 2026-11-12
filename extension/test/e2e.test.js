@@ -464,3 +464,30 @@ function startMockWorker() {
     });
   });
 }
+
+test("the fetch page's Clear error pause lifts a pause made only of failed requests, refuses one X asked for, and logs the clear", async () => {
+  await configure({ mode: "passive", account: "fixtureuser" });
+  const until = new Date(Date.now() + 23 * 3600_000).toISOString();
+  const set = (values) => worker.evaluate((v) => chrome.storage.local.set(v), values);
+  const page = await context.newPage();
+  await page.goto(`chrome-extension://${extensionId}/fetch/fetch.html`);
+  const press = async () => {
+    await page.click("#clear-pause");
+    await page.waitForFunction(() => /pause (not )?cleared/.test(document.getElementById("status").textContent));
+    return page.textContent("#status");
+  };
+
+  // A rate limit in the same pause: refused, the pause stays.
+  await set({ pauseUntil: until, pauseLog: [{ at: new Date().toISOString(), until, reason: "error" }, { at: new Date().toISOString(), until, reason: "rate_limited" }] });
+  assert.match(await press(), /pause not cleared: the pause includes rate_limited/);
+  assert.equal((await worker.evaluate(() => chrome.storage.local.get("pauseUntil"))).pauseUntil, until);
+
+  // Failed requests only: cleared, and the clear is logged.
+  await set({ pauseUntil: until, pauseLog: [{ at: new Date().toISOString(), until, reason: "error" }], pendingBackOff: { status: "error", detail: "fetch mode: TweetDetail request failed: signal timed out" } });
+  assert.match(await press(), /pause cleared \(1 pause record, all failed requests\)/);
+  const after = await worker.evaluate(() => chrome.storage.local.get(["pauseUntil", "pendingBackOff", "pauseClears"]));
+  assert.equal(after.pauseUntil, undefined);
+  assert.equal(after.pendingBackOff, undefined);
+  assert.equal(after.pauseClears.at(-1).until, until);
+  await page.close();
+});
