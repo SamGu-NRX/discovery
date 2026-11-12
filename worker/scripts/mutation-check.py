@@ -78,6 +78,14 @@ muts = [
  ("M65 a crash is never replaced by a later status", "src/x.ts", "x_sessions.status IN ('ok', 'crash') AND", "x_sessions.status IN ('ok') AND"),
  ("M66 a second session while one is open", "src/x.ts", "         AND (${openElsewhere}) IS NULL\n", ""),
  ("M67 an open reservation blocks its own retry", "src/x.ts", "AND status IS NULL AND session_id != ?1`;", "AND status IS NULL`;"),
+ # POST /inbox/x and the admin exports (migration 0007)
+ ("M68 a repeated (run_id, part) writes items again", "src/inbox.ts", "         WHERE EXISTS (SELECT 1 FROM inbox_x_parts WHERE run_id = ?2 AND part = ?3 AND request_id = ?4)\n", ""),
+ ("M69 the inbox token reaches every route", "src/auth.ts", '    ["inbox", env.INBOX_TOKEN],', '    ["admin", env.INBOX_TOKEN],'),
+ ("M70 inbox cap not enforced", "src/inbox.ts", "export const INBOX_MAX_BYTES = 256 * 1024;", "export const INBOX_MAX_BYTES = 64 * 1024 * 1024;"),
+ ("M71 a refused inbox body is not recorded", "src/inbox.ts", "    await recordReject(env, { status: 400, error, ...claimedKey(parsed), bytes, total });\n", ""),
+ ("M72 a JSON number post id is accepted", "src/inbox.ts", '  if (typeof v === "number") bad(', '  if (false) bad('),
+ ("M73 sightings export reads the post's latest metrics", "src/inbox.ts", "s.seen_at, s.metrics_json, s.batch_id,", "s.seen_at, p.metrics_json, s.batch_id,"),
+ ("M74 sightings pages overlap", "src/inbox.ts", "AND s.id > ?3 AND", "AND s.id >= ?3 AND"),
  ("M37 malformed prepared URL breaks the card", "src/proposals.ts", "  } catch {\n    return null;\n  }\n}\n\nfunction preparedItem", "  } finally {\n  }\n}\n\nfunction preparedItem"),
 ]
 for name, path, old, new in muts:

@@ -14,12 +14,12 @@ Results and raw logs are in [EVIDENCE.md](EVIDENCE.md).
 
 ```sh
 npm install
-npm test                         # 25 tests against two real wrangler dev stacks and the fixture server, about 12 s
-python3 scripts/mutation-check.py # breaks the code 63 ways, one at a time; every break must fail a test, about 8 min
+npm test                         # 30 tests against three real wrangler dev stacks and the fixture server, about 12 s
+python3 scripts/mutation-check.py # breaks the code 70 ways, one at a time; every break must fail a test, about 9 min
 npm run evidence                 # live sources plus the fixture phases, about 2 min; writes evidence/<timestamp>/
 ```
 
-If `.dev.vars` lacks any of `ADMIN_TOKEN`, `WEBSUB_SECRET`, `INGEST_TOKEN` or `RUNNER_TOKEN`, the harness adds it with a random local value. The harness points `T3_APPROVALS_WEBHOOK_URL` at the fixture server, so no test reaches T3. No test calls `/embed`, because the `AI` binding always reaches the real Workers AI service, even in `wrangler dev`.
+If `.dev.vars` lacks any of `ADMIN_TOKEN`, `WEBSUB_SECRET`, `INGEST_TOKEN`, `RUNNER_TOKEN` or `INBOX_TOKEN`, the harness adds it with a random local value. The harness points `T3_APPROVALS_WEBHOOK_URL` at the fixture server, so no test reaches T3. No test calls `/embed`, because the `AI` binding always reaches the real Workers AI service, even in `wrangler dev`.
 
 `node scripts/rehearse-production.mjs` runs the production watcher list (`scripts/production-watchers.json`) against the real sources in local wrangler dev. It makes about two requests per source.
 
@@ -32,7 +32,7 @@ If `.dev.vars` lacks any of `ADMIN_TOKEN`, `WEBSUB_SECRET`, `INGEST_TOKEN` or `R
 1. Creates the D1 database `discovery-watcher` if it doesn't exist and writes its id into `wrangler.jsonc`.
 2. Applies the migrations remotely. `0003_discovery_v2.sql` only adds tables and backfills candidates from existing rule-match events.
 3. Deploys the Worker with its cron and the `AI` binding.
-4. Generates `ADMIN_TOKEN`, `WEBSUB_SECRET`, `INGEST_TOKEN` and `RUNNER_TOKEN` into `~/.agent-secrets/discovery-*` (mode 600) if they don't exist, and sets them as secrets.
+4. Generates `ADMIN_TOKEN`, `WEBSUB_SECRET`, `INGEST_TOKEN`, `RUNNER_TOKEN` and `INBOX_TOKEN` into `~/.agent-secrets/discovery-*` (mode 600) if they don't exist, and sets them as secrets.
 5. Sets `T3_APPROVALS_WEBHOOK_URL` only if `~/.agent-secrets/discovery-t3-approvals-webhook-url` exists.
 6. Registers the production watchers.
 
@@ -51,6 +51,7 @@ No secret is printed. Then `node scripts/verify-production.mjs <base-url> ~/.age
 | `discovery-admin-token` | `ADMIN_TOKEN` | director | every route |
 | `discovery-ingest-token` | `INGEST_TOKEN` | extension | `POST /ingest/x`, `POST /ingest/x/status`, `GET /x/detail-queue` |
 | `discovery-runner-token` | `RUNNER_TOKEN` | runner | `/x/posts*`, `/embed`, `/positives`, `/candidates*`, `/proposals` |
+| `discovery-inbox-token` | `INBOX_TOKEN` | GrokBot's scheduled routine, pasted in by Sam | `POST /inbox/x` |
 | none, minted per proposal | none | approval link | `GET` and `POST /a/:token` |
 
 **Routes.** All bodies are JSON. Times the Worker sets are epoch milliseconds; `since` parameters take ISO or milliseconds.
@@ -72,6 +73,9 @@ No secret is printed. Then `node scripts/verify-production.mjs <base-url> ~/.age
 | `POST /candidates/:id/complete` | `{owner, lease_token, state, note}`. Succeeds only with the current claim's token; a reclaim replaces it, so the earlier claimant gets 409 even under the same owner name. An owner whose lease expired but was never reclaimed still completes. `state` is `proposed`, `done`, `skipped` or `failed`, or `new` to defer: that releases the lease, clears the owner, keeps `attempts` and stores the note. |
 | `POST /proposals`, `GET /proposals?state=&since=` | See below. |
 | `POST /proposals/:id/rotate-token` | Re-mints the approval link of an unspent proposal, keeping `expires_at` and `inputs_hash`; the old link stops working. Refused with 409 once the notification went to T3 unless the body is `{"force": true}`, because the old link is the one in Sam's question card. Not in the contract. |
+| `POST /inbox/x` | GrokBot's run, in parts of at most 256 KB, counted in bytes as the body arrives (413 over). Each 400 names the field path and what was wrong, and says nothing from the part was stored. `(run_id, part)` is the idempotency key: a repeat returns 200 with `duplicate: true` and `same_body`, and writes nothing. Refused bodies and conflicting repeats go to `inbox_x_rejects`, cut to 64 KB. Nothing here reaches `x_posts` or candidates. Format in the contract. |
+| `GET /admin/inbox/x?since=&until=` | Admin only. Every part (with its raw body), item and reject received in `[since, until)`. Both times are required. Refused with 400 when any list would pass 10,000 rows. |
+| `GET /admin/x/sightings?since=&until=&after_id=` | Admin only. The extension's sightings seen in `[since, until)`, account `test` excluded, each joined to its post: `surface`, `position`, `session_id`, `mode`, `seen_at`, the sighting's own `metrics_json`, and the post's latest stored fields. 1000 per page, oldest first; pass the previous page's `next_after_id` (null on the last page). The first page also has `threads` captured and `sessions` started or ended in the window. |
 | `GET /admin/log?since=` | Admin only. Counts and rows since a time (default 24 h): sessions, candidates, proposals, watcher events, the last cron run. |
 
 **Candidates.** A candidate is `new`, then `claimed` under a lease, then `proposed`, `done`, `skipped` or `failed`, or back to `new` when the runner defers it. An expired lease can be claimed again. A candidate whose lease has expired 3 times (`expired_leases`) is set to `failed` instead of being handed out a fourth time, so one input that crashes the runner can't loop forever. Deferrals raise `attempts` but not `expired_leases`. `origin` records who made it: `bookmark` (ingest), `watcher` (a rule match) or `runner`.
@@ -121,12 +125,14 @@ npx wrangler d1 execute DB --remote --command "DELETE FROM proposals WHERE title
 | `migrations/0001_init.sql` | `watchers`, `seen_items`, `events` (`dedupe_key UNIQUE`), `jobs`, `fetch_log`, `websub_subscriptions`, and the trigger that adds one triage job per event |
 | `migrations/0002_notify.sql` | Notify rules, fallback URL, `notifications` (unused since v2), `settings`, `cron_runs` |
 | `migrations/0003_discovery_v2.sql` | `x_posts`, `x_sightings`, `x_threads`, `x_sessions`, `positives`, `candidates`, `proposals`, and the candidate backfill |
+| `migrations/0007_inbox_x.sql` | `inbox_x_parts`, `inbox_x_items`, `inbox_x_rejects` for `POST /inbox/x`, and an index on `x_sightings (seen_at, id)` for the sightings export |
 | `src/adapters.ts` | Atom, Greenhouse, HN Algolia, HTML page, YouTube videos tab. They produce item ids or normalized page text. |
 | `src/check.ts` | One check: conditional GET, the fallback, parse, compare, write events and candidates, compute the next interval |
 | `src/watcher.ts` | `WatcherDO`, whose alarm is the watcher's schedule |
 | `src/websub.ts` | Hub subscribe and unsubscribe, challenge verification, HMAC-checked delivery |
 | `src/auth.ts` | Which token a request carries, compared in constant time |
 | `src/x.ts` | Ingest, ingest status, detail queue, post reads and scores, context, embed, positives |
+| `src/inbox.ts` | `POST /inbox/x` and its validation, `GET /admin/inbox/x`, `GET /admin/x/sightings` |
 | `src/candidates.ts` | Candidate create, claim, complete, list |
 | `src/proposals.ts` | Proposals, approval notifications, and the approval card |
 | `src/index.ts` | The route table with each route's tokens, admin and job routes, `/health`, `/admin/log`, the cron |

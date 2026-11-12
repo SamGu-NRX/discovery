@@ -4,6 +4,7 @@ import { claimCandidates, completeCandidate, createCandidate, listCandidates } f
 import type { Env, WatcherRow } from "./check";
 import { HttpError, json, readJson, timeParam, utcDay } from "./http";
 import { APPROVAL_DAILY_CAP, approvalPage, createProposal, decide, expireProposals, listProposals, presentProposal, rotateToken } from "./proposals";
+import { inbox, inboxExport, sightingsExport } from "./inbox";
 import { handleDelivery, handleVerification, requestSubscription } from "./websub";
 import { addPositives, detailQueue, embed, ingest, ingestStatus, listPositives, listPosts, postContext, saveScores, startSession } from "./x";
 
@@ -170,6 +171,9 @@ const ROUTES: Route[] = [
   { method: "GET", path: /^\/proposals$/, scopes: ["runner"], handler: (_r, env, url) => ok(listProposals(env, url)) },
   { method: "POST", path: /^\/proposals\/([^/]+)\/rotate-token$/, scopes: ["runner"], handler: (req, env, _u, [id]) => ok(rotateToken(env, id, req)) },
   { method: "GET", path: /^\/admin\/log$/, scopes: [], handler: (_r, env, url) => ok(activityLog(env, url)) },
+  { method: "POST", path: /^\/inbox\/x$/, scopes: ["inbox"], handler: (req, env) => inbox(env, req) },
+  { method: "GET", path: /^\/admin\/inbox\/x$/, scopes: [], handler: (_r, env, url) => ok(inboxExport(env, url)) },
+  { method: "GET", path: /^\/admin\/x\/sightings$/, scopes: [], handler: (_r, env, url) => ok(sightingsExport(env, url)) },
   { method: "POST", path: /^\/candidates\/claim$/, scopes: ["runner"], handler: async (req, env) => ok(claimCandidates(env, await body(req))) },
   { method: "POST", path: /^\/candidates\/([^/]+)\/complete$/, scopes: ["runner"], handler: async (req, env, _u, [id]) => ok(completeCandidate(env, id, await body(req))) },
 ];

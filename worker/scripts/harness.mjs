@@ -13,7 +13,7 @@ export const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const WRANGLER = join(ROOT, "node_modules/.bin/wrangler");
 const ENV = { ...process.env, CI: "1", WRANGLER_SEND_METRICS: "false" };
 
-const LOCAL_SECRETS = ["ADMIN_TOKEN", "WEBSUB_SECRET", "INGEST_TOKEN", "RUNNER_TOKEN"];
+const LOCAL_SECRETS = ["ADMIN_TOKEN", "WEBSUB_SECRET", "INGEST_TOKEN", "RUNNER_TOKEN", "INBOX_TOKEN"];
 
 // Creates .dev.vars, or adds any secret it lacks, with random local values.
 export function devVars() {
@@ -70,7 +70,7 @@ export async function startStack({ port, fixturePort, inspectorPort, logFile, pe
   const base = `http://127.0.0.1:${port}`;
   const auth = { authorization: `Bearer ${vars.ADMIN_TOKEN}`, "content-type": "application/json" };
 
-  // token: "admin" (default), "ingest", "runner", or "none".
+  // token: "admin" (default), "ingest", "runner", "inbox", or "none".
   async function call(method, path, body, { raw = false, token = "admin" } = {}) {
     const headers = { "content-type": "application/json" };
     if (token !== "none") headers.authorization = `Bearer ${vars[`${token.toUpperCase()}_TOKEN`]}`;

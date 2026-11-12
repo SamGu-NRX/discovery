@@ -24,6 +24,7 @@ Each token is a random 32-byte hex string. It is stored locally in `~/.agent-sec
 | `ADMIN_TOKEN` (exists) | Director | everything |
 | `INGEST_TOKEN` | extension | `POST /ingest/x`, `POST /ingest/x/status`, `GET /x/detail-queue` |
 | `RUNNER_TOKEN` | runner | `/candidates/*`, `/x/posts*`, `POST /embed`, `/proposals`, `/positives` |
+| `INBOX_TOKEN` | GrokBot's scheduled routine | `POST /inbox/x` |
 | per-proposal approval token | the approval link | `GET` and `POST /a/:token` |
 
 Approval tokens are minted per proposal. D1 stores only their SHA-256 hash. A token is single-use, bound to the proposal's `inputs_hash`, and expires with the proposal (default 7 days).
@@ -84,6 +85,45 @@ Account `test` is reserved for synthetic checks. The Worker never lists its post
 
 `GET /x/detail-queue?account=` returns `{ "post_ids": [up to 5], "pause_until": null }`. These are candidates whose thread has not been captured yet. The extension opens each one's permalink during its next active session.
 
+## `POST /inbox/x`
+
+A GrokBot routine posts what it read through its X plugin: new bookmarks, the top of the home timeline, and each new bookmark's self-thread. These rows stay apart from `x_posts`, sightings and candidates; for now only `GET /admin/inbox/x` reads them.
+
+Body, at most 256 KB (413 over that). A run larger than about 200 KB is sent as several parts.
+
+```json
+{
+  "run_id": "2026-11-12T07:10-0600",
+  "account": "sdotgu",
+  "part": 1,
+  "parts": 2,
+  "collected_at": "2026-11-12T13:10:00Z",
+  "items": [
+    {
+      "surface": "bookmarks | home | thread",
+      "position": 0,
+      "thread_root_id": "only on surface thread: the bookmark's id",
+      "post": {
+        "id": "2114348461835637076",
+        "url": "https://x.com/avrldotdev/status/2114348461835637076",
+        "author_handle": "avrldotdev",
+        "author_name": "avrl",
+        "created_at": "2026-10-25T13:28:50Z",
+        "text": "full text",
+        "quoted_id": null,
+        "metrics": { "likes": 12, "reposts": 3, "replies": 4, "quotes": 1, "bookmarks": 9, "views": 2300 }
+      }
+    }
+  ]
+}
+```
+
+- Validation is strict, because the caller is a model that can fix and resend. Every field above is required except `thread_root_id` (required on `thread`, refused elsewhere), `quoted_id` and `metrics` (each metric a whole number or null). Unknown fields are refused. Ids are strings of digits, never JSON numbers. Handles have no `@`. Times are ISO 8601 with a zone. `post.url` must name the same status as `post.id`. A post appears once per surface (and per `thread_root_id`) in a part. `1 <= part <= parts <= 100`.
+- A 400 says `{ "error": "<field path> <what was wrong>. Nothing from this part was stored. Fix it and send the whole part again." }`, for example `items[3].post.id must be a string of digits in quotes, got the number 2026300000000000000; X ids are too large for JSON numbers`.
+- `(run_id, part)` is the idempotency key. The first accepted body is stored raw with one row per item; a repeat returns 200 `{ duplicate: true, same_body }` and writes nothing.
+- Every refused body (400 or 413), and every repeat whose body differs from the stored one, is recorded in `inbox_x_rejects` with its error and its first 64 KB.
+- The response is `{ "run_id", "part", "parts", "items_stored", "duplicate" }`.
+
 ## Tables (additions)
 
 ```sql
@@ -96,6 +136,12 @@ x_sightings(id INTEGER PRIMARY KEY, post_id, account, surface, position, session
 x_threads(root_id TEXT PRIMARY KEY, captured_at, account, op_self_thread_ids_json, reply_ids_json)
 x_sessions(session_id TEXT PRIMARY KEY, account, mode, started_at, ended_at, status, detail,
   posts INTEGER, screens INTEGER)
+inbox_x_parts(run_id, part, parts, account, collected_at, request_id, received_at, item_count,
+  body_bytes, body_sha256, body, PRIMARY KEY (run_id, part))
+inbox_x_items(id INTEGER PRIMARY KEY, run_id, part, surface, position, post_id, url, author_handle,
+  author_name, created_at, text, quoted_id, metrics_json, thread_root_id, received_at)
+inbox_x_rejects(id INTEGER PRIMARY KEY, received_at, status, error, run_id, part, body_bytes,
+  body_truncated, body)
 positives(id TEXT PRIMARY KEY, text, author_handle, source, added_at)
 candidates(id TEXT PRIMARY KEY, kind /* x_post | watcher_event */, ref, title, url,
   score REAL, score_parts_json, state /* new|claimed|proposed|done|skipped|failed */,
