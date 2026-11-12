@@ -363,9 +363,9 @@ function decidedDetail(p: Pick<ProposalRow, "state" | "decided_at" | "final_step
 
 // ---- HTML ----
 
-const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
+export const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
 
-const dateLabel = (ms: number) =>
+export const dateLabel = (ms: number) =>
   new Date(ms).toLocaleString("en-US", { timeZone: "America/Chicago", month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short" });
 
 // A ref becomes a link only if it parses as an http(s) URL. Anything else,
@@ -489,13 +489,14 @@ button:focus-visible,a:focus-visible{outline:3px solid var(--focus);outline-offs
 .message h1{font-size:1.4rem}
 `;
 
-function page(status: number, title: string, body: string): Response {
+// extraCss: page-specific rules on top of the card's (the mailbox room uses it).
+export function page(status: number, title: string, body: string, extraCss = ""): Response {
   const html = `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="robots" content="noindex">
 <meta name="theme-color" content="#e9edf1" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0f1419" media="(prefers-color-scheme: dark)">
-<title>${esc(title)}</title><style>${CSS}</style></head><body>${body}</body></html>`;
+<title>${esc(title)}</title><style>${CSS}${extraCss}</style></head><body>${body}</body></html>`;
   return new Response(html, {
     status,
     headers: {

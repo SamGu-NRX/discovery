@@ -5,6 +5,7 @@ import type { Env, WatcherRow } from "./check";
 import { HttpError, json, readJson, timeParam, utcDay } from "./http";
 import { APPROVAL_DAILY_CAP, approvalPage, createProposal, decide, expireProposals, listProposals, presentProposal, rotateToken } from "./proposals";
 import { inbox, inboxExport, sightingsExport } from "./inbox";
+import { agentOf, listTasks, mailboxCron, mailboxStatus, mcp, mcpByPath, restClaim, restComplete, restSend, room, setPaused } from "./mailbox";
 import { handleDelivery, handleVerification, requestSubscription } from "./websub";
 import { addPositives, detailQueue, embed, ingest, ingestStatus, listPositives, listPosts, postContext, saveScores, startSession } from "./x";
 
@@ -125,7 +126,7 @@ async function watcherDetail(env: Env, id: string) {
   return { watcher: w, alarm_at: await stub(env, id).alarmAt(), seen_items: seen?.n ?? 0, events: events.results, jobs: jobs.results, fetch_log: log.results };
 }
 
-type Handler = (req: Request, env: Env, url: URL, params: string[], ctx: ExecutionContext) => Promise<Response>;
+type Handler = (req: Request, env: Env, url: URL, params: string[], ctx: ExecutionContext, scope: Scope) => Promise<Response>;
 
 interface Route {
   method: "GET" | "POST";
@@ -138,6 +139,8 @@ interface Route {
 }
 
 const ok = (p: Promise<unknown>, status = 200) => p.then((data) => json(data, status));
+
+const MAIL_AGENTS: Scope[] = ["agent:dot", "agent:t3", "agent:grok"];
 
 // docs/CONTRACT.md, "Tokens". A token not listed for a route gets 403.
 const ROUTES: Route[] = [
@@ -179,6 +182,14 @@ const ROUTES: Route[] = [
   { method: "GET", path: /^\/admin\/x\/sightings$/, scopes: [], handler: (_r, env, url) => ok(sightingsExport(env, url)) },
   { method: "POST", path: /^\/candidates\/claim$/, scopes: ["runner"], handler: async (req, env) => ok(claimCandidates(env, await body(req))) },
   { method: "POST", path: /^\/candidates\/([^/]+)\/complete$/, scopes: ["runner"], handler: async (req, env, _u, [id]) => ok(completeCandidate(env, id, await body(req))) },
+  // Mailbox (src/mailbox.ts). The admin token speaks as agent "sam".
+  { method: "POST", path: /^\/mcp$/, scopes: MAIL_AGENTS, handler: (req, env, _u, _p, ctx, scope) => mcp(env, ctx, agentOf(scope), req) },
+  { method: "POST", path: /^\/mail\/tasks$/, scopes: MAIL_AGENTS, handler: (req, env, _u, _p, ctx, scope) => restSend(env, ctx, scope, req) },
+  { method: "GET", path: /^\/mail\/tasks$/, scopes: [], handler: (_r, env, url) => ok(listTasks(env, url)) },
+  { method: "POST", path: /^\/mail\/claim$/, scopes: MAIL_AGENTS, handler: (req, env, _u, _p, ctx, scope) => restClaim(env, ctx, scope, req) },
+  { method: "POST", path: /^\/mail\/tasks\/([^/]+)\/complete$/, scopes: MAIL_AGENTS, handler: (req, env, _u, [id], ctx, scope) => restComplete(env, ctx, scope, id, req) },
+  { method: "GET", path: /^\/admin\/mailbox$/, scopes: [], handler: (_r, env) => ok(mailboxStatus(env)) },
+  { method: "POST", path: /^\/admin\/mailbox\/pause$/, scopes: [], handler: (req, env) => ok(setPaused(env, req)) },
 ];
 
 function match(req: Request, url: URL): { route: Route; params: string[] } | "wrong_method" | null {
@@ -223,13 +234,23 @@ async function route(req: Request, env: Env, ctx: ExecutionContext): Promise<Res
     if (req.method === "POST") return handleDelivery(env, parts[1], req);
   }
 
+  // Public: the mailbox URL and the room link carry their own secrets.
+  if (parts[0] === "mcp" && parts.length === 3) {
+    if (req.method !== "POST") throw new HttpError(405, "the MCP endpoint takes POST");
+    return mcpByPath(env, ctx, parts[1], parts[2], req);
+  }
+  if (parts[0] === "room" && parts.length === 2 && req.method === "GET") return room(env, parts[1]);
+  // No OAuth here. A 404 tells an MCP client probing for OAuth metadata that
+  // there is none, where a 401 would suggest it needs a token.
+  if (parts[0] === ".well-known") return json({ error: "not found" }, 404);
+
   const scope = await callerScope(req, env);
   const found = match(req, url);
   if (found === "wrong_method") throw new HttpError(405, `${req.method} is not allowed on ${url.pathname}`);
   if (found) {
     const allowed = found.route.scopes.includes(scope) || (scope === "admin" && !found.route.exclusive);
     if (!allowed) throw new HttpError(403, `the ${scope} token cannot call ${req.method} ${url.pathname}`);
-    return found.route.handler(req, env, url, found.params, ctx);
+    return found.route.handler(req, env, url, found.params, ctx, scope);
   }
   // Everything below is the watcher administration API: ADMIN_TOKEN only.
   if (scope !== "admin") throw new HttpError(403, `the ${scope} token cannot call ${req.method} ${url.pathname}`);
@@ -397,9 +418,10 @@ export default {
       console.log(`[backstop] ${w.id} re-armed, next check in ${r.next_interval_s}s`);
     }
     const expired = await expireProposals(env, now);
+    const mail = await mailboxCron(env, now);
     await env.DB.prepare("INSERT INTO cron_runs (ts, cron, overdue_checked, notifications_retried) VALUES (?1, ?2, ?3, 0)")
       .bind(now, controller.cron, results.length)
       .run();
-    console.log(`[cron] done overdue_checked=${results.length} proposals_expired=${expired}`);
+    console.log(`[cron] done overdue_checked=${results.length} proposals_expired=${expired} mail_tasks_expired=${mail.expired} wakes_retried=${mail.retried}`);
   },
 } satisfies ExportedHandler<Env>;

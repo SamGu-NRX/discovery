@@ -5,13 +5,13 @@
 import type { Env } from "./check";
 import { HttpError } from "./http";
 
-export type Scope = "admin" | "ingest" | "runner" | "inbox";
+export type Scope = "admin" | "ingest" | "runner" | "inbox" | "agent:dot" | "agent:t3" | "agent:grok";
 
 const encoder = new TextEncoder();
 
 // Compares SHA-256 digests in constant time, so neither the content nor the
 // length of a configured token leaks through response timing.
-async function sameSecret(given: string, secret: string): Promise<boolean> {
+export async function sameSecret(given: string, secret: string): Promise<boolean> {
   const [a, b] = await Promise.all([
     crypto.subtle.digest("SHA-256", encoder.encode(given)),
     crypto.subtle.digest("SHA-256", encoder.encode(secret)),
@@ -28,6 +28,9 @@ export async function callerScope(req: Request, env: Env): Promise<Scope> {
     ["ingest", env.INGEST_TOKEN],
     ["runner", env.RUNNER_TOKEN],
     ["inbox", env.INBOX_TOKEN],
+    ["agent:dot", env.MAIL_DOT_TOKEN],
+    ["agent:t3", env.MAIL_T3_TOKEN],
+    ["agent:grok", env.MAIL_GROK_TOKEN],
   ];
   for (const [scope, secret] of scopes) {
     if (secret && (await sameSecret(m[1], secret))) return scope;
