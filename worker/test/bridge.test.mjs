@@ -164,12 +164,24 @@ test("while waiting the stream sends an SSE comment every 10 s; without a hand-b
   const reader = res.body.getReader();
   const dec = new TextDecoder();
   let seen = "";
-  const deadline = Date.now() + 15_000;
-  while (!seen.includes(": working") && Date.now() < deadline) seen += dec.decode((await reader.read()).value ?? new Uint8Array());
-  assert.ok(seen.includes(": working\n\n"), "a keepalive comment within 15 s");
+  // Each read is raced against the time left, so a keepalive that comes
+  // later than 10 s plus a margin fails instead of being waited for.
+  let unread = null;
+  const deadline = Date.now() + 12_000;
+  while (!seen.includes(": working")) {
+    const left = deadline - Date.now();
+    if (left <= 0) break;
+    unread ??= reader.read();
+    const r = await Promise.race([unread, new Promise((done) => setTimeout(() => done(null), left))]);
+    if (!r) break;
+    unread = null;
+    seen += dec.decode(r.value ?? new Uint8Array());
+  }
+  assert.ok(seen.includes(": working\n\n"), "a keepalive comment within 12 s");
   await finish("dot", task.id, "cron ran 96 times");
   for (;;) {
-    const { value, done } = await reader.read();
+    const { value, done } = await (unread ?? reader.read());
+    unread = null;
     if (done) break;
     seen += dec.decode(value);
   }
