@@ -8,6 +8,8 @@ import socket
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import wincred
+
 
 class ConfigError(RuntimeError):
     pass
@@ -62,6 +64,10 @@ def _need(name: str) -> str:
 
 def load() -> Config:
     s3_parts = {k: _get(k) for k in ("R2_S3_ENDPOINT", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY")}
+    if s3_parts["R2_S3_ENDPOINT"] and not (s3_parts["R2_ACCESS_KEY_ID"] or s3_parts["R2_SECRET_ACCESS_KEY"]):
+        cred = wincred.read(R2_CREDENTIAL)
+        if cred:
+            s3_parts["R2_ACCESS_KEY_ID"], s3_parts["R2_SECRET_ACCESS_KEY"] = cred
     given = [k for k, v in s3_parts.items() if v]
     if given and len(given) != len(s3_parts):
         missing = sorted(set(s3_parts) - set(given))
@@ -74,7 +80,7 @@ def load() -> Config:
     local = Path(os.environ.get("LOCALAPPDATA") or Path.home() / ".local" / "share")
     return Config(
         base_url=_need("KNOWLEDGE_URL").rstrip("/"),
-        token=_need("KNOWLEDGE_TOKEN"),
+        token=_token(),
         owner=_get("KWORKER_OWNER") or f"kworker@{socket.gethostname()}",
         # The gateway Claude Code itself uses on this machine, unless overridden.
         cliproxy_url=(_get("CLIPROXY_URL") or _get("ANTHROPIC_BASE_URL") or "").rstrip("/") or None,
@@ -95,6 +101,23 @@ def load() -> Config:
         x_cache=_paths("KWORKER_X_CACHE"),
         no_x=_get("KWORKER_NO_X") == "1",
     )
+
+
+# Windows Credential Manager targets (generic credentials) on the Zephyrus,
+# read when the environment does not carry the value; docs/KNOWLEDGE.md,
+# "Credentials on the Zephyrus".
+TOKEN_CREDENTIAL = "discovery-knowledge-token"
+R2_CREDENTIAL = "discovery-r2-s3"
+
+
+def _token() -> str:
+    v = _get("KNOWLEDGE_TOKEN")
+    if v:
+        return v
+    cred = wincred.read(TOKEN_CREDENTIAL)
+    if cred and cred[1]:
+        return cred[1]
+    raise ConfigError(f"KNOWLEDGE_TOKEN is not set and Windows Credential Manager has no generic credential {TOKEN_CREDENTIAL!r}")
 
 
 def _paths(name: str) -> tuple[Path, ...]:
