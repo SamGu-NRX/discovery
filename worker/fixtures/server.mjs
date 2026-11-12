@@ -123,7 +123,10 @@ export function createFixture() {
           res.write(" ".repeat(8192));
           return; // never ends
         }
-        send(status, JSON.stringify({ challenge: mode === "wrong" ? "not-the-challenge" : body.challenge }), { "content-type": "application/json" });
+        const reply = () => send(status, JSON.stringify({ challenge: mode === "wrong" ? "not-the-challenge" : body.challenge }), { "content-type": "application/json" });
+        // "slow" holds the correct echo for 1.5 s so a test can act mid-handshake.
+        if (mode === "slow") return void setTimeout(reply, 1500);
+        reply();
       });
       return;
     }

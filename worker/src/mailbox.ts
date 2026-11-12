@@ -681,12 +681,19 @@ async function subscribe(env: Env, agent: string, p: Record<string, unknown>) {
   const expires = now + ttl;
   const saved = await env.DB.prepare(
     `INSERT INTO mcp_subscriptions (id, agent, event_name, url, secret, arguments_json, expires_at, created_at, updated_at)
-     SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8 WHERE ${others("?8")} < ?9
+     SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8
+     WHERE ${others("?8")} < ?9
+       AND (SELECT value FROM settings WHERE key = 'mailbox_paused') IS NOT '1'
      ON CONFLICT (id) DO UPDATE SET secret = ?5, expires_at = ?7, updated_at = ?8`,
   )
     .bind(id, agent, EVENT_NAME, url.href, secret, canonicalJson(args), expires, now, MAX_SUBSCRIPTIONS_PER_AGENT)
     .run();
-  if (saved.meta.changes === 0) throw full();
+  // A pause that lands while the handshake is in flight must still win, so the
+  // INSERT checks it in the same statement as the count.
+  if (saved.meta.changes === 0) {
+    await refuseIfPaused(env);
+    throw full();
+  }
   console.log(`[mailbox] subscription ${id} for ${agent} until ${new Date(expires).toISOString()}`);
   return { id, refreshBefore: new Date(expires).toISOString(), cursor: null, truncated: false };
 }

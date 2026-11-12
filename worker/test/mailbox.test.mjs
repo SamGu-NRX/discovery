@@ -239,6 +239,19 @@ test("subscribe: only listed callback origins are contacted, the handshake must 
   }
   await unsubscribeAll();
   assert.deepEqual(await s.d1("SELECT id FROM mcp_subscriptions"), []);
+
+  // A pause that lands while the handshake is in flight wins: nothing is saved.
+  await s.control("hook-mode", { name: "dot-slow", mode: "slow" });
+  const asked = (await hooks("dot-slow")).length;
+  const pending = subscribe(`${FIXTURE}/hook/dot-slow`);
+  await until(async () => (await hooks("dot-slow")).length > asked, "the verification request to arrive");
+  await s.call("POST", "/admin/mailbox/pause", { paused: true });
+  try {
+    assert.equal((await pending).body.error?.data?.reason, "paused");
+    assert.deepEqual(await s.d1("SELECT id FROM mcp_subscriptions"), [], "no subscription saved after a mid-handshake pause");
+  } finally {
+    await s.call("POST", "/admin/mailbox/pause", { paused: false });
+  }
 });
 
 test("a result reaches reply_to as a signed MCP event with only the id, and keeps coming back until it is acknowledged", async () => {

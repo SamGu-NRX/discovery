@@ -261,7 +261,7 @@ The watcher layer was observed locally and then in production on 2026-11-04; v2 
 - **No real approval notification yet.** `T3_APPROVALS_WEBHOOK_URL` is not set and notifications are paused, so no T3 thread has received an approval.
 - **Ingest CPU at the cap.** The cap is 128 KB because a 245 KB ingest used 15 to 17 ms of CPU on a cold request in production, over the Workers Free limit of 10 ms. 128 KB used 8 ms cold and 3 to 5 ms warm, measured before `batch_id` added a lookup per statement; see EVIDENCE.md for the current numbers.
 - **No real WebSub delivery.** HMAC verification is proven only with locally signed bodies. Lease renewal by cron isn't built.
-- **Mailbox not proven live.** H1 to H3 above are untested, and so is the subscribe handshake's success path: the tests can't serve an HTTPS callback, so they insert the subscription row directly and test only the refusals.
+- **Mailbox not proven live.** H1 to H3 above are untested against ChatGPT, T3 and GrokBot. The tests run the signed challenge handshake against a local loopback callback, not a real HTTPS receiver.
 - **Not built:** a watcher update route, a candidate lease renewal, and retries for a failed approval notification. `x_ingest_batches` grows by one row per batch and is never pruned.
 - **Known edge cases, left alone:**
   - YouTube videos-tab items have no titles, so their candidate title is the video URL.
