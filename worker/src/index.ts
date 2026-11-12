@@ -2,10 +2,10 @@ import type { Kind } from "./adapters";
 import { callerScope, type Scope } from "./auth";
 import { claimCandidates, completeCandidate, createCandidate, listCandidates } from "./candidates";
 import type { Env, WatcherRow } from "./check";
-import { HttpError, json, readJson, timeParam, utcDay } from "./http";
+import { HttpError, json, randomHex, readJson, timeParam, utcDay } from "./http";
 import { APPROVAL_DAILY_CAP, approvalPage, createProposal, decide, expireProposals, listProposals, presentProposal, rotateToken } from "./proposals";
 import { inbox, inboxExport, sightingsExport } from "./inbox";
-import { agentOf, listTasks, mailboxCron, mailboxStatus, mcp, mcpByPath, restClaim, restComplete, restSend, room, setPaused } from "./mailbox";
+import { agentOf, listTasks, mailboxCron, mailboxStatus, mcp, mcpByPath, restAck, restClaim, restComplete, restSend, room, setPaused } from "./mailbox";
 import { handleDelivery, handleVerification, requestSubscription } from "./websub";
 import { addPositives, detailQueue, embed, ingest, ingestStatus, listPositives, listPosts, postContext, saveScores, startSession } from "./x";
 
@@ -187,6 +187,7 @@ const ROUTES: Route[] = [
   { method: "POST", path: /^\/mail\/tasks$/, scopes: MAIL_AGENTS, handler: (req, env, _u, _p, ctx, scope) => restSend(env, ctx, scope, req) },
   { method: "GET", path: /^\/mail\/tasks$/, scopes: [], handler: (_r, env, url) => ok(listTasks(env, url)) },
   { method: "POST", path: /^\/mail\/claim$/, scopes: MAIL_AGENTS, handler: (req, env, _u, _p, ctx, scope) => restClaim(env, ctx, scope, req) },
+  { method: "POST", path: /^\/mail\/ack$/, scopes: MAIL_AGENTS, handler: (req, env, _u, _p, _c, scope) => restAck(env, scope, req) },
   { method: "POST", path: /^\/mail\/tasks\/([^/]+)\/complete$/, scopes: MAIL_AGENTS, handler: (req, env, _u, [id], ctx, scope) => restComplete(env, ctx, scope, id, req) },
   { method: "GET", path: /^\/admin\/mailbox$/, scopes: [], handler: (_r, env) => ok(mailboxStatus(env)) },
   { method: "POST", path: /^\/admin\/mailbox\/pause$/, scopes: [], handler: (req, env) => ok(setPaused(env, req)) },
@@ -391,14 +392,23 @@ async function activityLog(env: Env, url: URL) {
   };
 }
 
+// Path segments that are credentials: /a/<token>, /room/<token>, /mcp/<agent>/<token>.
+function redactPath(path: string): string {
+  return path.replace(/^\/(a|room)\/[^/]+/, "/$1/<redacted>").replace(/^\/mcp\/([^/]+)\/[^/]+/, "/mcp/$1/<redacted>");
+}
+
 export default {
   async fetch(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     try {
       return await route(req, env, ctx);
     } catch (e) {
       if (e instanceof HttpError) return json({ error: e.message }, e.status);
-      console.error(e);
-      return json({ error: e instanceof Error ? e.message : String(e) }, 500);
+      // An unexpected error's message can hold a URL or query text, so the
+      // caller gets only an id to quote, and the log gets the path with any
+      // token segment redacted.
+      const requestId = randomHex(8);
+      console.error(`[error] ${requestId} ${req.method} ${redactPath(new URL(req.url).pathname)}`, e);
+      return json({ error: "internal error", request_id: requestId }, 500);
     }
   },
 
@@ -422,6 +432,6 @@ export default {
     await env.DB.prepare("INSERT INTO cron_runs (ts, cron, overdue_checked, notifications_retried) VALUES (?1, ?2, ?3, 0)")
       .bind(now, controller.cron, results.length)
       .run();
-    console.log(`[cron] done overdue_checked=${results.length} proposals_expired=${expired} mail_tasks_expired=${mail.expired} wakes_retried=${mail.retried}`);
+    console.log(`[cron] done overdue_checked=${results.length} proposals_expired=${expired} mail_tasks_expired=${mail.expired} mail_tasks_requeued=${mail.requeued} wakes_retried=${mail.retried}`);
   },
 } satisfies ExportedHandler<Env>;

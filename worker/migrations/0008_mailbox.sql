@@ -12,6 +12,9 @@ CREATE TABLE mail_agents (
   may_create_root INTEGER NOT NULL DEFAULT 0,
   -- Wakes sent to this agent per UTC day, task and result wakes together.
   daily_wake_cap INTEGER NOT NULL,
+  -- Conversations this agent may start per UTC day. NULL: no cap (sam,
+  -- reachable only with the admin token).
+  daily_root_cap INTEGER,
   enabled INTEGER NOT NULL DEFAULT 1,
   -- Last mailbox_claim by this agent; the probe's evidence that a wake worked.
   last_claim_at INTEGER
@@ -32,6 +35,9 @@ CREATE TABLE mail_tasks (
   parent_id TEXT,
   -- 1 for a root task, parent's hop + 1 below it.
   hop INTEGER NOT NULL,
+  -- Who started the conversation, so every receiver sees where the work
+  -- came from.
+  root_from TEXT NOT NULL,
   from_agent TEXT NOT NULL,
   to_agent TEXT NOT NULL,
   -- Who receives the result; NULL when nobody does.
@@ -46,18 +52,23 @@ CREATE TABLE mail_tasks (
   attempts INTEGER NOT NULL DEFAULT 0,
   -- Untrusted text, at most 16 KB of UTF-8.
   result TEXT,
-  -- Set when mailbox_claim handed the result to reply_to.
+  -- Times mailbox_claim handed the result to reply_to. It keeps appearing
+  -- until reply_to acknowledges it or it has been handed out 5 times.
+  result_deliveries INTEGER NOT NULL DEFAULT 0,
+  -- Set when the result stops being handed out; result_ack says why.
   result_delivered_at INTEGER,
+  result_ack TEXT CHECK (result_ack IN ('acked', 'gave_up')),
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
   UNIQUE (from_agent, idempotency_key)
 );
 CREATE INDEX mail_tasks_inbox ON mail_tasks (to_agent, state, created_at);
 CREATE INDEX mail_tasks_results ON mail_tasks (reply_to, updated_at) WHERE result_delivered_at IS NULL;
+CREATE INDEX mail_tasks_roots ON mail_tasks (from_agent, created_at) WHERE parent_id IS NULL;
 CREATE INDEX mail_tasks_conversation ON mail_tasks (conversation_id, created_at);
 
--- One row per wake: 'task' tells to_agent a task is waiting, 'result' tells
--- reply_to a result is. The brief kept wake columns on mail_tasks; a task
+-- One row per wake: 'task' tells to_agent a task is waiting (again, after a
+-- lease expired), 'result' tells reply_to a result is. The brief kept wake columns on mail_tasks; a task
 -- can need two wakes to two agents, and the daily cap counts both, so they
 -- live here. id is the event id the receiver deduplicates on.
 CREATE TABLE mail_wakes (
@@ -80,6 +91,24 @@ CREATE TABLE mail_wakes (
 CREATE INDEX mail_wakes_agent_day ON mail_wakes (agent, created_at);
 CREATE INDEX mail_wakes_due ON mail_wakes (state, updated_at);
 
+-- A subscription that answered one wake with 410 or 413. Retries of that
+-- wake skip it; another subscription's transient failure doesn't resend.
+CREATE TABLE mail_wake_terminal (
+  wake_id TEXT NOT NULL,
+  subscription_id TEXT NOT NULL,
+  status INTEGER NOT NULL,
+  PRIMARY KEY (wake_id, subscription_id)
+);
+
+-- Callback origins events/subscribe refused because MAIL_CALLBACK_ORIGINS
+-- doesn't list them. Origin only: a callback path may hold a secret.
+CREATE TABLE mail_refused_origins (
+  origin TEXT PRIMARY KEY,
+  refusals INTEGER NOT NULL,
+  first_at INTEGER NOT NULL,
+  last_at INTEGER NOT NULL
+);
+
 -- MCP Events subscriptions (developers.openai.com/plugins/build/mcp-events).
 -- The secret is ChatGPT's whsec_ signing key, supplied at subscribe time,
 -- so it lives here rather than in a Worker secret.
@@ -97,7 +126,8 @@ CREATE TABLE mcp_subscriptions (
   UNIQUE (agent, event_name, url)
 );
 
--- A new task wakes its receiver, in the same transaction as the insert.
+-- A new task wakes its receiver, in the same transaction as the insert. The
+-- send's own INSERT already refused it if the receiver's day was full.
 CREATE TRIGGER mail_task_wake AFTER INSERT ON mail_tasks
 BEGIN
   INSERT INTO mail_wakes (id, task_id, agent, kind, state, created_at, updated_at)
@@ -120,15 +150,32 @@ BEGIN
   FROM mail_agents a WHERE a.name = NEW.reply_to AND a.wake_kind != 'none';
 END;
 
+-- A task whose lease expired and went back to the queue wakes its receiver
+-- again (the cron does this), unless that agent's daily cap is full; the task
+-- then waits for its next claim.
+CREATE TRIGGER mail_requeue_wake AFTER UPDATE OF state ON mail_tasks
+WHEN NEW.state = 'queued' AND OLD.state = 'claimed'
+BEGIN
+  INSERT OR IGNORE INTO mail_wakes (id, task_id, agent, kind, state, created_at, updated_at)
+  SELECT NEW.id || '_r' || NEW.attempts, NEW.id, a.name, 'task',
+         CASE WHEN (SELECT count(*) FROM mail_wakes w
+                    WHERE w.agent = a.name AND w.state != 'capped'
+                      AND w.created_at >= CAST(strftime('%s', date(NEW.updated_at / 1000, 'unixepoch')) AS INTEGER) * 1000) >= a.daily_wake_cap
+              THEN 'capped' ELSE 'pending' END,
+         NEW.updated_at, NEW.updated_at
+  FROM mail_agents a WHERE a.name = NEW.to_agent AND a.wake_kind != 'none';
+END;
+
 -- Caps: no run or incident backs these numbers; they are first guesses from
--- the brief (dot 30, t3 20, grok 6 wakes a day). sam is the admin token and
--- is never woken. grok reads hostile X text, so it may start nothing and no
--- route leaves it.
-INSERT INTO mail_agents (name, wake_kind, may_create_root, daily_wake_cap) VALUES
-  ('sam', 'none', 1, 0),
-  ('dot', 'mcp_event', 1, 30),
-  ('t3', 'webhook', 1, 20),
-  ('grok', 'webhook', 0, 6);
+-- the brief (dot 30, t3 20, grok 6 wakes a day) and the director (dot 10,
+-- t3 5 new conversations a day). sam is the admin token, is never woken and
+-- has no root cap. grok reads hostile X text, so it may start nothing and
+-- no route leaves it.
+INSERT INTO mail_agents (name, wake_kind, may_create_root, daily_wake_cap, daily_root_cap) VALUES
+  ('sam', 'none', 1, 0, NULL),
+  ('dot', 'mcp_event', 1, 30, 10),
+  ('t3', 'webhook', 1, 20, 5),
+  ('grok', 'webhook', 0, 6, 0);
 
 INSERT INTO mail_routes (from_agent, to_agent) VALUES
   ('sam', 'dot'), ('sam', 't3'),

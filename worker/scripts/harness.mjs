@@ -60,7 +60,10 @@ export async function startStack({ port, fixturePort, inspectorPort, logFile, pe
       ...(webhook === false ? [] : ["--var", `T3_APPROVALS_WEBHOOK_URL:http://127.0.0.1:${fixturePort}/t3-webhook`]),
       // Mailbox wakes for t3 and grok land on the fixture's /hook/<name>.
       "--var", `MAIL_T3_WAKE_URL:http://127.0.0.1:${fixturePort}/hook/t3`,
-      "--var", `MAIL_GROK_WAKE_URL:http://127.0.0.1:${fixturePort}/hook/grok`],
+      "--var", `MAIL_GROK_WAKE_URL:http://127.0.0.1:${fixturePort}/hook/grok`,
+      // MCP Events callbacks may go to the fixture (a loopback http origin,
+      // which only local dev can reach).
+      "--var", `MAIL_CALLBACK_ORIGINS:http://127.0.0.1:${fixturePort}`],
     { cwd: ROOT, env: ENV, stdio: ["ignore", "pipe", "pipe"] },
   );
   const lines = [];
@@ -126,6 +129,8 @@ export async function startStack({ port, fixturePort, inspectorPort, logFile, pe
   async function stop() {
     proc.kill("SIGTERM");
     await new Promise((r) => (proc.exitCode !== null ? r() : proc.once("exit", r)));
+    // A fixture response that never ends (hook-mode "flood") must not hold this up.
+    server.closeAllConnections();
     await new Promise((r) => server.close(r));
     log?.end();
     if (!persistTo) rmSync(stateDir, { recursive: true, force: true });

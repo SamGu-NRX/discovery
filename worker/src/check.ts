@@ -26,6 +26,8 @@ export interface Env {
   MAIL_T3_WAKE_SECRET?: string;
   MAIL_GROK_WAKE_URL?: string;
   MAIL_GROK_WAKE_KEY?: string;
+  // Comma-separated origins MCP Events callbacks may use. Unset: none.
+  MAIL_CALLBACK_ORIGINS?: string;
 }
 
 export interface WatcherRow {
