@@ -14,6 +14,20 @@ export interface Env {
   // Approval notifications for proposals. Unset means proposals wait
   // unnotified; watcher matches never POST anywhere.
   T3_APPROVALS_WEBHOOK_URL?: string;
+  // Mailbox (src/mailbox.ts). Each agent's own token; the dot sends its in
+  // the MCP URL path. Unset means that agent can't reach the mailbox.
+  MAIL_DOT_TOKEN?: string;
+  MAIL_T3_TOKEN?: string;
+  MAIL_GROK_TOKEN?: string;
+  // The read-only transcript at /room/:token. Unset means /room is 404.
+  MAIL_ROOM_TOKEN?: string;
+  // Wake targets. Unset means wakes to that agent fail and are retried.
+  MAIL_T3_WAKE_URL?: string;
+  MAIL_T3_WAKE_SECRET?: string;
+  MAIL_GROK_WAKE_URL?: string;
+  MAIL_GROK_WAKE_KEY?: string;
+  // Comma-separated origins MCP Events callbacks may use. Unset: none.
+  MAIL_CALLBACK_ORIGINS?: string;
 }
 
 export interface WatcherRow {

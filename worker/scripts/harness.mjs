@@ -13,7 +13,10 @@ export const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const WRANGLER = join(ROOT, "node_modules/.bin/wrangler");
 const ENV = { ...process.env, CI: "1", WRANGLER_SEND_METRICS: "false" };
 
-const LOCAL_SECRETS = ["ADMIN_TOKEN", "WEBSUB_SECRET", "INGEST_TOKEN", "RUNNER_TOKEN", "INBOX_TOKEN"];
+const LOCAL_SECRETS = [
+  "ADMIN_TOKEN", "WEBSUB_SECRET", "INGEST_TOKEN", "RUNNER_TOKEN", "INBOX_TOKEN",
+  "MAIL_DOT_TOKEN", "MAIL_T3_TOKEN", "MAIL_GROK_TOKEN", "MAIL_ROOM_TOKEN", "MAIL_T3_WAKE_SECRET", "MAIL_GROK_WAKE_KEY",
+];
 
 // Creates .dev.vars, or adds any secret it lacks, with random local values.
 export function devVars() {
@@ -54,7 +57,13 @@ export async function startStack({ port, fixturePort, inspectorPort, logFile, pe
   const proc = spawn(
     WRANGLER,
     ["dev", "--port", String(port), "--ip", "127.0.0.1", "--inspector-port", String(inspectorPort), "--persist-to", stateDir, "--test-scheduled", "--show-interactive-dev-session=false",
-      ...(webhook === false ? [] : ["--var", `T3_APPROVALS_WEBHOOK_URL:http://127.0.0.1:${fixturePort}/t3-webhook`])],
+      ...(webhook === false ? [] : ["--var", `T3_APPROVALS_WEBHOOK_URL:http://127.0.0.1:${fixturePort}/t3-webhook`]),
+      // Mailbox wakes for t3 and grok land on the fixture's /hook/<name>.
+      "--var", `MAIL_T3_WAKE_URL:http://127.0.0.1:${fixturePort}/hook/t3`,
+      "--var", `MAIL_GROK_WAKE_URL:http://127.0.0.1:${fixturePort}/hook/grok`,
+      // MCP Events callbacks may go to the fixture (a loopback http origin,
+      // which only local dev can reach).
+      "--var", `MAIL_CALLBACK_ORIGINS:http://127.0.0.1:${fixturePort}`],
     { cwd: ROOT, env: ENV, stdio: ["ignore", "pipe", "pipe"] },
   );
   const lines = [];
@@ -70,7 +79,8 @@ export async function startStack({ port, fixturePort, inspectorPort, logFile, pe
   const base = `http://127.0.0.1:${port}`;
   const auth = { authorization: `Bearer ${vars.ADMIN_TOKEN}`, "content-type": "application/json" };
 
-  // token: "admin" (default), "ingest", "runner", "inbox", or "none".
+  // token: "admin" (default), "ingest", "runner", "inbox", "mail_dot",
+  // "mail_t3", "mail_grok", or "none".
   async function call(method, path, body, { raw = false, token = "admin" } = {}) {
     const headers = { "content-type": "application/json" };
     if (token !== "none") headers.authorization = `Bearer ${vars[`${token.toUpperCase()}_TOKEN`]}`;
@@ -119,6 +129,8 @@ export async function startStack({ port, fixturePort, inspectorPort, logFile, pe
   async function stop() {
     proc.kill("SIGTERM");
     await new Promise((r) => (proc.exitCode !== null ? r() : proc.once("exit", r)));
+    // A fixture response that never ends (hook-mode "flood") must not hold this up.
+    server.closeAllConnections();
     await new Promise((r) => server.close(r));
     log?.end();
     if (!persistTo) rmSync(stateDir, { recursive: true, force: true });

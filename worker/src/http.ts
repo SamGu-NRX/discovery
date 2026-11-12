@@ -14,7 +14,8 @@ export const json = (data: unknown, status = 200) =>
 // first byte over maxBytes. A declared Content-Length over the limit is
 // refused before reading; a chunked body without one is refused mid-stream,
 // so an oversized body is never buffered or parsed.
-export async function readText(req: Request, maxBytes: number): Promise<string> {
+// Works on a Response too (a callback's reply).
+export async function readText(req: Request | Response, maxBytes: number): Promise<string> {
   const declared = Number(req.headers.get("content-length") ?? 0);
   if (declared > maxBytes) throw new HttpError(413, `body is ${declared} bytes; the limit is ${maxBytes}`);
   if (!req.body) return "";

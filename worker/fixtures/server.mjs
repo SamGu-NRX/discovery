@@ -9,6 +9,11 @@
 //   /gone.xml   always 404, like the YouTube channel feed since 2026-11-04
 //   /t3-webhook stand-in for the T3 webhook; records each POST body and
 //               answers with state.webhookStatus
+//   /hook/<name> stand-in for a mailbox wake target; records each POST's
+//               headers and raw body and answers with state.hookStatus[name]
+//               (default 200). An MCP Events verification request gets its
+//               challenge echoed, unless state.hookMode[name] is "wrong"
+//               (another challenge) or "flood" (8 KB that never ends)
 //
 // Usage: node fixtures/server.mjs [port]   (default 8799)
 
@@ -30,6 +35,9 @@ export function createFixture() {
     hits: [],
     webhooks: [],
     webhookStatus: 200,
+    hooks: [],
+    hookStatus: {},
+    hookMode: {},
   };
 
   const atom = () =>
@@ -70,6 +78,14 @@ export function createFixture() {
           case "/control/webhook-status":
             state.webhookStatus = b.status;
             return send(200, "{}");
+          case "/control/hooks":
+            return send(200, JSON.stringify(state.hooks));
+          case "/control/hook-status":
+            state.hookStatus[b.name] = b.status;
+            return send(200, "{}");
+          case "/control/hook-mode":
+            state.hookMode[b.name] = b.mode;
+            return send(200, "{}");
           case "/control/atom":
             return send(200, atom(), { "content-type": "application/atom+xml" });
           default:
@@ -85,6 +101,32 @@ export function createFixture() {
       req.on("end", () => {
         state.webhooks.push({ ts: Date.now(), status: state.webhookStatus, body: JSON.parse(raw) });
         send(state.webhookStatus, "{}");
+      });
+      return;
+    }
+
+    if (url.pathname.startsWith("/hook/") && req.method === "POST") {
+      let raw = "";
+      req.on("data", (c) => (raw += c));
+      req.on("end", () => {
+        const name = url.pathname.slice("/hook/".length);
+        const status = state.hookStatus[name] ?? 200;
+        state.hooks.push({ ts: Date.now(), name, status, headers: req.headers, raw });
+        let body;
+        try {
+          body = JSON.parse(raw);
+        } catch {}
+        if (body?.type !== "verification") return send(status, "{}");
+        const mode = state.hookMode[name];
+        if (mode === "flood") {
+          res.writeHead(200, { "content-type": "application/json" });
+          res.write(" ".repeat(8192));
+          return; // never ends
+        }
+        const reply = () => send(status, JSON.stringify({ challenge: mode === "wrong" ? "not-the-challenge" : body.challenge }), { "content-type": "application/json" });
+        // "slow" holds the correct echo for 1.5 s so a test can act mid-handshake.
+        if (mode === "slow") return void setTimeout(reply, 1500);
+        reply();
       });
       return;
     }
