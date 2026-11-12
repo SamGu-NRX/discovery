@@ -359,3 +359,20 @@ test("a branch walk never replaces a saved post's merged thread: the batches kee
   const last = h.batches.filter((b) => b.thread?.root_id === "203").at(-1).thread;
   assert.deepEqual(last.reply_ids, ["7203", "8203"]);
 });
+
+test("a fresh Top cursor on every page is not followed past the first page, and an empty page ends its cursors", async () => {
+  // Live X on Nov 12: each page offered a new Top cursor, and each Top
+  // page was empty apart from yet another one.
+  let n = 0;
+  const focal = post("300", "op", { conversationId: "300" });
+  const h = harness((_, v) => {
+    n += 1;
+    if (!v.cursor) return detail([{ type: "TimelineAddEntries", entries: [itemEntry(focal, "9000"), moduleEntry("conversationthread-301", "8990", [post("301", "x", { conversationId: "300", inReplyTo: "300" })]), cursorItem("Top", `t${n}`), cursorItem("Bottom", "b1")] }]);
+    if (v.cursor === "b1") return detail([{ type: "TimelineAddEntries", entries: [moduleEntry("conversationthread-302", "8980", [post("302", "y", { conversationId: "300", inReplyTo: "300" })]), cursorItem("Top", `t${n}`), cursorItem("Bottom", "b2")] }]);
+    return detail([{ type: "TimelineAddEntries", entries: [cursorItem("Top", `t${n}`), cursorItem("Bottom", `b${n}`)] }]);
+  });
+  const result = await run({ jobs: [{ type: "context", ids: ["300"], rankings: ["Relevance"], branches: false, quotes: false, mentions: false, links: false, conversation: false, upstream: false }] }, h);
+  assert.deepEqual(h.sends.map((s) => s.variables.cursor ?? "-"), ["-", "t1", "b1", "b2"]);
+  assert.equal(result.context["300"].orders.Relevance.exhausted, true);
+  assert.deepEqual(result.context["300"].thread.reply_ids, ["301", "302"]);
+});

@@ -8,8 +8,8 @@
 //     [--pilot archive/2026-11-12/context/raw] [--json out.json]
 //
 // --list is the Phase 1 list: rows with id and order, the boundary at
-// boundary_order. --pilot is the Phase 2 pilot's raw output, one folder per
-// save holding candidates.jsonl (one line per post per view).
+// boundary_order. --pilot is the Phase 2 pilot's context/raw folder, one
+// folder per save holding views.json.
 
 import { readFile, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -59,34 +59,42 @@ function compareBookmarks(bundle, list) {
   };
 }
 
-// The pilot's views, grouped the way fetch mode collects them.
-function bucketOfView(view) {
-  const v = String(view).toLowerCase();
-  if (/discover|related|recommend/.test(v)) return "discover";
-  if (/quote/.test(v)) return "quotes";
-  if (/branch/.test(v)) return "branches";
-  if (/url|mention|search|link/.test(v)) return "mentions";
-  if (/recent|latest|chrono/.test(v)) return "recency";
-  if (/conversation|relevan|default|reply|replies/.test(v)) return "relevance";
-  return "other";
-}
+// The pilot's views (views.json, one record per view with the ids it saw in
+// order), grouped the way fetch mode collects them. The ids a conversation
+// view saw include the saved post, what it replies to and Discover more,
+// which the pilot also lists apart; replies are the rest.
+const BUCKET = {
+  conversation_relevant: "relevance",
+  conversation_recent: "recency",
+  nested_branch: "branches",
+  quotes: "quotes",
+  mentions: "mentions",
+  linked_url_mentions: "mentions",
+};
 
 async function readPilot(dir) {
   const saves = {};
   for (const entry of await readdir(dir, { withFileTypes: true })) {
     if (!entry.isDirectory() || !/^\d+$/.test(entry.name)) continue;
-    const lines = (await readFile(join(dir, entry.name, "candidates.jsonl"), "utf8").catch(() => "")).split("\n").filter(Boolean);
+    const views = JSON.parse(await readFile(join(dir, entry.name, "views.json"), "utf8"));
     const buckets = {};
-    const views = new Set();
-    for (const line of lines) {
-      const row = JSON.parse(line);
-      const id = String(row.status_id ?? row.id ?? row.post_id ?? "");
-      if (!/^\d+$/.test(id)) continue;
-      views.add(row.view);
-      const bucket = bucketOfView(row.view);
-      (buckets[bucket] ??= new Set()).add(id);
+    const add = (bucket, ids) => {
+      const set = (buckets[bucket] ??= new Set());
+      for (const id of ids ?? []) if (/^\d+$/.test(String(id))) set.add(String(id));
+    };
+    let wallMs = 0;
+    for (const v of views) {
+      const bucket = BUCKET[v.view_type] ?? "other";
+      const aside = new Set([...(v.recommendation_ids ?? []), ...(v.upstream_ids ?? [])].map(String));
+      // A conversation view also saw Discover more and other page furniture;
+      // where the pilot separated its replies (reply_ids_seen), those count.
+      const seen = bucket !== "other" && v.reply_ids_seen ? v.reply_ids_seen : v.distinct_ids_seen;
+      add(bucket, (seen ?? []).filter((x) => !aside.has(String(x))));
+      add("discover", v.recommendation_ids);
+      add("upstream", v.upstream_ids);
+      if (v.started_at && v.ended_at) wallMs += Date.parse(v.ended_at) - Date.parse(v.started_at);
     }
-    saves[entry.name] = { buckets, views: [...views] };
+    saves[entry.name] = { buckets, views: views.map((v) => v.view_type), wallMs, xReplies: views.find((v) => v.view_type === "conversation_relevant")?.x_reply_count ?? null };
   }
   return saves;
 }
@@ -117,6 +125,7 @@ async function compareContext(bundle, dir) {
   const rows = [];
   for (const [id, record] of Object.entries(bundle.context ?? {})) {
     const p = pilot[id];
+    if (!p) continue; // a save the pilot never reached
     const f = fetchBuckets(record);
     const focal = bundle.posts?.[id];
     const pilotSet = (...names) => new Set(names.flatMap((n) => [...(p?.buckets[n] ?? [])]).filter((x) => x !== id));
@@ -139,6 +148,7 @@ async function compareContext(bundle, dir) {
       detailCapped: record.detailCapped,
       error: record.error ?? null,
       wallMs: record.wallMs,
+      pilotWallMs: p.wallMs,
     });
   }
   return rows;
@@ -179,11 +189,11 @@ function printBookmarks(b) {
 
 function printContext(rows) {
   console.log("## Context per save (fetch / pilot / both; pilot-only ids listed below)\n");
-  console.log("| save | author | X replies | replies | X quotes | quotes | mentions+links | Discover more | TweetDetail / Search requests | wall |");
+  console.log("| save | author | X replies | replies | X quotes | quotes | mentions+links | Discover more | TweetDetail / Search requests | wall (fetch / pilot) |");
   console.log("|---|---|---|---|---|---|---|---|---|---|");
   const cell = (c) => `${c.fetch} / ${c.pilot} / ${c.both}`;
   for (const r of rows) {
-    console.log(`| ${r.id} | ${r.author ?? "?"} | ${r.xReplies ?? "?"} | ${cell(r.replies)} | ${r.xQuotes ?? "?"} | ${cell(r.quotes)} | ${cell(r.mentions)} | ${cell(r.discover)} | ${r.detailRequests} / ${r.searchRequests}${r.detailCapped ? " (capped)" : ""} | ${secs(r.wallMs)} |`);
+    console.log(`| ${r.id} | ${r.author ?? "?"} | ${r.xReplies ?? "?"} | ${cell(r.replies)} | ${r.xQuotes ?? "?"} | ${cell(r.quotes)} | ${cell(r.mentions)} | ${cell(r.discover)} | ${r.detailRequests} / ${r.searchRequests}${r.detailCapped ? " (capped)" : ""} | ${secs(r.wallMs)} / ${secs(r.pilotWallMs)} |`);
   }
   console.log();
   for (const r of rows) {

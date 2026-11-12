@@ -370,6 +370,7 @@ async function walkPermalink(run, io, record, { focalId, rankingMode, note }) {
   let offset = 0;
   const queue = [null];
   const followed = new Set();
+  const seen = new Set();
   while (queue.length) {
     if (record.detailRequests >= run.limits.detailCapPerPost) {
       record.detailCapped = true;
@@ -389,11 +390,23 @@ async function walkPermalink(run, io, record, { focalId, rankingMode, note }) {
     if (built.error) throw new ParseError(built.error);
     own = built.state;
     walk.thread = built.thread;
+    let fresh = 0;
     for (const item of capture.primary) {
       if (item.role === "ancestor" && !ancestors.includes(item.post.id)) ancestors.push(item.post.id);
+      if (!seen.has(item.post.id)) {
+        seen.add(item.post.id);
+        fresh += 1;
+      }
     }
+    // Live X hands out a new Top cursor with every page, and following one
+    // returns nothing but another (seen on Nov 12: half of a run's
+    // TweetDetail requests were empty Top pages). So Top is followed from a
+    // walk's first page only, and a page that brought no new post ends its
+    // line of cursors.
+    if (cursor && fresh === 0) continue;
     for (const c of cursorsOf("TweetDetail", json)) {
       if (!DETAIL_CURSORS.has(c.type) || followed.has(c.value)) continue;
+      if (c.type === "Top" && cursor) continue;
       followed.add(c.value);
       queue.push(c);
     }
