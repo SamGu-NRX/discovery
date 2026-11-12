@@ -54,14 +54,15 @@ def test_site_owns_repo(site, repo, owns):
     assert site_owns_repo(site, repo) is owns
 
 
-def test_no_x_refuses_x_hosts_only():
+def test_no_x_refuses_x_pages_and_apis_not_the_media_cdn():
     from types import SimpleNamespace
 
     from kworker.api import Stats
     from kworker.ctx import Ctx, XFetchRefused
 
     ctx = Ctx(SimpleNamespace(no_x=True), None, Stats(), None, None)
-    for url in ("https://video.twimg.com/a.mp4", "https://cdn.syndication.twimg.com/tweet-result?id=1", "https://x.com/a/status/1", "https://t.co/abc"):
+    for url in ("https://cdn.syndication.twimg.com/tweet-result?id=1", "https://x.com/a/status/1", "https://t.co/abc", "https://api.fxtwitter.com/a/status/1"):
         with pytest.raises(XFetchRefused):
             ctx.fetch("GET", url)
     assert ctx.stats.fetches == {}
+    ctx._allowed("https://video.twimg.com/a.mp4")  # the media CDN stays open

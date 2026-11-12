@@ -22,7 +22,10 @@ from .config import Config
 BROWSER_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36"
 
 
-X_HOSTS = {"x.com", "twitter.com", "api.fxtwitter.com", "fxtwitter.com", "api.x.com", "t.co"}
+# X's pages and APIs, which the archive lead's fetch queue uses. The static
+# media CDN (pbs.twimg.com, video.twimg.com) is not in it: serving a file
+# the archive could not copy here does not compete with that queue.
+X_HOSTS = {"x.com", "twitter.com", "mobile.twitter.com", "api.fxtwitter.com", "fxtwitter.com", "api.x.com", "t.co", "cdn.syndication.twimg.com"}
 
 
 class XFetchRefused(RuntimeError):
@@ -46,7 +49,7 @@ class Ctx:
 
     def _allowed(self, url: str) -> None:
         host = (urlsplit(url).hostname or "").lower()
-        if self.cfg.no_x and (host in X_HOSTS or host.endswith(".twimg.com")):
+        if self.cfg.no_x and host in X_HOSTS:
             raise XFetchRefused(f"X fetches are off (KWORKER_NO_X=1) and {host} is not in the archive's records")
 
     @contextmanager

@@ -399,7 +399,7 @@ def link_job(ctx: Ctx, payload: dict) -> dict:
     got: Fetched | None = None
     rungs = [(0, lambda: rung0(ctx, canon)), (1, lambda: rung1(ctx, canon, prior)), (2, lambda: rung2(ctx, canon)), (3, lambda: rung3(ctx, canon)), (4, lambda: rung4(ctx, canon))]
     worst: Fetched | None = None
-    on_x = host in X_HOSTS or host.endswith(".twimg.com")
+    on_x = host in X_HOSTS
     for n, fn in rungs:
         if n < start and n != 0:
             attempts.append({"rung": n, "skipped": f"domain_policy start_rung {start}"})
