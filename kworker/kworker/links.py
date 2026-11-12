@@ -24,7 +24,11 @@ from .ctx import Ctx
 from .models import cached_code
 
 EXTRACTOR = ("code/trafilatura", "trafilatura-2.3.1+v1")
-TEXT_MAX = 60_000  # characters of extracted text kept in a bundle
+# Characters of a page's extracted text kept in a bundle, in full in both
+# bundle.json and bundle.md. The first blind grade marked a page cut at 6,000
+# characters as not preserved. 200,000 keeps bundle.json well under the 1 MiB
+# knowledge_bundle reads.
+TEXT_MAX = 200_000
 THIN = 400  # extracted characters below which a page is probably a JS shell
 
 _GH_REPO = re.compile(r"https?://(?:www\.)?github\.com/([A-Za-z0-9-]+)/([A-Za-z0-9_.-]+)")

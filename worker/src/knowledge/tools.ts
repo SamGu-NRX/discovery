@@ -215,7 +215,8 @@ async function bundle(env: Env, a: Record<string, unknown>) {
     truncated ||= f.cut;
     room -= byteLength(JSON.stringify(f.value)) + name.length + 4;
   }
-  return { post_id: id, version: row.version, completeness: row.completeness, json_key: row.json_key, r2_key: row.r2_key, sections_untrusted: out, truncated, omitted };
+  // The shas let a caller page through a cut section with knowledge_blob.
+  return { post_id: id, version: row.version, completeness: row.completeness, json_key: row.json_key, r2_key: row.r2_key, md_sha: row.md_sha, json_sha: row.json_sha, sections_untrusted: out, truncated, omitted };
 }
 
 async function blob(env: Env, a: Record<string, unknown>) {

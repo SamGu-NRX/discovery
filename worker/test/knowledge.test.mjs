@@ -279,6 +279,11 @@ test("knowledge tools through POST /mcp with a mail agent token: listed read-onl
   assert.ok(b.sections_untrusted.links.length > 0 && b.sections_untrusted.links.length < 400);
   assert.deepEqual(b.sections_untrusted.links[0], big.links[0]);
   assert.ok(Buffer.byteLength(JSON.stringify(b.sections_untrusted)) <= 48 * 1024);
+  // A cut bundle names its blobs, so the rest can be read with knowledge_blob.
+  assert.equal(b.json_sha, json_sha);
+  assert.equal(b.md_sha, md_sha);
+  const rest = await toolOk("knowledge_blob", { key: `sha256/${b.json_sha}`, offset: json.length - 40, length: 40 });
+  assert.equal(rest.data_untrusted, json.subarray(json.length - 40).toString());
 
   const t = await toolOk("knowledge_blob", { key: `sha256/${pageSha}`, offset: 8, length: 10 });
   assert.equal(t.encoding, "utf8");

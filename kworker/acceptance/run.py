@@ -13,6 +13,7 @@ Evidence goes to acceptance/evidence/. Tokens come from worker/.dev.vars
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
 import shutil
@@ -196,7 +197,15 @@ def cmd_check(a) -> None:
             bj[sec] = r["sections_untrusted"].get(sec)
             if r.get("truncated") or r.get("omitted"):
                 cut.append(sec)
-        (bundles_dir / f"{pid}.md").write_text(bj.pop("markdown") or "", encoding="utf-8")
+        # The whole bundle.md, paged through knowledge_blob by the sha the
+        # bundle names, so a long page is read in full through MCP alone.
+        bj.pop("markdown")
+        chunks, offset = [], 0
+        while offset is not None:
+            part = m.tool("knowledge_blob", {"key": f"sha256/{r['md_sha']}", "offset": offset, "length": 65536})
+            chunks.append(part["data_untrusted"].encode("utf-8") if part["encoding"] == "utf8" else base64.b64decode(part["data_untrusted"]))
+            offset = part["next_offset"]
+        (bundles_dir / f"{pid}.md").write_bytes(b"".join(chunks))
         bj["completeness"] = (bj.get("front") or {}).get("completeness")
         bj["missing"] = (bj.get("front") or {}).get("missing")
         g = gold_posts[pid]

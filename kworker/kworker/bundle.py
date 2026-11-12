@@ -12,7 +12,6 @@ from .api import canonical_json
 from .ctx import Ctx
 from .links import TEXT_MAX
 
-MD_LINK_TEXT = 6000  # characters of a page shown in bundle.md; bundle.json keeps TEXT_MAX
 SEARCH_MAX = 60_000
 
 
@@ -163,6 +162,8 @@ def build(ctx: Ctx, payload: dict) -> dict:
             "gate_v": gate["gate_v"],
             "kept": len(gate["kept"]),
             "dropped": len(gate["dropped"]),
+            # The gate's reason for each drop, never the dropped text.
+            "dropped_reasons": [{"stage": d["stage"], "reason": d["reason"]} for d in gate["dropped"]],
             "tombstone_pack": gate.get("tombstone_pack"),
         },
         "post": {"text": post["text"]},
@@ -299,6 +300,10 @@ def render_md(b: dict) -> str:
     out += [f"Source: {e['source']}. Reply views checked: {', '.join(e['reply_views']) or 'not recorded'}. Gate: `{e['gate_v']}`.", ""]
     if not b["replies"]:
         out += ["None kept.", ""]
+    if e.get("dropped_reasons"):
+        out += ["Dropped, with the gate's reason (the dropped text is not kept):", ""]
+        out += [f"- {d['reason']} ({d['stage']})" for d in e["dropped_reasons"]]
+        out.append("")
     for r in b["replies"]:
         link = f"[{r['id']}](https://x.com/{r['author_handle']}/status/{r['id']})" if r.get("id") else "id not recorded"
         out += [f"- **@{r['author_handle']}** ({link}). Kept because: {r['kept_because']} ({r['stage']}{'; ' + _by(r['by']) if r.get('by') else ''})", ""]
@@ -357,10 +362,9 @@ def render_md(b: dict) -> str:
             out += ["The README is under Repos.", ""]
         elif l.get("text"):
             t = l["text"]
-            shown = t[:MD_LINK_TEXT]
-            out += [_fence(shown + ("\n…" if len(t) > len(shown) else "")), ""]
-            if len(t) > len(shown):
-                out += [f"Showing {len(shown):,} of {len(t):,} characters; the full text is `sha256/{l['text_sha']}`.", ""]
+            out += [_fence(t), ""]
+            if len(t) >= TEXT_MAX:
+                out += [f"The page's extracted text is longer than {TEXT_MAX:,} characters; all of it is `sha256/{l['text_sha']}`.", ""]
 
     if b["repos"]:
         out += ["## Repos", ""]
@@ -372,7 +376,14 @@ def render_md(b: dict) -> str:
             out += ["README, first part:", "", _fence(r["readme_excerpt"]), ""]
 
     if b["missing"]:
-        out += ["## Not captured", ""]
-        out += [f"- {m['what']}: {m['ref']}. {m['reason']}" for m in b["missing"]]
-        out.append("")
+        gaps = [m for m in b["missing"] if m["what"] in ("media", "link")]
+        limits = [m for m in b["missing"] if m["what"] not in ("media", "link")]
+        if gaps:
+            out += ["## Not captured", ""]
+            out += [f"- {m['what']}: {m['ref']}. {m['reason']}" for m in gaps]
+            out.append("")
+        if limits:
+            out += ["## Outside this capture", "", "This entry was expanded from the 2026-10-26 archive, which did not record:", ""]
+            out += [f"- {m['what']}: {m['reason']}" for m in limits]
+            out.append("")
     return "\n".join(out).rstrip() + "\n"
