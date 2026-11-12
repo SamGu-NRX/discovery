@@ -19,6 +19,8 @@ export interface Env {
   MAIL_DOT_TOKEN?: string;
   MAIL_T3_TOKEN?: string;
   MAIL_GROK_TOKEN?: string;
+  // Hermes Agent, Sam's texting assistant (migrations/0011_hermes.sql).
+  MAIL_HERMES_TOKEN?: string;
   // The read-only transcript at /room/:token. Unset means /room is 404.
   MAIL_ROOM_TOKEN?: string;
   // Wake targets. Unset means wakes to that agent fail and are retried.
@@ -26,6 +28,8 @@ export interface Env {
   MAIL_T3_WAKE_SECRET?: string;
   MAIL_GROK_WAKE_URL?: string;
   MAIL_GROK_WAKE_KEY?: string;
+  MAIL_HERMES_WAKE_URL?: string;
+  MAIL_HERMES_WAKE_SECRET?: string;
   // Comma-separated origins MCP Events callbacks may use. Unset: none.
   MAIL_CALLBACK_ORIGINS?: string;
   // Device-signed approvals (docs/APPROVALS.md). APNs token auth: the .p8

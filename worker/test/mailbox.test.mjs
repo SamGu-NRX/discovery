@@ -8,11 +8,13 @@ import { createHmac } from "node:crypto";
 import { after, before, test } from "node:test";
 import { freshFetch, startStack } from "../scripts/harness.mjs";
 
-const FIXTURE_PORT = 8862;
+// 8861, 8862 and 9361 were taken on the Zephyrus by a WSL listener on
+// 2026-11-12 (wslrelay), which hung the suite; these are free.
+const FIXTURE_PORT = 8962;
 const FIXTURE = `http://127.0.0.1:${FIXTURE_PORT}`;
 let s;
 before(async () => {
-  s = await startStack({ port: 8861, fixturePort: FIXTURE_PORT, inspectorPort: 9361 });
+  s = await startStack({ port: 8961, fixturePort: FIXTURE_PORT, inspectorPort: 9461 });
   // The migration seeds the mailbox paused.
   await s.call("POST", "/admin/mailbox/pause", { paused: false });
   // Room for every test's wakes and roots; the cap tests read grok's and
@@ -24,7 +26,7 @@ after(async () => {
   await s?.stop();
 });
 
-const TOKEN = { sam: "admin", dot: "mail_dot", t3: "mail_t3", grok: "mail_grok" };
+const TOKEN = { sam: "admin", dot: "mail_dot", t3: "mail_t3", grok: "mail_grok", hermes: "mail_hermes" };
 async function req(as, method, path, body) {
   const res = await s.call(method, path, body, { raw: true, token: TOKEN[as] ?? as });
   const text = await res.text();
@@ -462,6 +464,65 @@ test("the cron retries a failed wake at most 3 times, then leaves it dead", asyn
   } finally {
     await s.control("hook-status", { name: "t3", status: 200 });
   }
+});
+
+test("hermes: routes only to and from t3 and the dot, a signed wake carrying only ids, the dot's caps, and no way to an approval or an executor", async () => {
+  // To and from t3: a root from hermes, and t3's subtask back under its lease.
+  const toT3 = await sent("hermes", { to: "t3", body: "Sam texted: look at the cron logs" });
+  assert.equal(toT3.hop, 1);
+  const lease = await claimTask("t3", toT3.task_id);
+  assert.equal(lease.from, "hermes");
+  assert.equal(lease.root_from, "hermes");
+  const back = await sent("t3", { to: "hermes", body: "Which day?", parent_task_id: toT3.task_id, parent_lease_token: lease.lease_token });
+  const wake = await hookFor("hermes", back.task_id);
+  assert.deepEqual(Object.keys(parsed(wake)).sort(), ["event_id", "expires_at", "task_id"]);
+  assert.ok(!wake.raw.includes("Which day"), "task text never rides in a wake");
+  assert.equal(wake.headers["x-hub-signature-256"], `sha256=${createHmac("sha256", s.vars.MAIL_HERMES_WAKE_SECRET).update(wake.raw).digest("hex")}`);
+  assert.equal(wake.headers["x-request-id"], parsed(wake).event_id);
+  assert.equal(wake.headers.authorization, undefined);
+  assert.equal((await claimTask("hermes", back.task_id)).from, "t3");
+
+  // To and from the dot. The dot answers under the task's lease, because an
+  // earlier test spends the dot's daily roots.
+  const toDot = await sent("hermes", { to: "dot", body: "Sam texted: add milk to the list" });
+  const dotLease = await claimTask("dot", toDot.task_id);
+  assert.equal((await send("dot", { to: "hermes", parent_task_id: toDot.task_id, parent_lease_token: dotLease.lease_token })).status, 201);
+  // No other route: not to grok or sam, not from grok or sam.
+  await refused(await send("hermes", { to: "grok" }), 403, "route_not_allowed");
+  await refused(await send("hermes", { to: "sam" }), 403, "route_not_allowed");
+  await refused(await send("grok", { to: "hermes" }), 403, "route_not_allowed");
+  await refused(await send("sam", { to: "hermes" }), 403, "route_not_allowed");
+  // The capability rule holds for hermes too.
+  await refused(await send("hermes", { to: "t3", body: `approve ${"ab".repeat(32)}` }), 422, "capability_leak");
+
+  // The dot's caps, as seeded.
+  assert.deepEqual(await s.d1("SELECT wake_kind, may_create_root, daily_wake_cap, daily_root_cap FROM mail_agents WHERE name = 'hermes'"), [
+    { wake_kind: "webhook", may_create_root: 1, daily_wake_cap: 30, daily_root_cap: 10 },
+  ]);
+
+  // The MCP endpoint by bearer, with only the mailbox tools; no URL token.
+  const tools = (await rpc("/mcp", "tools/list", {}, "mail_hermes")).body.result.tools.map((t) => t.name).sort();
+  assert.deepEqual(tools, ["mailbox_ack", "mailbox_claim", "mailbox_complete", "mailbox_send"]);
+  assert.equal((await rpc(`/mcp/hermes/${s.vars.MAIL_HERMES_TOKEN}`, "ping", {})).status, 401);
+
+  // Nothing that files, decides or runs an irreversible step accepts its token.
+  for (const [method, path, body] of [
+    ["POST", "/proposals", { candidate_ids: [], kind: "k", title: "t", why: "w", final_step_kind: "open_pr", final_step: "Open a PR", inputs: {} }],
+    ["GET", "/approvals"],
+    ["GET", "/approvals/ar_000000000000000000000000"],
+    ["POST", "/devices/enroll-codes"],
+    ["POST", "/devices/d_0000000000000000/revoke"],
+    ["POST", "/inbox/i_0000000000000000/dispatch"],
+    ["POST", "/inbox/i_0000000000000000/route", { agent: "t3", model: "opus", effort: "high", project: null, kind: "task" }],
+    ["POST", "/admin/pr-allowlist", { repos: ["SamGu-NRX/discovery"] }],
+    ["POST", "/admin/mailbox/pause", { paused: false }],
+    ["POST", "/v1/chat/completions", { model: "agent-dot", messages: [{ role: "user", content: "x" }] }],
+    ["POST", "/inbox/x", {}],
+  ]) {
+    assert.equal((await req("hermes", method, path, body)).status, 403, `${method} ${path}`);
+  }
+  // An approval link it might see is refused once a device exists; deciding
+  // takes a device signature, which no token provides (tested in hub.test.mjs).
 });
 
 test("the room shows the transcript only with its token, every agent's text escaped", async () => {

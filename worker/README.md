@@ -60,6 +60,7 @@ No secret is printed. Then `node scripts/verify-production.mjs <base-url> ~/.age
 | `discovery-mail-dot-token` | `MAIL_DOT_TOKEN` | the dot (ChatGPT) | `POST /mcp/dot/<token>`; also a bearer on `/mcp` and `/mail/*` |
 | `discovery-mail-t3-token` | `MAIL_T3_TOKEN` | T3 on the Zephyrus | `POST /mcp`, `POST /mail/tasks`, `POST /mail/claim`, `POST /mail/ack`, `POST /mail/tasks/:id/complete` |
 | `discovery-mail-grok-token` | `MAIL_GROK_TOKEN` | GrokBot | the same routes; it can claim and complete but has no route to send on |
+| `discovery-mail-hermes-token` | `MAIL_HERMES_TOKEN` | Hermes Agent (Sam's texting assistant) | the same routes, plus `POST /inbox` as `reply` or `agent_push`; it sends to and hears from `t3` and `dot` only |
 | `discovery-mail-room-token` | `MAIL_ROOM_TOKEN` | Sam | `GET /room/:token` |
 | none; D1 keeps its SHA-256 | a device token, one per enrolled iPhone | the app | `GET /approvals*`, `POST /inbox`, `GET /brief`, `POST /voice`, `GET /voice/:id`, its own `POST /devices/:id/apns-token` |
 | none; minted per enrollment | a 12-character code, 10 minutes, single use | Sam types it into the app | `POST /devices/enroll` |
@@ -184,7 +185,8 @@ No secret is printed. Then `node scripts/verify-production.mjs <base-url> ~/.age
 
 - **grok wake.** POST the same body to `MAIL_GROK_WAKE_URL` with `authorization: Bearer <MAIL_GROK_WAKE_KEY>`. That matches what [Anudorannador/Agent2GrokBot](https://github.com/Anudorannador/Agent2GrokBot) (e9a5783, `src/agent2grokbot/store.py` `_post`, `grokbot/SETUP-PROMPT.md`) sends a GrokBot routine webhook: a JSON body and `Authorization: Bearer <sender key>` copied from the routine panel, plus its own `X-A2G-*` signature and delivery-id headers, which the bot's setup prompt reads and the platform does not need. Unverified until we run it. Agent2GrokBot has the bot POST results back to an HTTP callback; this design instead has GrokBot call `mailbox_claim` and `mailbox_complete` through a remote MCP connector. If GrokBot can't hold one, a callback route is the fallback. xAI's routines doc (docs.x.ai/grok-bot/skills-routines-and-automations) also lets a routine start from an email to the bot's own address, another possible wake.
 - **dot wake.** An MCP Event to each of the dot's live `task_available` subscriptions, described below.
-- **Caps.** dot 30, t3 20 and grok 6 wakes a day, hop 3, 8 tasks a conversation, 8 KB bodies and 16 KB results come from the design brief; dot 10 and t3 5 new conversations a day, and 3 subscriptions an agent, from the director. No run backs any of them.
+- **hermes wake.** POST the same body to `MAIL_HERMES_WAKE_URL` with `x-hub-signature-256: sha256=<hex HMAC-SHA256 of the raw body, keyed by MAIL_HERMES_WAKE_SECRET>` and `x-request-id: <event_id>`. That is the GitHub form Hermes Agent's webhook adapter checks, and the header it deduplicates on for an hour (hermes-agent.nousresearch.com/docs/user-guide/messaging/webhooks, read 2026-11-12). Its route should pin `signature: github`, so no other scheme is accepted, and its `prompt` should be the t3 task's fixed prompt with `{expires_at}` in place of `{{body.expires_at}}`. Hermes also needs this mailbox as an MCP server (`POST /mcp` with its bearer) to claim and complete. Not yet run against a real Hermes gateway.
+- **Caps.** dot 30, hermes 30, t3 20 and grok 6 wakes a day, hop 3, 8 tasks a conversation, 8 KB bodies and 16 KB results come from the design brief; dot 10, hermes 10 and t3 5 new conversations a day, and 3 subscriptions an agent, from the director. No run backs any of them.
 
 **MCP Events, as built and where each part was checked (2026-11-11).**
 
@@ -228,6 +230,8 @@ After the probe, `{"paused":true}` again until the live loop is wanted.
 | `discovery-mail-t3-wake-url` | `MAIL_T3_WAKE_URL` | the T3 webhook task's `webhookUrl` (a capability URL) |
 | `discovery-mail-t3-wake-secret` | `MAIL_T3_WAKE_SECRET` | random hex; the same value goes into the T3 task's signature secret |
 | `discovery-mail-grok-wake-url`, `discovery-mail-grok-wake-key` | `MAIL_GROK_WAKE_URL`, `MAIL_GROK_WAKE_KEY` | GrokBot's routine webhook and its sender key, after the 7-day eval |
+| `discovery-mail-hermes-token` | `MAIL_HERMES_TOKEN` | random 32-byte hex, Hermes' bearer for `/mcp` |
+| `discovery-mail-hermes-wake-url`, `discovery-mail-hermes-wake-secret` | `MAIL_HERMES_WAKE_URL`, `MAIL_HERMES_WAKE_SECRET` | the Hermes webhook route's URL (`https://<gateway>/webhooks/<route>`) and that route's secret |
 | `discovery-mail-callback-origins` | `MAIL_CALLBACK_ORIGINS` | comma-separated https origins MCP Events callbacks may use; set during probe step H2 |
 
 **Rotate a mailbox secret.** Write the new value to its file, then `npx wrangler secret put <NAME> < <file>`; the old value stops working once the deploy finishes. What breaks until the other side is updated:
@@ -235,10 +239,11 @@ After the probe, `{"paused":true}` again until the live loop is wanted.
 | Secret | Until updated |
 | --- | --- |
 | `MAIL_DOT_TOKEN` | The dot's tool calls get 401. Sam removes the custom MCP server in ChatGPT and adds the new URL. Event deliveries keep working, because ChatGPT's own secret signs them. |
-| `MAIL_T3_TOKEN`, `MAIL_GROK_TOKEN` | That agent's MCP connector gets 401 until its bearer is replaced. |
+| `MAIL_T3_TOKEN`, `MAIL_GROK_TOKEN`, `MAIL_HERMES_TOKEN` | That agent's MCP connector gets 401 until its bearer is replaced. |
+| `MAIL_HERMES_WAKE_SECRET` | Hermes rejects wakes until its route's secret matches; the cron's 3 retries span about 45 minutes. |
 | `MAIL_ROOM_TOKEN` | Old room links show "Not found". |
 | `MAIL_T3_WAKE_SECRET` | T3 rejects wakes until its task's signature secret matches. Failed wakes are retried by the cron 3 times over about 45 minutes, so update both within that. |
-| `MAIL_T3_WAKE_URL`, `MAIL_GROK_WAKE_URL`, `MAIL_GROK_WAKE_KEY` | Rotated on the T3 or GrokBot side first; wakes fail until the new value is set here. |
+| `MAIL_T3_WAKE_URL`, `MAIL_GROK_WAKE_URL`, `MAIL_GROK_WAKE_KEY`, `MAIL_HERMES_WAKE_URL` | Rotated on the T3 or GrokBot side first; wakes fail until the new value is set here. |
 | `MAIL_CALLBACK_ORIGINS` | A subscription whose origin is dropped gets no more events, and subscribes and refreshes to that origin are refused. Its row stays until it expires. |
 | an approval link | `POST /proposals/:id/rotate-token`, above. |
 An unset wake secret makes that agent's wakes fail and retry, then die; nothing else breaks. Then run the probe runbook above.
@@ -292,6 +297,7 @@ npx wrangler d1 execute DB --remote --command "DELETE FROM proposals WHERE title
 | `src/bridge.ts` | `/v1/models`, `/v1/chat/completions`, `BridgeWaitDO` |
 | `src/routing.ts` | The routing table, spoken and table routing, `/routing/models`, `/inbox/:id/route`, `/inbox/:id/dispatch` |
 | `migrations/0010_routing.sql` | Routing and dispatch columns on `inbox_items`, `approval_requests.stake_json` |
+| `migrations/0011_hermes.sql` | The mailbox agent `hermes`, with the dot's caps and the routes hermes↔t3 and hermes↔dot |
 | `src/inputs.ts` | `inputs_hash` |
 | `migrations/0009_hub.sql` | `devices`, `device_enroll_codes`, `approval_requests`, `approval_pushes`, `inbox_items`, `voice_notes`, `proposals.notify_channel`, the `bridge` mailbox agent |
 | `migrations/0008_mailbox.sql` | `mail_agents`, `mail_routes`, `mail_tasks`, `mail_wakes`, `mcp_subscriptions`, the wake triggers, seeded agents and routes, `mailbox_paused` |

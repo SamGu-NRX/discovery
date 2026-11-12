@@ -21,6 +21,7 @@ const ENV = { ...process.env, CI: "1", WRANGLER_SEND_METRICS: "false" };
 const LOCAL_SECRETS = [
   "ADMIN_TOKEN", "WEBSUB_SECRET", "INGEST_TOKEN", "RUNNER_TOKEN", "INBOX_TOKEN",
   "MAIL_DOT_TOKEN", "MAIL_T3_TOKEN", "MAIL_GROK_TOKEN", "MAIL_ROOM_TOKEN", "MAIL_T3_WAKE_SECRET", "MAIL_GROK_WAKE_KEY",
+  "MAIL_HERMES_TOKEN", "MAIL_HERMES_WAKE_SECRET",
   "BRIDGE_TOKEN", "GITHUB_PR_TOKEN", "GEMINI_API_KEY",
 ];
 
@@ -107,6 +108,7 @@ export async function startStack({ port, fixturePort, inspectorPort, logFile, pe
       // Mailbox wakes for t3 and grok land on the fixture's /hook/<name>.
       "--var", `MAIL_T3_WAKE_URL:http://127.0.0.1:${fixturePort}/hook/t3`,
       "--var", `MAIL_GROK_WAKE_URL:http://127.0.0.1:${fixturePort}/hook/grok`,
+      "--var", `MAIL_HERMES_WAKE_URL:http://127.0.0.1:${fixturePort}/hook/hermes`,
       // MCP Events callbacks may go to the fixture (a loopback http origin,
       // which only local dev can reach).
       "--var", `MAIL_CALLBACK_ORIGINS:http://127.0.0.1:${fixturePort}`,
