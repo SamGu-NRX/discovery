@@ -13,6 +13,7 @@ import { sha256Hex } from "./adapters";
 import { sameSecret, type Scope } from "./auth";
 import type { Env } from "./check";
 import { canonicalJson, fail, HttpError, intParam, json, oneOf, randomHex, readJson, readText, utcDayStart } from "./http";
+import { isKnowledgeTool, KNOWLEDGE_TOOLS, knowledgeTool } from "./knowledge/tools";
 import { dateLabel, esc, page } from "./proposals";
 
 // No run or incident backs these four numbers; they are first guesses from
@@ -797,6 +798,7 @@ const TOOLS = [
       additionalProperties: false,
     },
   },
+  ...KNOWLEDGE_TOOLS,
 ];
 
 // OpenAI reads securitySchemes on each tool; noauth means callable without
@@ -824,6 +826,7 @@ async function callTool(env: Env, ctx: ExecutionContext, agent: string, p: Recor
     else if (p.name === "mailbox_claim") structured = await claim(env, ctx, agent, args);
     else if (p.name === "mailbox_complete") structured = await complete(env, ctx, agent, args);
     else if (p.name === "mailbox_ack") structured = await ack(env, agent, args);
+    else if (isKnowledgeTool(p.name)) structured = await knowledgeTool(env, p.name, args);
     else throw new RpcError(-32602, `unknown tool ${JSON.stringify(p.name)}`);
   } catch (e) {
     // A refusal or a bad argument is a tool result the model can read and

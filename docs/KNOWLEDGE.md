@@ -23,6 +23,8 @@ This file is the interface between the Worker (`worker/src/knowledge/`), kworker
 
 `input_sha` for a step with several inputs (a batched gate call, an image plus a prompt) is the sha256 of the canonical JSON of the inputs, where each input is named by its own sha. The canonical JSON is the object with keys sorted at every depth and no whitespace.
 
+For a model call, the object is `{ "inputs": [<sha256 of each input blob, in request order>], "prompt_sha": <sha256 of the prompt's UTF-8>, "response_schema_sha": <sha256 of the response schema's canonical JSON> }`, with `response_schema_sha` left out when there is no schema. Shas are lowercase hex. `max_output_tokens` and the inputs' MIME types are not part of the key. `POST /k/model/run` computes exactly this, so kworker finds a Worker-made output under the same key, and the reverse.
+
 Tweets, `pbs.twimg.com` and `video.twimg.com` files, arXiv versions (`/abs/<id>v<n>`) and GitHub URLs pinned to a 40-hex commit never refetch (`immutable = 1`). Other pages are revalidated only when a job asks for it, by a conditional GET with the stored `etag` and `last_modified`.
 
 ### Canonical URL
@@ -34,6 +36,7 @@ Tweets, `pbs.twimg.com` and `video.twimg.com` files, arXiv versions (`/abs/<id>v
 3. Drop the query parameters `utm_*`, `fbclid`, `gclid`, `mc_cid`, `mc_eid`, `igshid`, `ref_src`, `ref_url`; on `x.com` also `s`, `t`, `ref`; on `www.youtube.com` also `si`, `feature`, `pp`. Sort the remaining parameters by name, keeping the order of repeated names. Keep their encoding as given.
 4. An empty path becomes `/`. On `x.com`, `/<user>/status/<id>/<anything>` becomes `/<user>/status/<id>` and the user part is lowercased. On `github.com` the owner and repo segments are lowercased and a `.git` suffix on the repo is dropped. `arxiv.org/pdf/<id>[.pdf]` becomes `arxiv.org/abs/<id>`.
 5. Nothing else changes. `http` stays `http`: whether a site redirects is the fetch's business, and the redirect target is recorded as `final_url`.
+6. Parsing, where the rules above leave room: anything but an absolute `http` or `https` URL with a host is not canonicalized (the Worker reports it as not a URL). The query is split on `&` and empty parts are dropped. A parameter's name is the text before its first `=`, compared as written (case-sensitive, not percent-decoded), and names sort by Unicode code point. On `youtu.be` the id is the first path segment, and `v=<id>` joins the other parameters before they are filtered and sorted. On `github.com` only the first two path segments change.
 
 ## D1 tables (`worker/migrations/0020_knowledge.sql`)
 
@@ -50,44 +53,45 @@ Migration numbers start at 0020 because the `hub` branch takes 0009 onward. The 
 
 ## Routes
 
-All routes take `Authorization: Bearer <KNOWLEDGE_TOKEN>` (scope `kworker`); `ADMIN_TOKEN` may call them too. Bodies are JSON unless stated. Every 4xx body is `{ "error": "<machine_code>", "message": "<one sentence naming the field>" }`.
+All routes take `Authorization: Bearer <KNOWLEDGE_TOKEN>` (scope `kworker`); `ADMIN_TOKEN` may call them too. Bodies are JSON unless stated. Every 4xx body on `/k/`, and every 502, 503 and 504 the Worker raises on purpose, is `{ "error": "<machine_code>", "message": "<one sentence naming the field>" }`, including 401 `unauthorized`, 403 `forbidden` and 405 `method_not_allowed` from the shared router; an unexpected error is `{ "error": "internal error", "request_id" }` as on every route. A bad field is 400 `invalid_request`, an over-limit body 413 `too_large`, and a row naming a blob that does not exist 422 `blob_missing`. Each JSON body has a byte limit sized for its batch: 4 KiB for claims, heartbeats, commits and domain policy; 16 KiB for `has` and fetch lookups; 32 KiB for derivation lookups; 48 KiB for job creation and completion (payload and result at most 32 KiB each); 64 KiB for derivations; 128 KiB for verdict lookups and model runs (prompt at most 64 KiB, response schema 16 KiB); 160 KiB for bundles; 512 KiB for fetches and verdicts.
 
 ### Blobs
 
-- `PUT /k/blobs/:sha256` with the raw bytes, `Content-Type` and `Content-Length` (at most 95 MiB). The Worker streams the body into R2 with R2's own SHA-256 check, so it never hashes the bytes itself, then inserts the row. 201 `{ sha256, size, mime, r2_key, created: true }`; 200 with `created: false` if the blob exists (the body is not read). A hash mismatch is 422 `hash_mismatch` and nothing is stored.
+- `PUT /k/blobs/:sha256` with the raw bytes, `Content-Type` and `Content-Length` (at most 95 MiB). The Worker streams the body into R2 with R2's own SHA-256 check, so it never hashes the bytes itself, then inserts the row. 201 `{ sha256, size, mime, r2_key, created: true }`; 200 with `created: false` if the blob exists (the body is not read). A hash mismatch is 422 `hash_mismatch` and nothing is stored. A missing Content-Length is 411 `length_required`, because R2 refuses a stream of unknown length.
 - `POST /k/blobs/commit { sha256, mime }` after kworker uploaded `sha256/<hex>` through R2's S3 API with `x-amz-checksum-sha256`. The Worker reads the object's metadata and inserts the row only if R2 recorded that SHA-256 checksum. 409 `checksum_missing` if R2 has no checksum, 422 `hash_mismatch` if it differs, 404 `object_missing` if there is no object.
 - `POST /k/blobs/has { sha256s: [≤100] }` → `{ present: [sha256…] }`.
-- `GET /k/blobs/:sha256` streams the bytes with the stored `Content-Type`; `Range: bytes=a-b` gives 206.
+- `GET /k/blobs/:sha256` streams the bytes with the stored `Content-Type`; `Range: bytes=a-b` (or `a-`, or `-n`) gives 206, and a range outside the blob 416. An object with no `blobs` row (an S3 upload not yet committed) is not served.
 
 kworker sends blobs up to 8 MiB through `PUT`, and larger ones through the S3 API when `R2_S3_ENDPOINT`, `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY` are set. Without them it refuses a large blob, unless `KWORKER_LARGE_VIA_WORKER=1`, which is for local `wrangler dev` (no S3 API there).
 
 ### Fetches, derivations, verdicts
 
 - `POST /k/fetches/lookup { url_hashes: [≤100] }` → `{ fetches: [row…] }`.
-- `POST /k/fetches { rows: [≤50] }` upserts by `url_hash`. Each row needs `url_hash` (64 hex, and equal to sha256 of `canonical_url`), `canonical_url`, `rung` (0–7), `status`; `content_sha`, when given, must name an existing blob.
+- `POST /k/fetches { rows: [≤50] }` upserts by `url_hash`. Each row needs `url_hash` (64 hex, and equal to sha256 of `canonical_url`), `canonical_url`, `rung` (0–7), `status`; `content_sha`, when given, must name an existing blob. `fetched_at` defaults to now. → `{ upserted }`.
 - `POST /k/derivations/lookup { keys: [{ input_sha, step }…≤100] }` → `{ derivations: [row…] }`, every provider and version for each pair; kworker picks the one its capability order wants.
-- `POST /k/derivations { rows: [≤50] }` inserts, ignoring duplicates. `output_sha` must name an existing blob.
-- `POST /k/verdicts { rows: [≤200] }` inserts, ignoring duplicates; `POST /k/verdicts/lookup { gate_v, items: [{ item_kind, item_id }…≤200] }` → `{ verdicts: [row…] }`.
+- `POST /k/derivations { rows: [≤50] }` inserts, ignoring duplicates. `output_sha` must name an existing blob. → `{ inserted }`. The Worker sets `created_at`, since `used_today` counts by it.
+- `POST /k/verdicts { rows: [≤200] }` inserts, ignoring duplicates (→ `{ inserted }`, `created_at` set by the Worker); `POST /k/verdicts/lookup { gate_v, items: [{ item_kind, item_id }…≤200] }` → `{ verdicts: [row…] }`.
 
 ### Jobs
 
 Kinds: `save`, `link`, `image`, `video`, `bundle`. The lease pattern is the one in `worker/src/candidates.ts`: a claim leases with a fresh random `lease_token`, an expired lease can be claimed again with a new token, completing needs the current token, and the third expired lease fails the job.
 
-- `POST /k/jobs { kind, key, payload, deps?, again? }` creates a job, or returns the existing `(kind, key)` row (200, `created: false`). `deps` lists job ids that must be `done` or `failed` before this one can be claimed. `again: true` on a `done` or `failed` job puts it back to `queued` with the new payload and deps and adds one to `runs`; on a queued or claimed job it changes nothing.
+- `POST /k/jobs { kind, key, payload, deps?, again? }` creates a job (201), or returns the existing `(kind, key)` row (200, `created: false`). Both answer `{ created, requeued, job }`. `deps` lists job ids that must be `done` or `failed` before this one can be claimed; an id that names no job is 422 `unknown_dep`. `runs` starts at 1. `again: true` on a `done` or `failed` job puts it back to `queued` with the new payload and deps, adds one to `runs`, clears `result`, `error` and `expired_leases`, and answers `requeued: true`; on a queued or claimed job it changes nothing.
 - `POST /k/jobs/claim { owner, kinds: [], ttl_s ≤ 3600, limit ≤ 10 }` → `{ jobs: [{ id, kind, key, payload, lease_token, lease_until, attempts, runs }] }`.
-- `POST /k/jobs/:id/heartbeat { owner, lease_token, ttl_s }` extends a live lease.
-- `POST /k/jobs/:id/complete { owner, lease_token, state: "done"|"failed"|"queued", result?, error? }`. `queued` hands the job back without a final state.
+- `POST /k/jobs/:id/heartbeat { owner, lease_token, ttl_s }` sets the lease to end `ttl_s` from now while `lease_token` is the current one, which includes an expired lease nobody has claimed again. → `{ id, lease_until }`.
+- `POST /k/jobs/:id/complete { owner, lease_token, state: "done"|"failed"|"queued", result?, error? }`. → the job row. `queued` hands the job back without a final state, clearing the owner and keeping `attempts`. Heartbeat and complete answer 409 `lease_lost` when the token is not the current lease, and 404 `job_missing` for an unknown id.
 - `GET /k/jobs?kind=&state=&key=` lists up to 200 rows, newest first, without lease tokens.
 
 ### Bundles
 
-- `POST /k/bundles { post_id, md_sha, json_sha, completeness: "complete"|"partial", missing: [], saved_by: [], author, search_text }`. Both shas must name blobs. If `json_sha` equals the latest version's, nothing changes (200, `created: false`). Otherwise the Worker assigns the next version, copies the two blobs to `bundles/<post_id>/v<n>.md` and `.json`, and replaces the post's `bundle_search` row with `search_text` (at most 64 KiB). 201 `{ post_id, version, r2_key, json_key }`.
+- `POST /k/bundles { post_id, md_sha, json_sha, completeness: "complete"|"partial", missing: [], saved_by: [], author, search_text }`. Both shas must name blobs. If `json_sha` equals the latest version's, nothing changes (200, `created: false`). Otherwise the Worker assigns the next version, copies the two blobs to `bundles/<post_id>/v<n>.md` and `.json`, and replaces the post's `bundle_search` row with `search_text` (at most 64 KiB). 201 `{ created: true, post_id, version, r2_key, json_key }`. `post_id` is the numeric post id as a string; it is also the search row's rowid. If another registration for the same post takes the version first, the answer is 409 `version_conflict` and the caller sends again.
 - `GET /k/bundles/:post_id` → the latest version's row.
 
 ### Capabilities, model calls, domain policy
 
 - `GET /k/capabilities?step=` → `{ capabilities: [row…] }` in rank order, each with `available` (for `runs_on = "worker"`, whether the Worker has the provider's secret) and `used_today` (derivations created this UTC day for that provider and model).
-- `POST /k/model/run { step, provider, model, prompt_v, prompt, inputs: [{ sha256, mime }], response_schema?, max_output_tokens? }` runs a Worker-side adapter (Gemini) on blobs already in R2. It first looks up the derivation; on a miss it calls the model, stores the output as a blob and records the derivation. → `{ output_sha, output, cached, usage: { input_tokens, output_tokens } }`. 503 `capability_unavailable` when the secret is unset; 429 `quota_exhausted` at `quota_per_day`.
+- `POST /k/model/run { step, provider, model, prompt_v, prompt, inputs: [{ sha256, mime }], response_schema?, max_output_tokens? }` runs a Worker-side adapter (Gemini) on blobs already in R2. It first looks up the derivation; on a miss it calls the model, stores the output text as an `application/json` blob and records the derivation. → `{ output_sha, output, cached, usage: { input_tokens, output_tokens } }`. A cached answer needs no key. 422 `capability_unknown` unless `(step, provider, model)` is a `runs_on = "worker"` capability; 503 `capability_unavailable` when the secret is unset or the row is disabled; 429 `quota_exhausted` at `quota_per_day`, or when Gemini itself answers 429; 502 `model_error` for any other Gemini failure, including a `finishReason` other than `STOP`, which is not cached.
+  - Gemini was written from Google's API docs and tested only against the stand-in in `worker/fixtures/server.mjs`, never the real API. At most 8 inputs. Inputs go inline as base64, in order, while their running total stays within 512 KiB; the rest go through the Files API resumable upload, streamed from R2, and are deleted afterwards. At most 2 inputs may need the Files API, and each waits at most 20 status checks 2 s apart for `ACTIVE` (504 `model_timeout`), which keeps a call under the 50 subrequests of Workers Free.
 - `POST /embed` (existing, Workers AI `bge-base-en-v1.5`) and `GET /positives` are also open to the `kworker` scope.
 - `GET /k/domain-policy?host=` → `{ policy: row|null }`; `POST /k/domain-policy { host, start_rung, notes }` upserts.
 
@@ -137,10 +141,12 @@ Every generated block carries `by: { provider, model, prompt_v }`. Code-produced
 
 ## Agent tools (mailbox MCP endpoint, read-only)
 
-- `knowledge_has { ids?: [post id], urls?: [url] }` → for each id the latest bundle version or null; for each URL its canonical form and its `fetches` status or null.
-- `knowledge_search { query, k ≤ 20 }` → FTS5 matches over bundles: `post_id`, author, version, snippet.
-- `knowledge_bundle { post_id, sections?: ["front","post","thread","quoted","replies","media","links","repos","markdown"] }` → those sections of the latest bundle, at most 48 KiB, with `truncated` set when cut.
-- `knowledge_blob { key, offset?, length ≤ 65536 }` → part of a blob by `sha256/<hex>` or bare hex: text for `text/*` and JSON, base64 otherwise.
+Fields holding text from posts, pages or models end in `_untrusted`, the mailbox endpoint's marker for data an agent must not take instructions from.
+
+- `knowledge_has { ids?: [post id ≤50], urls?: [url ≤50] }` → `{ ids: [{ id, version, completeness }], urls: [{ url, canonical_url, fetch: { status, rung, final_url, fetched_at } | null }] }`. `version` is null for a post without a bundle; `canonical_url` is null, with an `error`, for anything that is not an http(s) URL.
+- `knowledge_search { query, k ≤ 20 }` → `{ results: [{ post_id, version, author_untrusted, snippet_untrusted }] }`, best first. Each word of the query is matched as a term and every word must match; FTS5 operators are not interpreted.
+- `knowledge_bundle { post_id, sections?: ["front","post","thread","quoted","replies","media","links","repos","markdown"] }` → `{ post_id, version, completeness, r2_key, json_key, sections_untrusted: {…}, truncated, omitted }`, at most 48 KiB of sections. Without `sections`, every section but `markdown`. A section that does not fit keeps its leading items (arrays) or leading text (strings), or is listed in `omitted`. A bundle.json over 1 MiB is refused with a pointer to `knowledge_blob`.
+- `knowledge_blob { key, offset?, length ≤ 65536 }` → `{ key, mime, size, offset, length, next_offset, encoding: "utf8"|"base64", data_untrusted }` for part of a blob by `sha256/<hex>` or bare hex: text for `text/*` and JSON, base64 otherwise.
 
 ## Deployment (the lead, from the MacBook)
 

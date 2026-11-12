@@ -14,12 +14,12 @@ Results and raw logs are in [EVIDENCE.md](EVIDENCE.md).
 
 ```sh
 npm install
-npm test                         # 46 tests against real wrangler dev stacks and the fixture server
+npm test                         # 60 tests against real wrangler dev stacks and the fixture server
 python3 scripts/mutation-check.py # breaks the code many ways, one at a time; every break must fail a test
 npm run evidence                 # live sources plus the fixture phases, about 2 min; writes evidence/<timestamp>/
 ```
 
-If `.dev.vars` lacks any token or secret the harness needs (`ADMIN_TOKEN`, `WEBSUB_SECRET`, `INGEST_TOKEN`, `RUNNER_TOKEN`, `INBOX_TOKEN` and the `MAIL_*` ones below), the harness adds it with a random local value. The harness points `T3_APPROVALS_WEBHOOK_URL` and the mailbox wake URLs at the fixture server, so no test reaches T3 or GrokBot. No test calls `/embed`, because the `AI` binding always reaches the real Workers AI service, even in `wrangler dev`.
+If `.dev.vars` lacks any token or secret the harness needs (`ADMIN_TOKEN`, `WEBSUB_SECRET`, `INGEST_TOKEN`, `RUNNER_TOKEN`, `INBOX_TOKEN`, `KNOWLEDGE_TOKEN` and the `MAIL_*` ones below), the harness adds it with a random local value. The harness points `T3_APPROVALS_WEBHOOK_URL`, the mailbox wake URLs and `GEMINI_BASE_URL` at the fixture server, so no test reaches T3, GrokBot or Google; it sets `GEMINI_API_KEY` to a fixture value, or to empty with `gemini: false`. The harness runs wrangler through `node`, so it also works on Windows. No test calls `/embed`, because the `AI` binding always reaches the real Workers AI service, even in `wrangler dev`.
 
 `node scripts/rehearse-production.mjs` runs the production watcher list (`scripts/production-watchers.json`) against the real sources in local wrangler dev. It makes about two requests per source.
 
@@ -57,6 +57,7 @@ No secret is printed. Then `node scripts/verify-production.mjs <base-url> ~/.age
 | `discovery-mail-t3-token` | `MAIL_T3_TOKEN` | T3 on the Zephyrus | `POST /mcp`, `POST /mail/tasks`, `POST /mail/claim`, `POST /mail/ack`, `POST /mail/tasks/:id/complete` |
 | `discovery-mail-grok-token` | `MAIL_GROK_TOKEN` | GrokBot | the same routes; it can claim and complete but has no route to send on |
 | `discovery-mail-room-token` | `MAIL_ROOM_TOKEN` | Sam | `GET /room/:token` |
+| `discovery-knowledge` | `KNOWLEDGE_TOKEN` | kworker | `/k/*`, `POST /embed`, `GET /positives` |
 
 **Routes.** All bodies are JSON. Times the Worker sets are epoch milliseconds; `since` parameters take ISO or milliseconds.
 
@@ -96,6 +97,8 @@ No secret is printed. Then `node scripts/verify-production.mjs <base-url> ~/.age
 **Pause approvals.** `POST /admin/notifications/pause` with `{"paused":true}` or `{"paused":false}`. Production is paused. `GET /admin/notifications` shows today's count against the cap, recent approval notifications, and the watcher notifications from before v2.
 
 **Turn on approval notifications.** Write the webhook URL to `~/.agent-secrets/discovery-t3-approvals-webhook-url` (mode 600), run `npx wrangler secret put T3_APPROVALS_WEBHOOK_URL < ~/.agent-secrets/discovery-t3-approvals-webhook-url`, then unpause.
+
+**Knowledge store.** `src/knowledge/` and `migrations/0020_knowledge.sql` implement `docs/KNOWLEDGE.md`, which holds the routes, tables, cache keys and deployment steps (R2 bucket `x-knowledge` bound as `KNOWLEDGE`, secrets `KNOWLEDGE_TOKEN` and optional `GEMINI_API_KEY`). `scripts/deploy-production.sh` does not create the bucket or set those secrets yet. The Gemini adapter has been tested only against the fixture's stand-in, not Google's API.
 
 **Mailbox.** The contract's "Mailbox" section has the rules. Here is how they are built (`src/mailbox.ts`, `migrations/0008_mailbox.sql`).
 
