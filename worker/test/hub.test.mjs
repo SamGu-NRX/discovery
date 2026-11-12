@@ -76,6 +76,12 @@ const refusedBy = async (p, status, code) => {
   assert.equal(typeof r.body.message, "string");
   return r.body;
 };
+// A malformed field on an app route: code bad_request, the field named first.
+const badField = (r, field) => {
+  assert.equal(r.status, 400, JSON.stringify(r.body));
+  assert.equal(r.body.error, "bad_request", JSON.stringify(r.body));
+  assert.match(r.body.message, field);
+};
 // ISO 8601 UTC with whole seconds, the app's wire format.
 const ISO_UTC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;
 
@@ -137,12 +143,9 @@ test("enrollment: a code works once, within 10 minutes, is stored only as a hash
   const rsa = generateKeyPairSync("rsa", { modulusLength: 2048 }).publicKey.export({ type: "spki", format: "der" }).toString("base64");
   const p384 = generateKeyPairSync("ec", { namedCurve: "P-384" }).publicKey.export({ type: "spki", format: "der" }).toString("base64");
   for (const key of [rsa, p384, "bm90IGEga2V5"]) {
-    const r = await req("none", "POST", "/devices/enroll", { ...d.body, code, public_key_spki_b64: key });
-    assert.equal(r.status, 400);
-    assert.match(r.body.error, /^public_key_spki_b64 /);
+    badField(await req("none", "POST", "/devices/enroll", { ...d.body, code, public_key_spki_b64: key }), /^public_key_spki_b64 /);
   }
-  const extra = await req("none", "POST", "/devices/enroll", { ...d.body, code, admin: true });
-  assert.match(extra.body.error, /^body\.admin is not a field/);
+  badField(await req("none", "POST", "/devices/enroll", { ...d.body, code, admin: true }), /^body\.admin is not a field/);
   // The refusals above spent nothing; the code is lower-case and unspaced here.
   await s.d1(`UPDATE device_enroll_codes SET expires_at = 1 WHERE code_hash = '${createHash("sha256").update(plain).digest("hex")}'`);
   assert.equal((await req("none", "POST", "/devices/enroll", { ...d.body, code: plain.toLowerCase() })).status, 403, "an expired code");
@@ -162,15 +165,15 @@ test("a device updates only its own push and Live Activity tokens, and may revok
   await ok(req(other.bearer, "POST", `/devices/${other.id}/apns-token`, { apns_token: fresh.toUpperCase(), apns_env: "development" }));
   assert.deepEqual(await s.d1(`SELECT apns_token FROM devices WHERE id = '${other.id}'`), [{ apns_token: fresh }]);
   other.apns = fresh;
-  assert.match((await req(other.bearer, "POST", `/devices/${other.id}/apns-token`, { apns_token: "xyz", apns_env: "development" })).body.error, /^apns_token /);
-  assert.match((await req(other.bearer, "POST", `/devices/${other.id}/apns-token`, { apns_token: fresh })).body.error, /^apns_env /);
+  badField(await req(other.bearer, "POST", `/devices/${other.id}/apns-token`, { apns_token: "xyz", apns_env: "development" }), /^apns_token /);
+  badField(await req(other.bearer, "POST", `/devices/${other.id}/apns-token`, { apns_token: fresh }), /^apns_env /);
 
   const start = randomBytes(40).toString("hex");
   assert.equal((await req(other.bearer, "POST", `/devices/${devices.phone.id}/live-activity-token`, { push_to_start_token: start, apns_env: "development" })).status, 403);
   const la = await ok(req(other.bearer, "POST", `/devices/${other.id}/live-activity-token`, { push_to_start_token: start, apns_env: "development" }));
   assert.match(la.updated_at, ISO_UTC);
   assert.deepEqual(await s.d1(`SELECT push_to_start_token, push_to_start_env FROM devices WHERE id = '${other.id}'`), [{ push_to_start_token: start, push_to_start_env: "development" }]);
-  assert.match((await req(other.bearer, "POST", `/devices/${other.id}/live-activity-token`, { push_to_start_token: "zz", apns_env: "development" })).body.error, /^push_to_start_token /);
+  badField(await req(other.bearer, "POST", `/devices/${other.id}/live-activity-token`, { push_to_start_token: "zz", apns_env: "development" }), /^push_to_start_token /);
 
   // A device token revokes its own device and nothing else.
   const spare = await enrollDevice("spare");
@@ -199,11 +202,17 @@ test("an irreversible proposal sends every live device a time-sensitive APPROVAL
     inputs_hash: r.inputs_hash,
     nonce: r.nonce,
     expires_at: r.expires_at,
+    stake: r.stake,
   });
   assert.match(r.nonce, /^[0-9a-f]{32}$/);
   assert.match(r.created_at, ISO_UTC);
   assert.match(r.expires_at, ISO_UTC);
-  assert.deepEqual(Object.keys(x.body).sort(), ["aps", "expires_at", "inputs_hash", "nonce", "request_id"], "custom keys at the top level, next to aps");
+  assert.deepEqual(Object.keys(x.body).sort(), ["aps", "expires_at", "inputs_hash", "nonce", "request_id", "stake"], "custom keys at the top level, next to aps");
+  const filed = (await s.d1(`SELECT inputs_json FROM proposals WHERE id = '${p.id}'`))[0];
+  const inputs = JSON.parse(filed.inputs_json);
+  assert.deepEqual(r.stake, { kind: "pr", repo: inputs.repo, head: inputs.head_branch, base: "main", files: 1 });
+  assert.deepEqual(x.body.stake, r.stake);
+  assert.ok(Buffer.byteLength(JSON.stringify(x.body)) <= 4096);
   assert.ok(r.body.split("\n").length <= 3);
   assert.match(r.body, /SamGu-NRX\/discovery: agent\/hub-\d+-\d+ into main/);
   assert.equal(x.headers["apns-topic"], APNS.APNS_TOPIC);
@@ -432,6 +441,130 @@ test("a request whose proposal stopped waiting is refused as request_not_pending
   assert.equal((await ok(req("admin", "GET", `/approvals/${r.id}`))).state, "pending");
 });
 
+test("the stake comes from the inputs the hash binds, in exact shapes only: a pushed branch has no file count, a payment its amount and payee", async () => {
+  const pushed = await ok(proposal(prInputs({ files: undefined, head_branch: "agent/pushed", head_sha: createHash("sha1").update("pushed").digest("hex"), title: "stake pushed" })), 201);
+  assert.deepEqual((await requestFor(pushed.id)).stake, { kind: "pr", repo: "SamGu-NRX/discovery", head: "agent/pushed", base: "main" });
+
+  const pay = await ok(
+    proposal({ amount: "1240.50", currency: "USD", recipient: { name: "Cloudflare", handle: "@cloudflare", avatar_url: "https://avatars.example/cf.png" }, card_last4: "4417" }, "pay", "Pay the Workers invoice"),
+    201,
+  );
+  assert.deepEqual((await requestFor(pay.id)).stake, {
+    kind: "pay",
+    amount: "1240.50",
+    currency: "USD",
+    recipient: { name: "Cloudflare", handle: "@cloudflare", avatar_url: "https://avatars.example/cf.png" },
+  });
+  // A number for amount, a lower-case currency and a non-https avatar are left out, not repaired.
+  const loose = await ok(proposal({ amount: 12.5, currency: "usd", recipient: { name: "Ana", avatar_url: "http://x.example/a.png" } }, "pay", "Pay Ana"), 201);
+  assert.deepEqual((await requestFor(loose.id)).stake, { kind: "pay", recipient: { name: "Ana" } });
+  const sendTo = await ok(proposal({ recipient: { name: "Radix recruiter" }, amount: "5" }, "send", "Send the follow-up"), 201);
+  assert.deepEqual((await requestFor(sendTo.id)).stake, { kind: "send", recipient: { name: "Radix recruiter" } }, "only a payment has an amount");
+  const post = await ok(proposal({ text: "launch" }, "post", "Post the launch thread"), 201);
+  assert.deepEqual((await requestFor(post.id)).stake, { kind: "other" });
+});
+
+// ---- routing ----
+
+const routed = async (kind, text) => (await ok(req(devices.phone.bearer, "POST", "/inbox", { kind, text }), 201));
+
+test("a thought is routed when filed: a model and effort named first are spoken, otherwise the table's rule for its kind decides", async () => {
+  const spoken = await routed("task", "Opus high, refactor the discovery mailbox leases");
+  assert.match(spoken.id, /^i_[0-9a-f]{16}$/);
+  assert.deepEqual(spoken.routing, { agent: "t3", model: "opus", effort: "high", project: "discovery", kind: "task", source: "spoken" });
+  assert.deepEqual((await routed("direction", "Sol on max: tighten the Nod widget")).routing, { agent: "t3", model: "sol", effort: "max", project: "nod", kind: "direction", source: "spoken" });
+  assert.deepEqual((await routed("direction", "Extra high. Look at the worker errors")).routing, { agent: "t3", model: "opus", effort: "xhigh", project: "discovery", kind: "direction", source: "spoken" }, "an effort alone keeps the rule's model");
+  assert.deepEqual((await routed("thought", "High time we cleaned the garage")).routing, { agent: "dot", model: "chatgpt", effort: "medium", project: null, kind: "thought", source: "table" }, "a sentence that starts with an effort word names nothing");
+  assert.deepEqual((await routed("task", "Opus, make the room page faster")).routing.effort, "high", "a spoken model without an effort takes the rule's");
+  assert.equal((await routed("reply", "Yes, go ahead")).routing, undefined, "a reply isn't routed");
+  assert.equal((await ok(req("mail_dot", "POST", "/inbox", { kind: "agent_push", text: "News." }), 201)).routing, undefined, "an agent's post isn't routed");
+});
+
+test("GET /routing/models publishes the agents, models, efforts, projects and rules; POST /admin/routing replaces them after checking them", async () => {
+  const t = await ok(req(devices.phone.bearer, "GET", "/routing/models"));
+  assert.deepEqual(t.efforts, ["low", "medium", "high", "xhigh", "max"]);
+  assert.deepEqual(t.kinds, ["thought", "direction", "task", "reply"]);
+  assert.deepEqual(t.agents.map((a) => a.id), ["t3", "dot"]);
+  assert.deepEqual(t.agents[0].models.map((m) => m.id), ["opus", "sonnet", "haiku", "fable", "sol", "astra", "luna"]);
+  assert.deepEqual(t.rules.at(-1).when, {});
+  assert.equal((await req("mail_t3", "GET", "/routing/models")).status, 403);
+  assert.equal((await req(devices.phone.bearer, "POST", "/admin/routing", t)).status, 403);
+
+  const table = { agents: t.agents, projects: t.projects, rules: [{ when: { kind: "thought" }, agent: "t3", model: "sonnet", effort: "low" }, ...t.rules] };
+  for (const [bad, field] of [
+    [{ ...table, rules: table.rules.slice(0, 1) }, /^the last rule must match everything/],
+    [{ ...table, rules: [{ when: {}, agent: "dot", model: "opus", effort: "high" }] }, /^rules\[0\] must name an agent and one of its models/],
+    [{ ...table, agents: [{ ...t.agents[0], id: "grok" }] }, /^agents\[0\]\.id /],
+  ]) {
+    // An admin route: its 400 is the sentence form.
+    const r = await req("admin", "POST", "/admin/routing", bad);
+    assert.equal(r.status, 400);
+    assert.match(r.body.error, field);
+  }
+  await ok(req("admin", "POST", "/admin/routing", table));
+  try {
+    assert.deepEqual((await routed("thought", "Remember the dentist")).routing, { agent: "t3", model: "sonnet", effort: "low", project: null, kind: "thought", source: "table" });
+  } finally {
+    await ok(req("admin", "POST", "/admin/routing", { agents: t.agents, projects: t.projects, rules: t.rules }));
+  }
+});
+
+test("POST /inbox/:id/route stores a correction checked against the table and answers it as stored", async () => {
+  const item = await routed("task", "Refactor the reel exporter");
+  const route = (body, token = devices.phone.bearer) => req(token, "POST", `/inbox/${item.id}/route`, body);
+  const good = { agent: "t3", model: "astra", effort: "xhigh", project: null, kind: "task" };
+  assert.deepEqual((await ok(route(good))).routing, { ...good, source: "spoken" });
+  assert.deepEqual(JSON.parse((await s.d1(`SELECT routing_json FROM inbox_items WHERE id = '${item.id}'`))[0].routing_json), good);
+  badField(await route({ ...good, agent: "grok" }), /^agent must be one of t3\|dot/);
+  badField(await route({ ...good, agent: "dot" }), /^model must be one of dot's models/);
+  badField(await route({ ...good, effort: "turbo" }), /^effort must be one of/);
+  badField(await route({ ...good, project: "Reel Exporter" }), /^project /);
+  badField(await route({ ...good, kind: "agent_push" }), /^kind /);
+  badField(await route({ ...good, source: "table" }), /^source is not a routing field/);
+  const news = await ok(req("mail_dot", "POST", "/inbox", { kind: "agent_push", text: "Agent news." }), 201);
+  const notMine = await req(devices.phone.bearer, "POST", `/inbox/${news.id}/route`, good);
+  assert.deepEqual([notMine.status, notMine.body.error], [409, "not_routable"]);
+  const missing = await req(devices.phone.bearer, "POST", "/inbox/i_0000000000000000/route", good);
+  assert.deepEqual([missing.status, missing.body.error], [404, "inbox_item_not_found"]);
+});
+
+test("dispatch files one mailbox task from sam to the routing's agent; a repeat, a racing second call or a later correction gets already_dispatched", async () => {
+  const item = await routed("task", "Opus high, refactor the discovery mailbox leases");
+  const dispatchIt = () => req(devices.phone.bearer, "POST", `/inbox/${item.id}/dispatch`);
+  // The mailbox starts paused: the refusal is coded and nothing is marked.
+  const paused = await dispatchIt();
+  assert.deepEqual([paused.status, paused.body.error], [423, "paused"]);
+  assert.deepEqual(await s.d1(`SELECT dispatched_at IS NULL AS open FROM inbox_items WHERE id = '${item.id}'`), [{ open: 1 }]);
+
+  await s.call("POST", "/admin/mailbox/pause", { paused: false });
+  try {
+    const [a, b] = await Promise.all([dispatchIt(), dispatchIt()]);
+    assert.deepEqual([a.status, b.status].sort(), [200, 409]);
+    const won = a.status === 200 ? a.body : b.body;
+    assert.equal((a.status === 409 ? a : b).body.error, "already_dispatched");
+    assert.equal(won.agent, "t3");
+    assert.match(won.dispatched_at, ISO_UTC);
+    const tasks = await s.d1(`SELECT id, from_agent, to_agent, body FROM mail_tasks WHERE idempotency_key = 'inbox-${item.id}'`);
+    assert.equal(tasks.length, 1, "one task for both calls");
+    assert.equal(tasks[0].id, won.task_id);
+    assert.deepEqual([tasks[0].from_agent, tasks[0].to_agent], ["sam", "t3"]);
+    assert.ok(tasks[0].body.endsWith("\n\nOpus high, refactor the discovery mailbox leases"), "Sam's words, unchanged, after the routing line");
+    assert.match(tasks[0].body, /model opus, effort high/);
+    assert.equal((await dispatchIt()).body.error, "already_dispatched");
+    const late = await req(devices.phone.bearer, "POST", `/inbox/${item.id}/route`, { agent: "dot", model: "chatgpt", effort: "low", project: null, kind: "task" });
+    assert.deepEqual([late.status, late.body.error], [409, "already_dispatched"]);
+
+    // A corrected routing is the one dispatched.
+    const fixed = await routed("thought", "Think about the brief wording");
+    await ok(req(devices.phone.bearer, "POST", `/inbox/${fixed.id}/route`, { agent: "t3", model: "fable", effort: "max", project: "nod", kind: "task" }));
+    const sent = await ok(req(devices.phone.bearer, "POST", `/inbox/${fixed.id}/dispatch`));
+    assert.equal(sent.agent, "t3");
+    assert.match((await s.d1(`SELECT body FROM mail_tasks WHERE id = '${sent.task_id}'`))[0].body, /\(inbox item i_[0-9a-f]+, task, project nod\)\. Sam's routing: model fable, effort max\./);
+  } finally {
+    await s.call("POST", "/admin/mailbox/pause", { paused: true });
+  }
+});
+
 // ---- inbox ----
 
 test("POST /inbox stores the text verbatim with the token's source; kinds follow the source and every bad field is named", async () => {
@@ -445,9 +578,7 @@ test("POST /inbox stores the text verbatim with the token's source; kinds follow
 
   // An agent can't pass for Sam.
   for (const kind of ["thought", "direction", "task"]) {
-    const r = await req("mail_t3", "POST", "/inbox", { kind, text: "do it" });
-    assert.equal(r.status, 400);
-    assert.match(r.body.error, /^kind /);
+    badField(await req("mail_t3", "POST", "/inbox", { kind, text: "do it" }), /^kind /);
   }
   assert.equal((await req(devices.phone.bearer, "POST", "/inbox", { kind: "agent_push", text: "x" })).status, 400);
   const cases = [
@@ -460,12 +591,14 @@ test("POST /inbox stores the text verbatim with the token's source; kinds follow
     [{ kind: "thought", text: "x", when: 1 }, /^body\.when /],
   ];
   for (const [body, error] of cases) {
-    const r = await req(devices.phone.bearer, "POST", "/inbox", body);
-    assert.equal(r.status, 400, JSON.stringify(body));
-    assert.match(r.body.error, error);
+    badField(await req(devices.phone.bearer, "POST", "/inbox", body), error);
   }
   const leak = await req("mail_dot", "POST", "/inbox", { kind: "agent_push", text: `see ${"ab".repeat(32)}` });
   assert.equal(leak.status, 422);
+  assert.equal(leak.body.error, "capability_leak");
+  const noToken = await req({ bearer: "f".repeat(64) }, "GET", "/brief");
+  assert.deepEqual([noToken.status, noToken.body.error], [401, "unauthorized"]);
+  assert.equal(typeof noToken.body.message, "string");
   for (const token of ["runner", "ingest", "inbox", "bridge"]) assert.equal((await req(token, "POST", "/inbox", { kind: "thought", text: "x" })).status, 403, token);
 });
 
@@ -539,7 +672,7 @@ const voice = (token, bytes, headers = {}) =>
   });
 
 test("a voice note is stored and answered at once, then transcribed with Gemini and filed as a thought with its audio_id", async () => {
-  await s.control("gemini-set", { status: 200, transcript: "Remember to ship the hub branch." });
+  await s.control("gemini-set", { status: 200, transcript: "Opus high, ship the discovery hub branch." });
   const audio = randomBytes(64 * 1024);
   const res = await voice(devices.phone.bearer, audio);
   assert.equal(res.status, 201);
@@ -549,10 +682,17 @@ test("a voice note is stored and answered at once, then transcribed with Gemini 
     const v = await ok(req(devices.phone.bearer, "GET", `/voice/${audio_id}`));
     return v.state === "done" && v;
   }, "the transcription");
-  assert.deepEqual(done, { state: "done", transcript: "Remember to ship the hub branch." });
-  assert.deepEqual(await s.d1(`SELECT kind, source, audio_id, text FROM inbox_items WHERE audio_id = '${audio_id}'`), [
-    { kind: "thought", source: `device:${devices.phone.id}`, audio_id, text: "Remember to ship the hub branch." },
-  ]);
+  const [filed] = await s.d1(`SELECT id, kind, source, audio_id, text FROM inbox_items WHERE audio_id = '${audio_id}'`);
+  assert.deepEqual(filed, { id: done.inbox_id, kind: "thought", source: `device:${devices.phone.id}`, audio_id, text: "Opus high, ship the discovery hub branch." });
+  assert.deepEqual(done, {
+    state: "done",
+    transcript: "Opus high, ship the discovery hub branch.",
+    inbox_id: filed.id,
+    routing: { agent: "t3", model: "opus", effort: "high", project: "discovery", kind: "thought", source: "spoken" },
+  });
+  // The status follows a correction made after the note was filed.
+  await ok(req(devices.phone.bearer, "POST", `/inbox/${filed.id}/route`, { agent: "dot", model: "chatgpt", effort: "low", project: null, kind: "thought" }));
+  assert.equal((await ok(req(devices.phone.bearer, "GET", `/voice/${audio_id}`))).routing.agent, "dot");
   const g = await s.control("gemini");
   const upload = g.uploads.at(-1);
   assert.equal(upload.bytes, audio.length);

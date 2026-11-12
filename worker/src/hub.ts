@@ -7,6 +7,7 @@ import type { Env } from "./check";
 import { onlyFields } from "./devices";
 import { fail, HttpError, isoUtc, randomHex, readJson } from "./http";
 import { MailRefusal } from "./mailbox";
+import { chooseRouting, loadTable, wireRouting } from "./routing";
 
 const KINDS = ["thought", "direction", "task", "reply", "agent_push"] as const;
 type Kind = (typeof KINDS)[number];
@@ -77,20 +78,32 @@ export async function postInbox(env: Env, source: string, b: Record<string, unkn
   return insertInbox(env, { kind, text: b.text, source, claimedSource: (b.source as string | undefined) ?? null, refs, audioId, replyTo });
 }
 
+// What Sam says from his phone as a thought, direction or task is routed
+// when it is filed (src/routing.ts); a reply answers an item and isn't.
+const ROUTED_ON_ARRIVAL: readonly Kind[] = ["thought", "direction", "task"];
+
 export async function insertInbox(
   env: Env,
   i: { kind: Kind; text: string; source: string; claimedSource?: string | null; refs?: string[]; audioId?: string | null; replyTo?: string | null },
 ) {
   const id = "i_" + randomHex(8);
   const now = Date.now();
+  const chosen =
+    i.source.startsWith("device:") && ROUTED_ON_ARRIVAL.includes(i.kind) ? chooseRouting(i.text, i.kind as "thought" | "direction" | "task", await loadTable(env)) : null;
   await env.DB.prepare(
-    `INSERT INTO inbox_items (id, kind, text, source, claimed_source, refs_json, audio_id, reply_to, created_at)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)`,
+    `INSERT INTO inbox_items (id, kind, text, source, claimed_source, refs_json, audio_id, reply_to, created_at, routing_json, routing_source, routed_at)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, CASE WHEN ?10 IS NULL THEN NULL ELSE ?9 END)`,
   )
-    .bind(id, i.kind, i.text, i.source, i.claimedSource ?? null, JSON.stringify(i.refs ?? []), i.audioId ?? null, i.replyTo ?? null, now)
+    .bind(id, i.kind, i.text, i.source, i.claimedSource ?? null, JSON.stringify(i.refs ?? []), i.audioId ?? null, i.replyTo ?? null, now, chosen ? JSON.stringify(chosen.routing) : null, chosen?.source ?? null)
     .run();
-  console.log(`[inbox] ${id} ${i.kind} from ${i.source}`);
-  return { id, kind: i.kind, source: i.source, created_at: isoUtc(now) };
+  console.log(`[inbox] ${id} ${i.kind} from ${i.source}${chosen ? ` routed to ${chosen.routing.agent}/${chosen.routing.model} (${chosen.source})` : ""}`);
+  return {
+    id,
+    kind: i.kind,
+    source: i.source,
+    created_at: isoUtc(now),
+    ...(chosen ? { routing: wireRouting(JSON.stringify(chosen.routing), chosen.source) } : {}),
+  };
 }
 
 export async function inboxRoute(env: Env, caller: Caller, req: Request) {

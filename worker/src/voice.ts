@@ -14,6 +14,7 @@ import type { Caller } from "./auth";
 import type { Env } from "./check";
 import { HttpError, randomHex } from "./http";
 import { insertInbox } from "./hub";
+import { wireRouting } from "./routing";
 
 export const VOICE_MAX_BYTES = 25 * 1024 * 1024;
 const MODEL = "models/gemini-3.5-transcribe";
@@ -65,19 +66,29 @@ export async function uploadVoice(env: Env, ctx: ExecutionContext, caller: Calle
 }
 
 export async function voiceStatus(env: Env, caller: Caller, id: string) {
-  const v = await env.DB.prepare("SELECT id, device_id, state, transcript, error, inbox_id FROM voice_notes WHERE id = ?").bind(id).first<{
-    id: string;
-    device_id: string;
-    state: string;
-    transcript: string | null;
-    error: string | null;
-    inbox_id: string | null;
-  }>();
+  const v = await env.DB.prepare(
+    `SELECT v.id, v.device_id, v.state, v.transcript, v.error, v.inbox_id, i.routing_json, i.routing_source
+     FROM voice_notes v LEFT JOIN inbox_items i ON i.id = v.inbox_id WHERE v.id = ?`,
+  )
+    .bind(id)
+    .first<{
+      id: string;
+      device_id: string;
+      state: string;
+      transcript: string | null;
+      error: string | null;
+      inbox_id: string | null;
+      routing_json: string | null;
+      routing_source: string | null;
+    }>();
   if (!v || (caller.scope === "device" && v.device_id !== caller.deviceId)) throw new HttpError(404, `voice note ${id} not found`);
-  // docs/APPROVALS.md, "Wire details": { state, transcript?, error? }.
+  // docs/APPROVALS.md, "Wire details": { state, transcript?, error? }, and
+  // once done, the inbox item it became with that item's current routing.
+  const routing = wireRouting(v.routing_json, v.routing_source);
   return {
     state: v.state,
     ...(v.state === "done" ? { transcript: v.transcript ?? "" } : {}),
+    ...(v.state === "done" && v.inbox_id ? { inbox_id: v.inbox_id, ...(routing ? { routing } : {}) } : {}),
     ...(v.state === "failed" ? { error: v.error ?? "transcription failed" } : {}),
   };
 }

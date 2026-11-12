@@ -55,12 +55,79 @@ interface RequestRow {
   outcome: string | null;
   result_url: string | null;
   error: string | null;
+  stake_json: string | null;
 }
 
 const oneLine = (s: string, max: number) => {
   const t = s.replace(/\s+/g, " ").trim();
   return t.length <= max ? t : t.slice(0, max - 1).trimEnd() + "…";
 };
+
+// What the approval puts at stake, as fields the app draws (docs/APPROVALS.md,
+// "Wire details" 10). Every value comes from the proposal's inputs, which
+// inputs_hash binds, and only in the exact shape listed; anything else is
+// left out rather than guessed. For a PR the Worker knows the repository,
+// branches and file count before anything is written, but not the diff
+// against base, so additions and deletions are not sent.
+export interface Stake {
+  kind: "pr" | "pay" | "send" | "other";
+  repo?: string;
+  additions?: number;
+  deletions?: number;
+  files?: number;
+  head?: string;
+  base?: string;
+  amount?: string;
+  currency?: string;
+  recipient?: { name: string; handle?: string; avatar_url?: string };
+}
+
+function recipientOf(v: unknown): Stake["recipient"] | undefined {
+  if (typeof v !== "object" || v === null || Array.isArray(v)) return undefined;
+  const r = v as Record<string, unknown>;
+  if (typeof r.name !== "string" || !r.name.trim() || r.name.length > 80) return undefined;
+  const out: NonNullable<Stake["recipient"]> = { name: r.name };
+  if (typeof r.handle === "string" && /^@?[A-Za-z0-9_.-]{1,64}$/.test(r.handle)) out.handle = r.handle;
+  if (typeof r.avatar_url === "string" && r.avatar_url.length <= 500 && /^https:\/\/[^\s"<>]+$/.test(r.avatar_url)) out.avatar_url = r.avatar_url;
+  return out;
+}
+
+export function stakeOf(finalStepKind: string | null, inputs: unknown): Stake {
+  const i = (typeof inputs === "object" && inputs !== null && !Array.isArray(inputs) ? inputs : {}) as Record<string, unknown>;
+  if (finalStepKind === "open_pr") {
+    // createProposal has already run validatePrSpec on these.
+    return {
+      kind: "pr",
+      repo: i.repo as string,
+      head: i.head_branch as string,
+      base: i.base as string,
+      ...(Array.isArray(i.files) ? { files: i.files.length } : {}),
+    };
+  }
+  if (finalStepKind !== "pay" && finalStepKind !== "send") return { kind: "other" };
+  const stake: Stake = { kind: finalStepKind };
+  if (finalStepKind === "pay" && typeof i.amount === "string" && /^\d{1,12}(\.\d{1,2})?$/.test(i.amount)) stake.amount = i.amount;
+  if (finalStepKind === "pay" && typeof i.currency === "string" && /^[A-Z]{3}$/.test(i.currency)) stake.currency = i.currency;
+  const recipient = recipientOf(i.recipient);
+  if (recipient) stake.recipient = recipient;
+  return stake;
+}
+
+// APNs refuses a payload over 4096 bytes. The text fields are capped well
+// under that; this drops the avatar, then the whole stake, if they ever
+// aren't (the app reads the queue for the full request).
+export const APNS_MAX_BYTES = 4096;
+export function fitPayload(payload: Record<string, unknown> & { stake?: Stake }): Record<string, unknown> {
+  const size = (p: unknown) => new TextEncoder().encode(JSON.stringify(p)).byteLength;
+  if (size(payload) <= APNS_MAX_BYTES) return payload;
+  if (payload.stake?.recipient?.avatar_url) {
+    const { avatar_url: _drop, ...recipient } = payload.stake.recipient;
+    const smaller = { ...payload, stake: { ...payload.stake, recipient } };
+    if (size(smaller) <= APNS_MAX_BYTES) return smaller;
+  }
+  const { stake: _stake, ...rest } = payload;
+  return rest;
+}
 
 // The title and at most 3 short lines a lock-screen alert can show. For a PR
 // the third line names the repository and branches, so Sam sees where the
@@ -75,7 +142,13 @@ function describe(p: ProposalForRequest) {
     project = i.repo.split("/")[1];
     lines.push(oneLine(`${i.repo}: ${i.head_branch} into ${i.base}`, LINE_MAX));
   }
-  return { title: oneLine(p.title, TITLE_MAX), body: lines.filter(Boolean).slice(0, 3).join("\n"), action_label: ACTION_LABELS[kind] ?? kind, project };
+  return {
+    title: oneLine(p.title, TITLE_MAX),
+    body: lines.filter(Boolean).slice(0, 3).join("\n"),
+    action_label: ACTION_LABELS[kind] ?? kind,
+    project,
+    stake: stakeOf(p.final_step_kind, JSON.parse(p.inputs_json)),
+  };
 }
 
 // An INSERT for p's request, taking effect only while some device has been
@@ -84,12 +157,12 @@ function describe(p: ProposalForRequest) {
 export function requestInsert(env: Env, p: ProposalForRequest, now: number) {
   const d = describe(p);
   return env.DB.prepare(
-    `INSERT OR IGNORE INTO approval_requests (id, proposal_id, inputs_hash, title, body, action_label, project, nonce, state, created_at, expires_at)
-     SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'pending', ?9, ?10
+    `INSERT OR IGNORE INTO approval_requests (id, proposal_id, inputs_hash, title, body, action_label, project, nonce, state, created_at, expires_at, stake_json)
+     SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'pending', ?9, ?10, ?11
      WHERE EXISTS (SELECT 1 FROM devices)
        AND EXISTS (SELECT 1 FROM proposals WHERE id = ?2 AND state = 'awaiting_approval' AND inputs_hash = ?3)
      RETURNING *`,
-  ).bind("ar_" + randomHex(12), p.id, p.inputs_hash, d.title, d.body, d.action_label, d.project, randomHex(16), now, p.expires_at ?? now);
+  ).bind("ar_" + randomHex(12), p.id, p.inputs_hash, d.title, d.body, d.action_label, d.project, randomHex(16), now, p.expires_at ?? now, JSON.stringify(d.stake));
 }
 
 // Proposals that were waiting before the first device enrolled get their
@@ -124,7 +197,7 @@ export async function pushRequest(env: Env, r: RequestRow): Promise<"sent" | "fa
     "SELECT id, apns_token, apns_env FROM devices WHERE revoked_at IS NULL AND apns_invalid_at IS NULL ORDER BY enrolled_at",
   ).all<{ id: string; apns_token: string; apns_env: "development" | "production" }>();
   if (devices.results.length === 0) return "failed";
-  const payload = {
+  const payload = fitPayload({
     aps: {
       alert: { title: r.title, body: r.body },
       category: "APPROVAL",
@@ -135,7 +208,8 @@ export async function pushRequest(env: Env, r: RequestRow): Promise<"sent" | "fa
     inputs_hash: r.inputs_hash,
     nonce: r.nonce,
     expires_at: isoUtc(r.expires_at),
-  };
+    ...(r.stake_json ? { stake: JSON.parse(r.stake_json) as Stake } : {}),
+  });
   const results = await Promise.all(devices.results.map((d) => push(env, d, payload, { expiresAtMs: r.expires_at, collapseId: r.id })));
   const now = Date.now();
   await env.DB.batch([
@@ -166,6 +240,7 @@ export function presentRequest(r: RequestRow) {
     body: r.body,
     action_label: r.action_label,
     project: r.project,
+    stake: r.stake_json ? (JSON.parse(r.stake_json) as Stake) : { kind: "other" },
     nonce: r.nonce,
     state: r.state,
     created_at: isoUtc(r.created_at),

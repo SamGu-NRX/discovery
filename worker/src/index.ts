@@ -5,13 +5,14 @@ import { chatCompletions, listModels } from "./bridge";
 import { enroll, listDevices, mintEnrollCode, revoke, updateApnsToken, updateLiveActivityToken } from "./devices";
 import { repoAllowlist, setRepoAllowlist } from "./executor";
 import { brief, inboxRoute } from "./hub";
+import { correctRouting, dispatch, publishTable, setTable } from "./routing";
 import { uploadVoice, voiceCron, voiceStatus } from "./voice";
 import { claimCandidates, completeCandidate, createCandidate, listCandidates } from "./candidates";
 import type { Env, WatcherRow } from "./check";
 import { HttpError, json, randomHex, readJson, timeParam, utcDay } from "./http";
 import { APPROVAL_DAILY_CAP, approvalPage, createProposal, decide, expireProposals, listProposals, presentProposal, rotateToken } from "./proposals";
 import { inbox, inboxExport, sightingsExport } from "./inbox";
-import { agentOf, listTasks, mailboxCron, mailboxStatus, mcp, mcpByPath, restAck, restClaim, restComplete, restSend, room, setPaused } from "./mailbox";
+import { agentOf, listTasks, MailRefusal, mailboxCron, mailboxStatus, mcp, mcpByPath, restAck, restClaim, restComplete, restSend, room, setPaused } from "./mailbox";
 import { handleDelivery, handleVerification, requestSubscription } from "./websub";
 import { addPositives, detailQueue, embed, ingest, ingestStatus, listPositives, listPosts, postContext, saveScores, startSession } from "./x";
 
@@ -214,6 +215,10 @@ const ROUTES: Route[] = [
   { method: "GET", path: /^\/brief$/, scopes: [...DEVICE, "agent:dot"], handler: (_r, env) => ok(brief(env)) },
   { method: "POST", path: /^\/voice$/, scopes: DEVICE, handler: (req, env, _u, _p, ctx, caller) => ok(uploadVoice(env, ctx, caller, req), 201) },
   { method: "GET", path: /^\/voice\/([^/]+)$/, scopes: DEVICE, handler: (_r, env, _u, [id], _c, caller) => ok(voiceStatus(env, caller, id)) },
+  { method: "GET", path: /^\/routing\/models$/, scopes: DEVICE, handler: (_r, env) => ok(publishTable(env)) },
+  { method: "POST", path: /^\/inbox\/([^/]+)\/route$/, scopes: DEVICE, handler: (req, env, _u, [id]) => ok(correctRouting(env, id, req)) },
+  { method: "POST", path: /^\/inbox\/([^/]+)\/dispatch$/, scopes: DEVICE, handler: (_r, env, _u, [id], ctx) => ok(dispatch(env, ctx, id)) },
+  { method: "POST", path: /^\/admin\/routing$/, scopes: [], handler: (req, env) => ok(setTable(env, req)) },
   { method: "GET", path: /^\/admin\/pr-allowlist$/, scopes: [], handler: async (_r, env) => json({ repos: await repoAllowlist(env) }) },
   { method: "POST", path: /^\/admin\/pr-allowlist$/, scopes: [], handler: async (req, env) => ok(setRepoAllowlist(env, await body(req))) },
   // Agents as models (src/bridge.ts), for CLIProxyAPI.
@@ -430,17 +435,41 @@ function redactPath(path: string): string {
   return path.replace(/^\/(a|room)\/[^/]+/, "/$1/<redacted>").replace(/^\/mcp\/([^/]+)\/[^/]+/, "/mcp/$1/<redacted>");
 }
 
+// Routes the iPhone app calls. Their refusals are { error: <code>, message }
+// (docs/APPROVALS.md, "Wire details" 4), because the app reads every non-2xx
+// body that way (Nod, NodKit/Network/WorkerClient.swift). GrokBot's
+// /inbox/x keeps its own format.
+const APP_PATH = /^\/(?:devices|approvals|brief|voice|routing)(?:\/|$)|^\/inbox(?:$|\/(?!x$)[^/]+\/(?:route|dispatch)$)/;
+const CODES: Record<number, string> = {
+  400: "bad_request",
+  401: "unauthorized",
+  403: "forbidden",
+  404: "not_found",
+  405: "method_not_allowed",
+  409: "conflict",
+  410: "gone",
+  411: "length_required",
+  413: "body_too_large",
+  415: "unsupported_media_type",
+  422: "unprocessable",
+  423: "paused",
+  429: "rate_limited",
+};
+
 export default {
   async fetch(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     try {
       return await route(req, env, ctx);
     } catch (e) {
+      const app = APP_PATH.test(new URL(req.url).pathname);
+      if (e instanceof HttpError && app) return json({ error: e instanceof MailRefusal ? e.rule : (CODES[e.status] ?? "error"), message: e.message }, e.status);
       if (e instanceof HttpError) return json({ error: e.message }, e.status);
       // An unexpected error's message can hold a URL or query text, so the
       // caller gets only an id to quote, and the log gets the path with any
       // token segment redacted.
       const requestId = randomHex(8);
       console.error(`[error] ${requestId} ${req.method} ${redactPath(new URL(req.url).pathname)}`, e);
+      if (app) return json({ error: "internal_error", message: `The Worker failed; quote ${requestId} when reporting it.`, request_id: requestId }, 500);
       return json({ error: "internal error", request_id: requestId }, 500);
     }
   },
