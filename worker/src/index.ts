@@ -4,6 +4,7 @@ import { claimCandidates, completeCandidate, createCandidate, listCandidates } f
 import type { Env, WatcherRow } from "./check";
 import { HttpError, json, readJson, timeParam, utcDay } from "./http";
 import { APPROVAL_DAILY_CAP, approvalPage, createProposal, decide, expireProposals, listProposals, presentProposal, rotateToken } from "./proposals";
+import { inbox, inboxExport, sightingsExport } from "./inbox";
 import { handleDelivery, handleVerification, requestSubscription } from "./websub";
 import { addPositives, detailQueue, embed, ingest, ingestStatus, listPositives, listPosts, postContext, saveScores, startSession } from "./x";
 
@@ -131,6 +132,8 @@ interface Route {
   path: RegExp;
   // Tokens that may call this route besides ADMIN_TOKEN, which may call all.
   scopes: Scope[];
+  // Only `scopes` may call it; ADMIN_TOKEN gets 403 too.
+  exclusive?: true;
   handler: Handler;
 }
 
@@ -170,6 +173,10 @@ const ROUTES: Route[] = [
   { method: "GET", path: /^\/proposals$/, scopes: ["runner"], handler: (_r, env, url) => ok(listProposals(env, url)) },
   { method: "POST", path: /^\/proposals\/([^/]+)\/rotate-token$/, scopes: ["runner"], handler: (req, env, _u, [id]) => ok(rotateToken(env, id, req)) },
   { method: "GET", path: /^\/admin\/log$/, scopes: [], handler: (_r, env, url) => ok(activityLog(env, url)) },
+  // GrokBot's route alone, so nothing the director sends can be counted as one of its runs.
+  { method: "POST", path: /^\/inbox\/x$/, scopes: ["inbox"], exclusive: true, handler: (req, env) => inbox(env, req) },
+  { method: "GET", path: /^\/admin\/inbox\/x$/, scopes: [], handler: (_r, env, url) => ok(inboxExport(env, url)) },
+  { method: "GET", path: /^\/admin\/x\/sightings$/, scopes: [], handler: (_r, env, url) => ok(sightingsExport(env, url)) },
   { method: "POST", path: /^\/candidates\/claim$/, scopes: ["runner"], handler: async (req, env) => ok(claimCandidates(env, await body(req))) },
   { method: "POST", path: /^\/candidates\/([^/]+)\/complete$/, scopes: ["runner"], handler: async (req, env, _u, [id]) => ok(completeCandidate(env, id, await body(req))) },
 ];
@@ -220,7 +227,8 @@ async function route(req: Request, env: Env, ctx: ExecutionContext): Promise<Res
   const found = match(req, url);
   if (found === "wrong_method") throw new HttpError(405, `${req.method} is not allowed on ${url.pathname}`);
   if (found) {
-    if (scope !== "admin" && !found.route.scopes.includes(scope)) throw new HttpError(403, `the ${scope} token cannot call ${req.method} ${url.pathname}`);
+    const allowed = found.route.scopes.includes(scope) || (scope === "admin" && !found.route.exclusive);
+    if (!allowed) throw new HttpError(403, `the ${scope} token cannot call ${req.method} ${url.pathname}`);
     return found.route.handler(req, env, url, found.params, ctx);
   }
   // Everything below is the watcher administration API: ADMIN_TOKEN only.

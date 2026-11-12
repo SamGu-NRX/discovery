@@ -8,6 +8,8 @@ export interface Env {
   ADMIN_TOKEN: string;
   INGEST_TOKEN?: string;
   RUNNER_TOKEN?: string;
+  // GrokBot's token: POST /inbox/x only.
+  INBOX_TOKEN?: string;
   WEBSUB_SECRET: string;
   // Approval notifications for proposals. Unset means proposals wait
   // unnotified; watcher matches never POST anywhere.

@@ -7,7 +7,7 @@
 # Watcher matches become candidates; nothing here POSTs to T3.
 #
 # Secrets are read from ~/.agent-secrets and piped to wrangler; none is
-# printed. The four tokens are generated on the first run.
+# printed. The five tokens are generated on the first run.
 # T3_APPROVALS_WEBHOOK_URL is set only if
 # ~/.agent-secrets/discovery-t3-approvals-webhook-url exists; without it,
 # proposals wait unnotified.
@@ -23,7 +23,7 @@ export CI=1 WRANGLER_SEND_METRICS=false
 "$W" whoami | grep -E 'logged in|Account' | head -3
 
 umask 077
-for name in discovery-admin-token discovery-websub-secret discovery-ingest-token discovery-runner-token; do
+for name in discovery-admin-token discovery-websub-secret discovery-ingest-token discovery-runner-token discovery-inbox-token; do
   [ -s "$S/$name" ] || openssl rand -hex 32 > "$S/$name"
   chmod 600 "$S/$name"
 done
@@ -50,6 +50,7 @@ url=$(grep -oE 'https://discovery-watcher\.[a-z0-9-]+\.workers\.dev' .wrangler/d
 "$W" secret put WEBSUB_SECRET < "$S/discovery-websub-secret"
 "$W" secret put INGEST_TOKEN < "$S/discovery-ingest-token"
 "$W" secret put RUNNER_TOKEN < "$S/discovery-runner-token"
+"$W" secret put INBOX_TOKEN < "$S/discovery-inbox-token"
 if [ -s "$S/discovery-t3-approvals-webhook-url" ]; then
   "$W" secret put T3_APPROVALS_WEBHOOK_URL < "$S/discovery-t3-approvals-webhook-url"
 else

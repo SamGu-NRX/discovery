@@ -191,13 +191,18 @@ test("a captured thread leaves the detail queue and reads back in server order; 
   assert.deepEqual((await s.call("GET", "/x/detail-queue?account=acct-d", undefined, { token: "ingest" })).post_ids, ["d-1"]);
 
   const replies = [post("d-r3", { in_reply_to_id: "d-1" }), post("d-r1", { in_reply_to_id: "d-1" }), post("d-r2", { in_reply_to_id: "d-1" })];
-  await ingest("sess-d", [batch("detail", [post("d-1"), post("d-op2", { in_reply_to_id: "d-1" }), ...replies], { thread: { root_id: "d-1", op_self_thread_ids: ["d-op2"], reply_ids: ["d-r3", "d-r1", "d-r2"] } })], "acct-d");
+  const related = [post("d-rel2"), post("d-rel1")];
+  await ingest("sess-d", [batch("detail", [post("d-1"), post("d-op2", { in_reply_to_id: "d-1" }), ...replies, ...related], { thread: { root_id: "d-1", op_self_thread_ids: ["d-op2"], reply_ids: ["d-r3", "d-r1", "d-r2"], related_ids: ["d-rel2", "d-rel1"] } })], "acct-d");
   assert.deepEqual((await s.call("GET", "/x/detail-queue?account=acct-d", undefined, { token: "ingest" })).post_ids, []);
 
   const ctx = await runner("GET", "/x/posts/d-1/context");
   assert.equal(ctx.thread_captured, true);
   assert.deepEqual(ctx.thread.op_self_thread.map((p) => p.id), ["d-op2"]);
   assert.deepEqual(ctx.thread.replies.map((p) => p.id), ["d-r3", "d-r1", "d-r2"]);
+  // Discover more stays apart from the thread, in X's order, and reaches the admin export.
+  const exported = (await s.call("GET", `/admin/x/sightings?since=0&until=${Date.now() + 60_000}`)).threads.find((t) => t.root_id === "d-1");
+  assert.deepEqual(JSON.parse(exported.related_ids_json), ["d-rel2", "d-rel1"]);
+  assert.deepEqual(JSON.parse(exported.reply_ids_json), ["d-r3", "d-r1", "d-r2"]);
 
   await s.call("POST", "/ingest/x/status", { account: "acct-d", session_id: "sess-d", status: "login_wall", detail: "login wall at /home" }, { token: "ingest" });
   const q = await s.call("GET", "/x/detail-queue?account=acct-d", undefined, { token: "ingest" });

@@ -158,7 +158,9 @@ export async function ingest(env: Env, req: Request) {
         if (!Array.isArray(v)) fail(`${at}.thread.${f} must be an array of ids`);
         return v.map((x, i) => postId(x, `${at}.thread.${f}[${i}]`));
       };
-      threads.push({ batch_id: batchId, root_id: postId(t.root_id, `${at}.thread.root_id`), op: ids(t.op_self_thread_ids, "op_self_thread_ids"), replies: ids(t.reply_ids, "reply_ids") });
+      // related_ids ("Discover more") is optional so an extension from before it still ingests; null means not reported.
+      const related = t.related_ids === undefined || t.related_ids === null ? null : ids(t.related_ids, "related_ids");
+      threads.push({ batch_id: batchId, root_id: postId(t.root_id, `${at}.thread.root_id`), op: ids(t.op_self_thread_ids, "op_self_thread_ids"), replies: ids(t.reply_ids, "reply_ids"), related });
     }
   });
 
@@ -238,12 +240,14 @@ export async function ingest(env: Env, req: Request) {
       .bind(JSON.stringify(sightings), account, sessionId, mode, now, requestId),
     db
       .prepare(
-        `INSERT INTO x_threads (root_id, captured_at, account, op_self_thread_ids_json, reply_ids_json)
-         SELECT json_extract(value, '$.root_id'), ?2, ?3, json(json_extract(value, '$.op')), json(json_extract(value, '$.replies'))
+        `INSERT INTO x_threads (root_id, captured_at, account, op_self_thread_ids_json, reply_ids_json, related_ids_json)
+         SELECT json_extract(value, '$.root_id'), ?2, ?3, json(json_extract(value, '$.op')), json(json_extract(value, '$.replies')),
+                json(json_extract(value, '$.related'))
          FROM json_each(?1)
          WHERE ${fresh("json_extract(value, '$.batch_id')", "?4")}
          ON CONFLICT (root_id) DO UPDATE SET captured_at = excluded.captured_at, account = excluded.account,
-           op_self_thread_ids_json = excluded.op_self_thread_ids_json, reply_ids_json = excluded.reply_ids_json`,
+           op_self_thread_ids_json = excluded.op_self_thread_ids_json, reply_ids_json = excluded.reply_ids_json,
+           related_ids_json = excluded.related_ids_json`,
       )
       .bind(JSON.stringify(threads), now, account, requestId),
     db

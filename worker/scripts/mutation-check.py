@@ -2,7 +2,7 @@
 # the file, and prints which tests failed. Each mutation should fail a test.
 # Run from the project root: python3 scripts/mutation-check.py
 
-import re, subprocess, sys
+import os, re, subprocess, sys
 only = sys.argv[1:]
 muts = [
  ("M1 page normalizer keeps <script>", "src/adapters.ts", '.replace(/<(script|style|noscript|svg|template)\\b[\\s\\S]*?<\\/\\1>/gi, " ")', ''),
@@ -28,7 +28,7 @@ muts = [
  ("M23 candidate claim ignores lease expiry", "src/candidates.ts", "OR (state = 'claimed' AND lease_until < ?3)", "OR state = 'claimed'"),
  # M24 (complete ignores owner) was retired in 10b06ac: lease_token now carries that guarantee (M44).
  ("M25 no expired-lease cap on candidates", "src/candidates.ts", "AND expired_leases + 1 >= ?2`", "AND expired_leases + 1 >= ?2 AND 0`"),
- ("M26 route scopes not checked", "src/index.ts", 'if (scope !== "admin" && !found.route.scopes.includes(scope))', "if (false)"),
+ ("M26 route scopes not checked", "src/index.ts", "    if (!allowed) throw", "    if (false) throw"),
  ("M27 admin API open to any token", "src/index.ts", '  if (scope !== "admin") throw new HttpError(403, `the ${scope} token cannot call ${req.method} ${url.pathname}`);\n', ""),
  # v2, slice 2
  ("M28 approval daily cap ignored", "src/proposals.ts", "export const APPROVAL_DAILY_CAP = 3;", "export const APPROVAL_DAILY_CAP = 1000;"),
@@ -78,6 +78,17 @@ muts = [
  ("M65 a crash is never replaced by a later status", "src/x.ts", "x_sessions.status IN ('ok', 'crash') AND", "x_sessions.status IN ('ok') AND"),
  ("M66 a second session while one is open", "src/x.ts", "         AND (${openElsewhere}) IS NULL\n", ""),
  ("M67 an open reservation blocks its own retry", "src/x.ts", "AND status IS NULL AND session_id != ?1`;", "AND status IS NULL`;"),
+ # POST /inbox/x and the admin exports (migration 0007)
+ ("M68 a repeated (run_id, part) writes items again", "src/inbox.ts", "         WHERE EXISTS (SELECT 1 FROM inbox_x_parts WHERE run_id = ?2 AND part = ?3 AND request_id = ?4)\n", ""),
+ ("M69 the inbox token reaches every route", "src/auth.ts", '    ["inbox", env.INBOX_TOKEN],', '    ["admin", env.INBOX_TOKEN],'),
+ ("M70 inbox cap not enforced", "src/inbox.ts", "export const INBOX_MAX_BYTES = 256 * 1024;", "export const INBOX_MAX_BYTES = 64 * 1024 * 1024;"),
+ ("M71 a refused inbox body is not recorded", "src/inbox.ts", "    await recordReject(env, { status: 400, error, ...claimedKey(parsed), bytes, total });\n", ""),
+ ("M72 a JSON number post id is accepted", "src/inbox.ts", '  if (typeof v === "number") bad(', '  if (false) bad('),
+ ("M73 sightings export reads the post's latest metrics", "src/inbox.ts", "s.seen_at, s.metrics_json, s.batch_id,", "s.seen_at, p.metrics_json, s.batch_id,"),
+ ("M75 the admin token writes to the inbox", "src/index.ts", '(scope === "admin" && !found.route.exclusive)', '(scope === "admin")'),
+ ("M76 a reject body is cut mid-character", "src/inbox.ts", "    if (end - lead < need) end = lead;\n", ""),
+ ("M77 error text stringifies nested values", "src/inbox.ts", '  if (Array.isArray(v)) return `an array of ${v.length}`;\n  if (typeof v === "object" && v !== null) return', '  if (typeof v === "object" && v !== null) return JSON.stringify(v).slice(0, 80) ||'),
+ ("M74 sightings pages overlap", "src/inbox.ts", "AND s.id > ?3 AND", "AND s.id >= ?3 AND"),
  ("M37 malformed prepared URL breaks the card", "src/proposals.ts", "  } catch {\n    return null;\n  }\n}\n\nfunction preparedItem", "  } finally {\n  }\n}\n\nfunction preparedItem"),
 ]
 for name, path, old, new in muts:
@@ -92,7 +103,14 @@ for name, path, old, new in muts:
         mutated = mutated.replace(o, n)
     open(path, "w").write(mutated)
     try:
-        r = subprocess.run(["node", "--test", "test/"], capture_output=True, text=True, timeout=240)
+        try:
+            r = subprocess.run(["node", "--test", "test/"], capture_output=True, text=True, timeout=240)
+        except subprocess.TimeoutExpired:
+            # A break that hangs the Worker (M77 overflows its stack) is caught too: the suite never passes.
+            # Only this checkout's wrangler: other worktrees run their own test stacks on the same ports.
+            subprocess.run(["pkill", "-f", os.path.join(os.getcwd(), "node_modules", ".bin", "wrangler") + " dev"])
+            print(f"caught  {name}: the suite hung past 240 s", flush=True)
+            continue
         # node --test lists each failure twice (inline and in the summary).
         failed = sorted({re.sub(r" \([\d.]+ms\)$", "", l.strip()[2:]) for l in r.stdout.splitlines() if l.startswith("✖") and "failing tests:" not in l})
         print(f"{'caught' if failed else 'MISSED'}  {name}: exit={r.returncode} failing={failed}", flush=True)
