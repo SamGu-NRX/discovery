@@ -5,7 +5,7 @@ import type { Env, WatcherRow } from "./check";
 import { HttpError, json, readJson, timeParam, utcDay } from "./http";
 import { APPROVAL_DAILY_CAP, approvalPage, createProposal, decide, expireProposals, listProposals, presentProposal, rotateToken } from "./proposals";
 import { inbox, inboxExport, sightingsExport } from "./inbox";
-import { doneRepolls, dueRepolls, labelPosts, listLenses, recordBaseline, recordReads, scorecard, upsertLens } from "./lens";
+import { doneRepolls, dueRepolls, labelPosts, listLenses, recordBaseline, recordReads, scorecard, signals, upsertLens } from "./lens";
 import { handleDelivery, handleVerification, requestSubscription } from "./websub";
 import { addPositives, detailQueue, embed, ingest, ingestStatus, listPositives, listPosts, postContext, saveScores, startSession } from "./x";
 
@@ -182,6 +182,7 @@ const ROUTES: Route[] = [
   // with the ingest token; creating a lens is admin only.
   { method: "POST", path: /^\/lenses$/, scopes: [], handler: (req, env) => ok(upsertLens(env, req)) },
   { method: "GET", path: /^\/lenses$/, scopes: ["ingest", "runner"], handler: (_r, env, url) => ok(listLenses(env, url)) },
+  { method: "GET", path: /^\/lenses\/signals$/, scopes: ["runner"], handler: (_r, env, url) => ok(signals(env, url)) },
   { method: "GET", path: /^\/lenses\/repolls\/due$/, scopes: ["ingest"], handler: (_r, env, url) => ok(dueRepolls(env, url)) },
   { method: "POST", path: /^\/lenses\/repolls\/done$/, scopes: ["ingest"], handler: (req, env) => ok(doneRepolls(env, req)) },
   { method: "POST", path: /^\/lenses\/([a-z0-9-]+)\/label$/, scopes: ["ingest"], handler: (req, env, _u, [id]) => ok(labelPosts(env, id, req)) },

@@ -417,3 +417,113 @@ export async function scorecard(env: Env, id: string, url: URL) {
     flag_precision: { matured: ratios.length, grew_10x: ratios.filter((r) => r >= 10).length, precision: ratios.length ? ratios.filter((r) => r >= 10).length / ratios.length : null },
   };
 }
+
+// ---- cross-lens signals ---------------------------------------------------
+
+const MAX_SIGNAL_POSTS = 100;
+
+// GET /lenses/signals?account=&vs=sdotgu&ids=&limit= (runner): one row per
+// post, scored against every lens at once, so a post that two lenses both
+// count as near, or that a lens flagged before `vs` saw it, stands out.
+// Rows are the posts any lens opened, newest read first, or the posts named
+// in `ids` (any stored post, read or not). Each row has, per lens, the taste
+// and whether it reaches glance_at (near) and open_at; which lenses opened
+// it; when a lens account and `vs` first saw it; and its views at the first
+// and latest sample, which the re-polls add to. `account` limits the lenses.
+export async function signals(env: Env, url: URL) {
+  const account = url.searchParams.get("account");
+  const vs = url.searchParams.get("vs") ?? "sdotgu";
+  const limitParam = url.searchParams.get("limit");
+  const limit = limitParam === null ? 50 : Number(limitParam);
+  if (!Number.isInteger(limit) || limit < 1 || limit > MAX_SIGNAL_POSTS) fail(`limit must be 1 to ${MAX_SIGNAL_POSTS}`);
+  const idsParam = url.searchParams.get("ids");
+  const named = idsParam === null ? null : [...new Set(idsParam.split(",").filter(Boolean))];
+  if (named && (named.length === 0 || named.length > MAX_SIGNAL_POSTS || !named.every((x) => POST_ID.test(x)))) fail(`ids must be 1 to ${MAX_SIGNAL_POSTS} comma-separated post ids`);
+
+  const lenses = (
+    await (account
+      ? env.DB.prepare("SELECT id, account, centroid_json, open_at, glance_at FROM lenses WHERE account = ?1 ORDER BY id").bind(account)
+      : env.DB.prepare("SELECT id, account, centroid_json, open_at, glance_at FROM lenses ORDER BY id")
+    ).all<LensRow>()
+  ).results;
+  if (!lenses.length) throw new HttpError(404, account ? `no lenses for account ${account}` : "no lenses");
+  const lensIds = JSON.stringify(lenses.map((l) => l.id));
+
+  const ids =
+    named ??
+    (
+      await env.DB.prepare(
+        `SELECT post_id FROM reads WHERE action = 'open' AND lens_id IN (SELECT value FROM json_each(?1))
+         GROUP BY post_id ORDER BY max(at) DESC LIMIT ?2`,
+      )
+        .bind(lensIds, limit)
+        .all<{ post_id: string }>()
+    ).results.map((r) => r.post_id);
+  if (!ids.length) return { vs, lenses: lenses.map(({ id, account, open_at, glance_at }) => ({ id, account, open_at, glance_at })), posts: [], missing: [] };
+
+  const [stored, opens, samples] = await env.DB.batch<Record<string, unknown>>([
+    env.DB.prepare("SELECT id, author_handle, text FROM x_posts WHERE id IN (SELECT value FROM json_each(?1))").bind(JSON.stringify(ids)),
+    env.DB.prepare(
+      `SELECT post_id, lens_id FROM reads WHERE action = 'open' AND post_id IN (SELECT value FROM json_each(?1))
+         AND lens_id IN (SELECT value FROM json_each(?2)) GROUP BY post_id, lens_id`,
+    ).bind(JSON.stringify(ids), lensIds),
+    env.DB.prepare(
+      `SELECT post_id, account, seen_at, json_extract(metrics_json, '$.views') AS views FROM x_sightings
+       WHERE post_id IN (SELECT value FROM json_each(?1)) ORDER BY seen_at`,
+    ).bind(JSON.stringify(ids)),
+  ]);
+  const byId = new Map(stored.results.map((r) => [r.id as string, r as { id: string; author_handle: string; text: string }]));
+  const posts = ids.filter((id) => byId.has(id)).map((id) => byId.get(id)!);
+  const { vectors } = posts.length ? await embedTexts(env, posts.map((p) => p.text)) : { vectors: [] };
+  const centroids = lenses.map((l) => JSON.parse(l.centroid_json) as number[]);
+  const lensAccounts = new Set(lenses.map((l) => l.account));
+  const openedBy = new Map<string, string[]>();
+  for (const r of opens.results) (openedBy.get(r.post_id as string) ?? openedBy.set(r.post_id as string, []).get(r.post_id as string)!).push(r.lens_id as string);
+  const samplesBy = new Map<string, Sample[]>();
+  for (const s of samples.results as unknown as Sample[]) (samplesBy.get(s.post_id) ?? samplesBy.set(s.post_id, []).get(s.post_id)!).push(s);
+
+  const iso = (ms: number | undefined) => (ms === undefined ? null : new Date(ms).toISOString());
+  const rows = posts.map((p, i) => {
+    const v = unit(vectors[i]);
+    const perLens = Object.fromEntries(
+      lenses.map((l, li) => {
+        const taste = dot(v, centroids[li]);
+        return [l.id, { taste, near: taste >= l.glance_at, open: taste >= l.open_at }];
+      }),
+    );
+    const all = samplesBy.get(p.id) ?? [];
+    const lensFirst = all.find((s) => lensAccounts.has(s.account))?.seen_at;
+    const vsFirst = all.find((s) => s.account === vs)?.seen_at;
+    const withViews = all.filter((s) => s.views !== null);
+    const first = withViews[0];
+    const latest = withViews.at(-1);
+    return {
+      id: p.id,
+      author_handle: p.author_handle,
+      text: p.text.slice(0, 280),
+      opened_by: (openedBy.get(p.id) ?? []).sort(),
+      near_lenses: lenses.filter((l) => perLens[l.id].near).map((l) => l.id),
+      lenses: perLens,
+      first_seen_by_lens_account: iso(lensFirst),
+      first_seen_by_vs: iso(vsFirst),
+      lead_hours: lensFirst !== undefined && vsFirst !== undefined ? (vsFirst - lensFirst) / HOUR : null,
+      views: {
+        first: first ? { at: iso(first.seen_at), views: first.views } : null,
+        latest: latest ? { at: iso(latest.seen_at), views: latest.views } : null,
+        growth: first && latest && first.views ? (latest.views as number) / first.views : null,
+        samples: withViews.length,
+      },
+    };
+  });
+  return {
+    vs,
+    lenses: lenses.map(({ id, account, open_at, glance_at }) => ({ id, account, open_at, glance_at })),
+    posts: rows,
+    missing: ids.filter((id) => !byId.has(id)),
+    summary: {
+      posts: rows.length,
+      near_two_or_more: rows.filter((r) => r.near_lenses.length >= 2).length,
+      opened_by_two_or_more: rows.filter((r) => r.opened_by.length >= 2).length,
+    },
+  };
+}

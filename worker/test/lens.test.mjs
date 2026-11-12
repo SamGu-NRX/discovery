@@ -216,3 +216,48 @@ test("the scorecard reports purity per session beside the baseline, lead ratio, 
   assert.ok(Math.abs(card.lead_hours.median - 3) < 0.01, `lead ${card.lead_hours.median} h`);
   assert.equal(card.lead_hours.earlier_share, 1);
 });
+
+test("the signal table scores each post against every lens, with who opened it, lead hours and view growth", async () => {
+  // Two lenses on one account: harness (agent words) and kitchen (recipes).
+  await makeLens("harness", "sigacct");
+  const kitchenIds = Array.from({ length: 10 }, (_, i) => String(9_700_000 + i));
+  await ingest("seed", kitchenIds.map((x, i) => post(x, i % 2 ? "a recipe for football night" : "a recipe")));
+  await s.call("POST", "/lenses", { id: "kitchen", account: "sigacct", charter: "Cooking.", exemplar_ids: kitchenIds });
+
+  const at = new Date().toISOString();
+  const read = (post_id, taste) => ({ post_id, action: "open", dwell_ms: 20000, taste, label_source: "centroid", at });
+  await s.call("POST", "/lenses/harness/reads", { session_id: "sig-h", reads: [read("9800001", 0.9)] }, { token: "ingest" });
+  await s.call("POST", "/lenses/kitchen/reads", { session_id: "sig-k", reads: [read("9800002", 0.9)] }, { token: "ingest" });
+
+  // The lens account saw the harness post first, at 100 views; sdotgu-sig
+  // saw it 3 hours later, and a re-poll found 450 views.
+  await ingest("sigacct", [post("9800001", "MCP agent harness with memory", { metrics: { views: 100 } }), post("9800002", "soup recipe, a second recipe, and football", { metrics: { views: 50 } })], { session: "sig-first" });
+  await ingest("seed", [post("9800003", "New MCP server for the agent harness")]);
+  await s.d1("UPDATE x_sightings SET seen_at = seen_at - 5 * 3600000 WHERE session_id = 'sig-first'");
+  await ingest("sdotgu-sig", [post("9800001", "MCP agent harness with memory", { metrics: { views: 300 } })], { session: "sig-theirs" });
+  await s.d1("UPDATE x_sightings SET seen_at = (SELECT seen_at FROM x_sightings WHERE session_id = 'sig-first' AND post_id = '9800001') + 3 * 3600000 WHERE session_id = 'sig-theirs'");
+  await ingest("sigacct", [post("9800001", "MCP agent harness with memory", { metrics: { views: 450 } })], { session: "sig-repoll" });
+
+  const table = await s.call("GET", "/lenses/signals?account=sigacct&vs=sdotgu-sig", undefined, { token: "runner" });
+  assert.deepEqual(table.lenses.map((l) => l.id), ["harness", "kitchen"]);
+  const row = Object.fromEntries(table.posts.map((r) => [r.id, r]));
+  assert.deepEqual(Object.keys(row).sort(), ["9800001", "9800002"], "only opened posts, by default");
+  assert.deepEqual(row["9800001"].opened_by, ["harness"]);
+  assert.deepEqual(row["9800001"].near_lenses, ["harness"], "near the harness centroid, not the kitchen one");
+  assert.deepEqual(row["9800002"].near_lenses, ["kitchen"]);
+  assert.ok(row["9800001"].lenses.harness.taste > row["9800001"].lenses.kitchen.taste);
+  assert.ok(Math.abs(row["9800001"].lead_hours - 3) < 0.01, `lead ${row["9800001"].lead_hours} h`);
+  assert.equal(row["9800001"].views.first.views, 100);
+  assert.equal(row["9800001"].views.latest.views, 450);
+  assert.equal(row["9800001"].views.growth, 4.5);
+  assert.equal(row["9800002"].lead_hours, null, "sdotgu-sig never saw the recipe");
+
+  // Named posts are scored whether or not a lens read them; unknown ids are listed.
+  const named = await s.call("GET", "/lenses/signals?account=sigacct&ids=9800003,9800002,1234", undefined, { token: "runner" });
+  assert.deepEqual(named.posts.map((r) => [r.id, r.near_lenses, r.opened_by]), [["9800003", ["harness"], []], ["9800002", ["kitchen"], ["kitchen"]]]);
+  assert.deepEqual(named.missing, ["1234"]);
+
+  assert.equal((await s.call("GET", "/lenses/signals?account=nobody", undefined, { raw: true, token: "runner" })).status, 404);
+  assert.equal((await s.call("GET", "/lenses/signals?account=sigacct", undefined, { raw: true, token: "ingest" })).status, 403, "runner token only");
+  assert.equal((await s.call("GET", "/lenses/signals?limit=0", undefined, { raw: true, token: "runner" })).status, 400);
+});

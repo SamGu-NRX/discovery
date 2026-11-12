@@ -66,6 +66,56 @@ Every open is a flag. The Worker schedules metric re-polls for it 1 h, 6 h, 24 h
    ```
 3. In the lens account's own Chrome profile, open the popup's Connection section, enter the Worker URL, the token and the lens id, and tick "Next session records the baseline". Run a session. Afterwards, Active mode reads every 3 hours.
 
+## Cross-lens signals
+
+`GET /lenses/signals?account=&vs=sdotgu&ids=&limit=` (runner token) scores posts against every lens at once. Each row is a post any lens opened, newest read first, or a post named in `ids`. A row carries:
+
+- each lens's taste, and whether it reaches that lens's near and open thresholds;
+- which lenses opened it;
+- when a lens account and `vs` first saw it, and the hours between;
+- its views at the first and latest sample, which the re-polls add to.
+
+A post near two lenses, or flagged by a lens before `vs` saw it, stands out in this table.
+
+## Measured on captured posts (Nov 12)
+
+No lens has run on a live account. These checks replay what fetch mode captured on @sdotgu: 10,142 posts from ten bundles, embedded locally with the same bge-base-en-v1.5 model (`scripts/local-embeddings.py`).
+
+**Raw cosine scoring does not separate topics.** `scripts/lens-replay.mjs` and `scripts/lens-centering.py` used two test lenses.
+
+- "harness": 38 Nov 12 saves that the archive tagged with harness topics.
+- "design": 23 UI-design saves, picked by hand.
+
+Every post's taste falls between about 0.67 and 0.84, so each lens's near threshold passes most of the corpus. All 50 top posts of each lens count as near the other lens.
+
+Subtracting the corpus mean vector before the cosine fixes the separation:
+
+| | Raw | Mean subtracted |
+|---|---|---|
+| Harness taste, 10th to 90th percentile | 0.675 to 0.786 | −0.338 to 0.349 |
+| Posts near harness / near design | 54% / 80% | 5.3% / 1.6% |
+| Posts near both lenses | 49.6% | 0.9% |
+| Top 50 of each lens near the other | 50 / 50 | 21 / 21 |
+| Held-out exemplars vs all posts, AUC (harness / design) | 0.69 / 0.64 | 0.94 / 0.97 |
+| Held-out exemplars vs the other lens's, AUC | 0.64 / 0.81 | 0.85 / 0.75 |
+
+The thresholds still come from exemplar percentiles. With the mean subtracted, they open 1% of these posts, not the 10% the reader aims for. These posts are reply threads around saves, not a For You feed, so the day-1 baseline is where the open threshold should be set. `lens.ts` does not subtract a mean yet.
+
+**First charter, "agent harnesses".** The charter reads: "Agent harnesses: how Claude Code, Codex, T3 Code and other coding-agent harnesses are set up and run, including subagents and orchestration, model routing and effort, MCP tools, skills and instruction files, memory, sessions and long-running agents."
+
+Its exemplars are the 32 Oct 26 saves whose archive findings carry a harness topic. Scoring therefore never sees the 170 Nov 12 saves it is checked on (`scripts/lens-score-saves.py`). Each save is scored on its post text, as the reader labels a feed post.
+
+The gold is the archive lead's disposition of the 170 Nov 12 saves. 98 were kept as bearing on Sam's model and tool setup. 47 of the kept carry a harness topic.
+
+| Mean subtracted | Labeled | Precision vs kept | Precision vs harness | Recall of harness |
+|---|---|---|---|---|
+| open (at or above open_at) | 17 | 0.94 | 0.82 | 0.30 |
+| near (at or above glance_at) | 86 | 0.81 | 0.47 | 0.85 |
+
+Without the mean subtraction, open labels 28 saves at precision 0.89 vs kept and 0.71 vs harness, and near labels 83 at 0.735 and 0.46. The AUC of harness saves against the rest is 0.83, against 0.82 raw.
+
+Four of the seven harness saves the lens misses carry little or no post text: a bare mention, a link, a one-line reply. Their substance is in the quoted post or the linked page, which the reader does not see in the feed either.
+
 ## Not yet checked
 
 - Nothing has run on a live account: @_sgu_ is not signed in on the Zephyrus yet. The tests use the fixture x.com and a stand-in model.
