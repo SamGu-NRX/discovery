@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>X Collector Comparison</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one narrow reading column; each metric is a row of three method cells that stays three-up even on a phone. */
+:root {
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --fg: #16191f;
+  --muted: #5b6270;
+  --line: #dde1e8;
+  --fetch: #1f6fb2;
+  --cu: #b26a12;
+  --grok: #8a909c;
+  --font-display: "Space Grotesk", "Segoe UI", system-ui, sans-serif;
+  --font-body: "Inter", "Segoe UI", system-ui, sans-serif;
+  --font-data: "JetBrains Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #111318; --surface: #191c23; --fg: #e8eaef; --muted: #9aa1ae; --line: #2a2f39;
+    --fetch: #6fb1ea; --cu: #e3a14f; --grok: #7c8290; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #111318; --surface: #191c23; --fg: #e8eaef; --muted: #9aa1ae; --line: #2a2f39;
+  --fetch: #6fb1ea; --cu: #e3a14f; --grok: #7c8290; color-scheme: dark;
+}
+body {
+  margin: 0;
+  background: var(--bg); color: var(--fg); font: 15px/1.55 var(--font-body);
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 28px 48px;
+}
+main { max-width: 640px; margin: 0 auto; display: grid; gap: 32px; }
+h1, h2 { font-family: var(--font-display); font-weight: 600; text-wrap: balance; margin: 0; }
+h1 { font-size: 1.65rem; line-height: 1.2; }
+h2 { font-size: 1.15rem; }
+p { margin: 0; }
+section { display: grid; gap: 12px; min-width: 0; }
+.lede { color: var(--muted); }
+.stamp { font: 12px/1.4 var(--font-data); color: var(--muted); letter-spacing: 0.02em; }
+.verdict { background: var(--surface); border: 1px solid var(--line); border-left: 3px solid var(--fetch); border-radius: 4px; padding: 14px 16px; display: grid; gap: 6px; }
+.verdict strong { font-family: var(--font-display); font-size: 1.05rem; }
+
+.methods { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; font-size: 12px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; }
+.methods span { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.k-fetch { color: var(--fetch); } .k-cu { color: var(--cu); } .k-grok { color: var(--grok); }
+.bg-fetch { background: var(--fetch); } .bg-cu { background: var(--cu); } .bg-grok { background: var(--grok); }
+
+.metrics { display: grid; gap: 0; border-top: 1px solid var(--line); }
+.metric { display: grid; gap: 6px; padding-block: 12px; border-bottom: 1px solid var(--line); }
+.metric > p { font-size: 13px; color: var(--muted); }
+.vals { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.vals div { min-width: 0; font: 500 14px/1.35 var(--font-data); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.vals small { display: block; font: 12px/1.35 var(--font-body); color: var(--muted); margin-top: 2px; }
+.vals .none { color: var(--grok); font-family: var(--font-body); font-weight: 400; }
+
+.chart { background: var(--surface); border: 1px solid var(--line); border-radius: 4px; padding: 14px 16px; display: grid; gap: 12px; }
+.save { display: grid; grid-template-columns: 76px minmax(0, 1fr); gap: 4px 10px; align-items: center; font-size: 13px; }
+.save .name { grid-row: span 2; font-weight: 500; }
+.save .name small { display: block; color: var(--muted); font: 11px var(--font-data); }
+.track { position: relative; height: 10px; background: var(--line); border-radius: 2px; }
+.bar { position: absolute; inset: 0 auto 0 0; border-radius: 2px; }
+.row { display: grid; grid-template-columns: minmax(0, 1fr) 46px; gap: 8px; align-items: center; }
+.row b { font: 500 12px var(--font-data); font-variant-numeric: tabular-nums; text-align: right; color: var(--muted); }
+.axis-note { font-size: 12px; color: var(--muted); }
+
+ul, ol { margin: 0; padding-left: 1.2em; display: grid; gap: 8px; }
+li { padding-left: 2px; }
+code { font: 13px var(--font-data); overflow-wrap: anywhere; }
+.prompt { background: var(--surface); border: 1px solid var(--line); border-radius: 4px; padding: 12px; overflow-x: auto; font: 12.5px/1.5 var(--font-data); white-space: pre-wrap; margin: 0; }
+.copy { justify-self: start; font: 600 13px var(--font-body); color: var(--fg); background: var(--surface); border: 1px solid var(--line); border-radius: 4px; padding: 8px 12px; cursor: pointer; }
+.copy:hover { border-color: var(--muted); }
+.copy:focus-visible { outline: 2px solid var(--fetch); outline-offset: 2px; }
+@media (prefers-reduced-motion: no-preference) { .copy { transition: border-color 150ms ease-out; } }
+</style>
+
+<main>
+  <header style="display:grid;gap:10px">
+    <p class="stamp">@sdotgu · Nov 12, 2026 · snapshot 20:30 UTC</p>
+    <h1>Collecting X saves and their context</h1>
+    <p class="lede">Three ways to collect bookmarks and the replies, quotes and mentions around them, measured on today's runs. GrokBot hasn't run yet.</p>
+  </header>
+
+  <div class="verdict">
+    <strong>Use direct fetch for the daily pipeline.</strong>
+    <p>It found the same share of the judged context as computer use, in a median 38 seconds per save instead of 3 to 14 minutes, and with no model tokens. Close its two gaps first, give it a daily trigger, and decide on GrokBot after its week-long trial.</p>
+  </div>
+
+  <section aria-labelledby="h-results">
+    <h2 id="h-results">Results</h2>
+    <div class="methods" aria-hidden="true">
+      <span class="k-fetch"><i class="dot bg-fetch"></i>Direct fetch</span>
+      <span class="k-cu"><i class="dot bg-cu"></i>Computer use</span>
+      <span class="k-grok"><i class="dot bg-grok"></i>GrokBot</span>
+    </div>
+    <div class="metrics">
+      <div class="metric"><p>Bookmark list (89 posts)</p>
+        <div class="vals"><div>89/89, same order<small>13.7 s, 5 requests</small></div><div>reference<small>3 passes, ~4 min each</small></div><div class="none">no data</div></div></div>
+      <div class="metric"><p>Judged keeps found, 7 saves both read</p>
+        <div class="vals"><div>113/138<small>82%</small></div><div>115/138<small>83%</small></div><div class="none">no data</div></div></div>
+      <div class="metric"><p>Judged keeps found, 53 more saves</p>
+        <div class="vals"><div>776/790<small>only collector; 14 others were added by the judge</small></div><div class="none">not run</div><div class="none">no data</div></div></div>
+      <div class="metric"><p>Time per save</p>
+        <div class="vals"><div>38 s<small>median; 90th pct 162 s</small></div><div>~10 min<small>175–865 s; 68 min for 7</small></div><div class="none">no data</div></div></div>
+      <div class="metric"><p>Posts per minute</p>
+        <div class="vals"><div>70<small>rate waits included</small></div><div>~17</div><div class="none">no data</div></div></div>
+      <div class="metric"><p>Model tokens</p>
+        <div class="vals"><div>0</div><div>25.7 M<small>input, for 7 saves</small></div><div class="none">quota, unmeasured</div></div></div>
+      <div class="metric"><p>X back-off signals (rate limit, login wall, challenge)</p>
+        <div class="vals"><div>0<small>in 2,234 requests</small></div><div>0</div><div class="none">no data</div></div></div>
+      <div class="metric"><p>Interventions</p>
+        <div class="vals"><div>0 on X<small>3 around saving files</small></div><div>0 today<small>4 on Oct 26</small></div><div class="none">no data</div></div></div>
+    </div>
+  </section>
+
+  <section aria-labelledby="h-saves">
+    <h2 id="h-saves">The 7 saves both methods read</h2>
+    <p>Each bar shows how many of the posts the archive's judge kept that collector had found. Together the two found all 138.</p>
+    <div class="chart" id="chart" role="img" aria-label="Judged keeps found per save by direct fetch and computer use"></div>
+    <ul>
+      <li><b>Computer use missed 23</b>, mostly quote posts. X's quotes page showed "this page doesn't exist" for every save the pilot opened. Fetch mode finds them through search.</li>
+      <li><b>Fetch mode missed 25.</b> Emil's post is a reply, and the pilot read all 86 replies of the post it answers. Fetch mode reads that parent but not its replies, which cost 16. On Mollick, fetch mode lost 4 to the request and branch limits in place then, and 3 to second pages of searches, which X won't serve to replayed requests.</li>
+    </ul>
+  </section>
+
+  <section aria-labelledby="h-scale">
+    <h2 id="h-scale">At scale, fetch mode only</h2>
+    <ul>
+      <li>60 saves in 1,889 requests and 123 minutes, 60 of them spent waiting to keep 30% of X's request budget free.</li>
+      <li>Both reply orders reached their end on all 60 saves. 13 saves had more reply branches than the 15-per-post limit, 284 in all. Follow-up gap runs fetch those, at about 2 requests a branch.</li>
+      <li>On 48 of 60 saves it collected at least X's reply count. 12 are short even though both orders reached the end, mostly four posts with 588 to 1,085 replies. X's count includes replies its views don't show this account. No page check was made.</li>
+    </ul>
+  </section>
+
+  <section aria-labelledby="h-rec">
+    <h2 id="h-rec">For the daily pipeline</h2>
+    <ol>
+      <li><b>Collect with fetch mode, sending to the Worker.</b> About 3 new saves a day need 1–2 bookmark requests and 50–170 post requests, inside one 15-minute window and 2–8 minutes of wall time.</li>
+      <li><b>Close two gaps first.</b> Read the conversation of the post a save replies to, and keep the per-post cap at 80 or more.</li>
+      <li><b>Add a daily trigger.</b> Today someone has to press Start. The lens branch's hourly re-poll already opens the fetch page from an alarm; a daily job can use the same path. Not built yet.</li>
+      <li><b>Keep computer use as the fallback</b> for when X changes something fetch mode depends on, and for second pages of searches.</li>
+      <li><b>Decide on GrokBot after its trial.</b> It is the only option that works while Sam's Chrome is closed, and it reads bookmarks through X's paid API. Fetch mode reads X's internal API from Sam's session, which X's terms don't allow; nothing shows how X treats that at this volume.</li>
+    </ol>
+  </section>
+
+  <section aria-labelledby="h-grok">
+    <h2 id="h-grok">To measure GrokBot</h2>
+    <ol>
+      <li>Follow round 2's <code>SETUP.md</code> steps 2 and 3 on the MacBook: connect X with write permissions off, paste the daily routine, and record the day-0 boundary.</li>
+      <li>Once, in a new GrokBot chat, send the request below. It reads the same 7 saves in the inbox format the routine uses.</li>
+      <li>Export the inbox and score it with <code>extension/tools/x-direct-score-judged.mjs --grokbot &lt;export.json&gt;</code>. Also note the quota share and the X credits spent.</li>
+    </ol>
+    <pre class="prompt" id="grok-prompt">Once, now: file the conversation around these 7 X posts into my reading inbox, the same way and in the same format as my daily X routine, with run_id "2026-11-12-context-once".
+Posts: 2119124661443457189, 2120252783953871317, 2119879610724720702, 2119930229661503893, 2120494222516339134, 2119870150845599972, 2115876931749200320.
+For each post, using your built-in public X tools: its self-thread; every reply X shows, in the order X shows them, including replies to replies (up to 500); every post that quotes it (up to 150); and posts that contain a link to it or to the links in it (up to 100). If the post is itself a reply, also collect the replies to the post it answers, as relation "reply" under the same thread_root_id.
+Read only: never post, reply, like, repost, follow, bookmark or message. Every item is a "thread" item with thread_root_id set to the post above it belongs to.</pre>
+    <button class="copy" id="copy-prompt" type="button">Copy request</button>
+  </section>
+
+  <p class="stamp">Source: docs/x-direct/COMPARISON.md on branch x-direct. Judged keeps from x-bookmarks-eval at 5a25d5a.</p>
+</main>
+
+<script>
+const saves = [
+  ["corbtt", "Opus refusals", 10, 9, 10],
+  ["Emil", "/prototype", 22, 22, 6],
+  ["shadcn", "/improve", 17, 12, 15],
+  ["Mia", "HTML files", 20, 17, 20],
+  ["paradite", "Fable habits", 9, 6, 9],
+  ["Mollick", "Fable essay", 27, 25, 20],
+  ["Kino", "launch", 33, 24, 33],
+];
+const max = 33;
+const chart = document.getElementById("chart");
+const bar = (value, kept, cls) => {
+  const row = document.createElement("div");
+  row.className = "row";
+  row.innerHTML = `<div class="track"><div class="bar ${cls}" style="width:${(value / max) * 100}%"></div></div><b>${value}/${kept}</b>`;
+  return row;
+};
+for (const [name, about, kept, cu, fetch] of saves) {
+  const el = document.createElement("div");
+  el.className = "save";
+  el.innerHTML = `<div class="name">${name}<small>${about}</small></div>`;
+  el.append(bar(fetch, kept, "bg-fetch"), bar(cu, kept, "bg-cu"));
+  chart.append(el);
+}
+const note = document.createElement("p");
+note.className = "axis-note";
+note.innerHTML = `Blue: direct fetch. Amber: computer use. Bars share one scale, 0 to ${max} posts.`;
+chart.append(note);
+
+document.getElementById("copy-prompt").addEventListener("click", (event) => {
+  const button = event.currentTarget;
+  const text = document.getElementById("grok-prompt").textContent;
+  navigator.clipboard.writeText(text).then(
+    () => { button.textContent = "Copied"; setTimeout(() => (button.textContent = "Copy request"), 1600); },
+    () => {
+      const range = document.createRange();
+      range.selectNodeContents(document.getElementById("grok-prompt"));
+      const sel = getSelection(); sel.removeAllRanges(); sel.addRange(range);
+      button.textContent = "Selected; copy it";
+    },
+  );
+});
+</script>
