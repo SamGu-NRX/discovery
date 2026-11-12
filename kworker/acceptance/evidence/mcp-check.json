@@ -1,0 +1,633 @@
+{
+ "tools_listed": [
+  "knowledge_blob",
+  "knowledge_bundle",
+  "knowledge_has",
+  "knowledge_search",
+  "mailbox_ack",
+  "mailbox_claim",
+  "mailbox_complete",
+  "mailbox_send"
+ ],
+ "has": {
+  "ids": [
+   {
+    "id": "2113101611669307727",
+    "version": 1,
+    "completeness": "complete"
+   },
+   {
+    "id": "2112875577388712123",
+    "version": 1,
+    "completeness": "complete"
+   },
+   {
+    "id": "2112288527837024667",
+    "version": 1,
+    "completeness": "complete"
+   },
+   {
+    "id": "2112712092163957157",
+    "version": 2,
+    "completeness": "complete"
+   },
+   {
+    "id": "2109412046244913643",
+    "version": 1,
+    "completeness": "complete"
+   },
+   {
+    "id": "2114435444587065486",
+    "version": 1,
+    "completeness": "complete"
+   },
+   {
+    "id": "2111883168190275752",
+    "version": 1,
+    "completeness": "complete"
+   },
+   {
+    "id": "2111478858478465421",
+    "version": 1,
+    "completeness": "complete"
+   },
+   {
+    "id": "2112247046082363821",
+    "version": 1,
+    "completeness": "complete"
+   },
+   {
+    "id": "2112632133357346889",
+    "version": 2,
+    "completeness": "partial"
+   }
+  ],
+  "urls": [
+   {
+    "url": "https://bencho.dev",
+    "canonical_url": "https://bencho.dev/",
+    "fetch": {
+     "status": "ok",
+     "rung": 1,
+     "final_url": "https://bencho.dev/",
+     "fetched_at": 1794507105253
+    }
+   },
+   {
+    "url": "http://fx0.vercel.dev",
+    "canonical_url": "http://fx0.vercel.dev/",
+    "fetch": {
+     "status": "ok",
+     "rung": 1,
+     "final_url": "https://fx0.vercel.dev/",
+     "fetched_at": 1794507131584
+    }
+   }
+  ]
+ },
+ "search_og_video": {
+  "results": [
+   {
+    "post_id": "2112875577388712123",
+    "version": 1,
+    "author_untrusted": "raunofreiberg",
+    "snippet_untrusted": "you should be using [og]:[video]\nmost client sites have not even got [og]:image right…"
+   }
+  ]
+ },
+ "blob": {
+  "key": "sha256/d6d15cd9a2e243487a10e3f0f0049d466540bf70694f1840384079adb32dd361",
+  "mime": "video/mp4",
+  "size": 11458676,
+  "offset": 0,
+  "length": 64,
+  "next_offset": 64,
+  "encoding": "base64",
+  "data_untrusted": "88 chars"
+ },
+ "saves": [
+  {
+   "post_id": "2113101611669307727",
+   "what": "video (chrisflores_us, Claude Duet onboarding, 88 s)",
+   "cut_sections": [],
+   "text_match": true,
+   "thread_match": true,
+   "thread": {
+    "want": [
+     "2113101611669307727"
+    ],
+    "got": [
+     "2113101611669307727"
+    ]
+   },
+   "media_match": true,
+   "media": {
+    "want": [
+     "d6d15cd9a2e243487a10e3f0f0049d466540bf70694f1840384079adb32dd361"
+    ],
+    "got": [
+     "d6d15cd9a2e243487a10e3f0f0049d466540bf70694f1840384079adb32dd361"
+    ]
+   },
+   "repos_match": true,
+   "repos_recall": "0/0",
+   "repos": {
+    "want": [],
+    "got": []
+   },
+   "completeness": "complete",
+   "missing": [
+    {
+     "reason": "the 2026-10-26 archive does not record the post this one replies to, if any",
+     "ref": "2113101611669307727",
+     "what": "upstream"
+    },
+    {
+     "reason": "posts that quote or link this one were not captured in the 2026-10-26 archive",
+     "ref": "2113101611669307727",
+     "what": "linking"
+    }
+   ],
+   "replies_kept": 7,
+   "replies_in_archive": 6,
+   "replies_overlap": 5,
+   "ocr_uncertain": []
+  },
+  {
+   "post_id": "2112875577388712123",
+   "what": "video (raunofreiberg, og:video)",
+   "cut_sections": [],
+   "text_match": true,
+   "thread_match": true,
+   "thread": {
+    "want": [
+     "2112875577388712123"
+    ],
+    "got": [
+     "2112875577388712123"
+    ]
+   },
+   "media_match": true,
+   "media": {
+    "want": [
+     "0c928bbc279ecf8f710cb3a4b7c419a92525227edee9ef58de484bc803629ff9"
+    ],
+    "got": [
+     "0c928bbc279ecf8f710cb3a4b7c419a92525227edee9ef58de484bc803629ff9"
+    ]
+   },
+   "repos_match": true,
+   "repos_recall": "0/0",
+   "repos": {
+    "want": [],
+    "got": []
+   },
+   "completeness": "complete",
+   "missing": [
+    {
+     "reason": "the 2026-10-26 archive does not record the post this one replies to, if any",
+     "ref": "2112875577388712123",
+     "what": "upstream"
+    },
+    {
+     "reason": "posts that quote or link this one were not captured in the 2026-10-26 archive",
+     "ref": "2112875577388712123",
+     "what": "linking"
+    }
+   ],
+   "replies_kept": 1,
+   "replies_in_archive": 2,
+   "replies_overlap": 1,
+   "ocr_uncertain": []
+  },
+  {
+   "post_id": "2112288527837024667",
+   "what": "text screenshot (codybrouwers, code review tool)",
+   "cut_sections": [],
+   "text_match": true,
+   "thread_match": true,
+   "thread": {
+    "want": [
+     "2112288527837024667"
+    ],
+    "got": [
+     "2112288527837024667"
+    ]
+   },
+   "media_match": true,
+   "media": {
+    "want": [
+     "0beee12a2172060a1036827dee7dadbed07b7cc19e32747daef679fb2706eab1"
+    ],
+    "got": [
+     "0beee12a2172060a1036827dee7dadbed07b7cc19e32747daef679fb2706eab1"
+    ]
+   },
+   "repos_match": true,
+   "repos_recall": "0/0",
+   "repos": {
+    "want": [],
+    "got": []
+   },
+   "completeness": "complete",
+   "missing": [
+    {
+     "reason": "the 2026-10-26 archive does not record the post this one replies to, if any",
+     "ref": "2112288527837024667",
+     "what": "upstream"
+    },
+    {
+     "reason": "posts that quote or link this one were not captured in the 2026-10-26 archive",
+     "ref": "2112288527837024667",
+     "what": "linking"
+    }
+   ],
+   "replies_kept": 3,
+   "replies_in_archive": 2,
+   "replies_overlap": 2,
+   "ocr_uncertain": []
+  },
+  {
+   "post_id": "2112712092163957157",
+   "what": "text screenshot, two-post thread (theo, cost to land changes)",
+   "cut_sections": [],
+   "text_match": true,
+   "thread_match": true,
+   "thread": {
+    "want": [
+     "2112712092163957157",
+     "2112712462772658479"
+    ],
+    "got": [
+     "2112712092163957157",
+     "2112712462772658479"
+    ]
+   },
+   "media_match": true,
+   "media": {
+    "want": [
+     "91fe3c1cffe5f3776bb63736a9fdba44741703c11600977c3d52f4f33773649f"
+    ],
+    "got": [
+     "91fe3c1cffe5f3776bb63736a9fdba44741703c11600977c3d52f4f33773649f"
+    ]
+   },
+   "repos_match": true,
+   "repos_recall": "0/0",
+   "repos": {
+    "want": [],
+    "got": []
+   },
+   "completeness": "complete",
+   "missing": [
+    {
+     "reason": "the 2026-10-26 archive does not record the post this one replies to, if any",
+     "ref": "2112712092163957157",
+     "what": "upstream"
+    },
+    {
+     "reason": "posts that quote or link this one were not captured in the 2026-10-26 archive",
+     "ref": "2112712092163957157",
+     "what": "linking"
+    }
+   ],
+   "replies_kept": 0,
+   "replies_in_archive": 0,
+   "replies_overlap": 0,
+   "ocr_uncertain": []
+  },
+  {
+   "post_id": "2109412046244913643",
+   "what": "two text screenshots, two-post thread (brian_armstrong, Qwen fine-tune)",
+   "cut_sections": [],
+   "text_match": true,
+   "thread_match": true,
+   "thread": {
+    "want": [
+     "2109412046244913643",
+     "2109412049562611793"
+    ],
+    "got": [
+     "2109412046244913643",
+     "2109412049562611793"
+    ]
+   },
+   "media_match": true,
+   "media": {
+    "want": [
+     "af68a5498b5da49bff77c243e536dba1efecaba4b72fce4214aa13b8dc008f12",
+     "e5fe99870b51f8502eebb5321e7afb913feb3fa2edeeec1b712f26e9f11cf12d"
+    ],
+    "got": [
+     "af68a5498b5da49bff77c243e536dba1efecaba4b72fce4214aa13b8dc008f12",
+     "e5fe99870b51f8502eebb5321e7afb913feb3fa2edeeec1b712f26e9f11cf12d"
+    ]
+   },
+   "repos_match": true,
+   "repos_recall": "0/0",
+   "repos": {
+    "want": [],
+    "got": []
+   },
+   "completeness": "complete",
+   "missing": [
+    {
+     "reason": "the 2026-10-26 archive does not record the post this one replies to, if any",
+     "ref": "2109412046244913643",
+     "what": "upstream"
+    },
+    {
+     "reason": "posts that quote or link this one were not captured in the 2026-10-26 archive",
+     "ref": "2109412046244913643",
+     "what": "linking"
+    }
+   ],
+   "replies_kept": 3,
+   "replies_in_archive": 6,
+   "replies_overlap": 3,
+   "ocr_uncertain": []
+  },
+  {
+   "post_id": "2114435444587065486",
+   "what": "ten-post thread with media (akshay_manglik, Pomerado)",
+   "cut_sections": [],
+   "text_match": true,
+   "thread_match": true,
+   "thread": {
+    "want": [
+     "2114435444587065486",
+     "2114435445866254772",
+     "2114435447992771013",
+     "2114435450018594985",
+     "2114435452170375453",
+     "2114435454154191075",
+     "2114435455995572325",
+     "2114435458197582269",
+     "2114435945474998716",
+     "2114436006778925376"
+    ],
+    "got": [
+     "2114435444587065486",
+     "2114435445866254772",
+     "2114435447992771013",
+     "2114435450018594985",
+     "2114435452170375453",
+     "2114435454154191075",
+     "2114435455995572325",
+     "2114435458197582269",
+     "2114435945474998716",
+     "2114436006778925376"
+    ]
+   },
+   "media_match": true,
+   "media": {
+    "want": [
+     "4942c7d3ce7447c264da87e9d12d85f462088db5cac1684432f5bd35cf376ae2"
+    ],
+    "got": [
+     "4942c7d3ce7447c264da87e9d12d85f462088db5cac1684432f5bd35cf376ae2"
+    ]
+   },
+   "repos_match": true,
+   "repos_recall": "1/1",
+   "repos": {
+    "want": [
+     "https://github.com/pomerado/pomerado"
+    ],
+    "got": [
+     "https://github.com/pomerado/pomerado"
+    ]
+   },
+   "completeness": "complete",
+   "missing": [
+    {
+     "reason": "the 2026-10-26 archive does not record the post this one replies to, if any",
+     "ref": "2114435444587065486",
+     "what": "upstream"
+    },
+    {
+     "reason": "posts that quote or link this one were not captured in the 2026-10-26 archive",
+     "ref": "2114435444587065486",
+     "what": "linking"
+    }
+   ],
+   "replies_kept": 7,
+   "replies_in_archive": 4,
+   "replies_overlap": 4,
+   "ocr_uncertain": [
+    "m7"
+   ]
+  },
+  {
+   "post_id": "2111883168190275752",
+   "what": "five-post thread, save in the middle (trq212)",
+   "cut_sections": [],
+   "text_match": true,
+   "thread_match": true,
+   "thread": {
+    "want": [
+     "2111883082953547881",
+     "2111883168190275752",
+     "2111883843846451632",
+     "2111884199359897953",
+     "2111884272101691613"
+    ],
+    "got": [
+     "2111883082953547881",
+     "2111883168190275752",
+     "2111883843846451632",
+     "2111884199359897953",
+     "2111884272101691613"
+    ]
+   },
+   "media_match": true,
+   "media": {
+    "want": [
+     "ffc229fb7250f5106d0645470eb7209f11557f81bd78384299c069921eac72de"
+    ],
+    "got": [
+     "ffc229fb7250f5106d0645470eb7209f11557f81bd78384299c069921eac72de"
+    ]
+   },
+   "repos_match": true,
+   "repos_recall": "0/0",
+   "repos": {
+    "want": [],
+    "got": []
+   },
+   "completeness": "complete",
+   "missing": [
+    {
+     "reason": "the 2026-10-26 archive does not record the post this one replies to, if any",
+     "ref": "2111883168190275752",
+     "what": "upstream"
+    },
+    {
+     "reason": "posts that quote or link this one were not captured in the 2026-10-26 archive",
+     "ref": "2111883168190275752",
+     "what": "linking"
+    }
+   ],
+   "replies_kept": 0,
+   "replies_in_archive": 0,
+   "replies_overlap": 0,
+   "ocr_uncertain": []
+  },
+  {
+   "post_id": "2111478858478465421",
+   "what": "product site with repo (cabralorenzo, bencho.dev)",
+   "cut_sections": [],
+   "text_match": true,
+   "thread_match": true,
+   "thread": {
+    "want": [
+     "2111478858478465421",
+     "2111506005548998801"
+    ],
+    "got": [
+     "2111478858478465421",
+     "2111506005548998801"
+    ]
+   },
+   "media_match": true,
+   "media": {
+    "want": [
+     "cab681af06e7f88cc84ea3ae3d66643af26806bfebb69ac3e14f23a8ed6f5e12"
+    ],
+    "got": [
+     "cab681af06e7f88cc84ea3ae3d66643af26806bfebb69ac3e14f23a8ed6f5e12"
+    ]
+   },
+   "repos_match": true,
+   "repos_recall": "1/1",
+   "repos": {
+    "want": [
+     "https://github.com/cabralorenzo/bencho"
+    ],
+    "got": [
+     "https://github.com/cabralorenzo/bencho"
+    ]
+   },
+   "completeness": "complete",
+   "missing": [
+    {
+     "reason": "the 2026-10-26 archive does not record the post this one replies to, if any",
+     "ref": "2111478858478465421",
+     "what": "upstream"
+    },
+    {
+     "reason": "posts that quote or link this one were not captured in the 2026-10-26 archive",
+     "ref": "2111478858478465421",
+     "what": "linking"
+    }
+   ],
+   "replies_kept": 2,
+   "replies_in_archive": 4,
+   "replies_overlap": 2,
+   "ocr_uncertain": []
+  },
+  {
+   "post_id": "2112247046082363821",
+   "what": "product site with repo, quoted post (rauchg, fx0.vercel.dev)",
+   "cut_sections": [],
+   "text_match": true,
+   "thread_match": true,
+   "thread": {
+    "want": [
+     "2112247046082363821"
+    ],
+    "got": [
+     "2112247046082363821"
+    ]
+   },
+   "media_match": true,
+   "media": {
+    "want": [
+     "56549ba3b03817dba5e49f60fa16ea5452b59d17c95bcf4ad39999779fc52d26"
+    ],
+    "got": [
+     "56549ba3b03817dba5e49f60fa16ea5452b59d17c95bcf4ad39999779fc52d26"
+    ]
+   },
+   "repos_match": true,
+   "repos_recall": "2/2",
+   "repos": {
+    "want": [
+     "https://github.com/stevysmith/fx0",
+     "https://github.com/vercel-labs/fx0"
+    ],
+    "got": [
+     "https://github.com/stevysmith/fx0",
+     "https://github.com/vercel-labs/fx0"
+    ]
+   },
+   "completeness": "complete",
+   "missing": [
+    {
+     "reason": "the 2026-10-26 archive does not record the post this one replies to, if any",
+     "ref": "2112247046082363821",
+     "what": "upstream"
+    },
+    {
+     "reason": "posts that quote or link this one were not captured in the 2026-10-26 archive",
+     "ref": "2112247046082363821",
+     "what": "linking"
+    }
+   ],
+   "replies_kept": 3,
+   "replies_in_archive": 2,
+   "replies_overlap": 2,
+   "ocr_uncertain": []
+  },
+  {
+   "post_id": "2112632133357346889",
+   "what": "login-gated link, arXiv link, quoted post (omarsar0, evals)",
+   "cut_sections": [],
+   "text_match": true,
+   "thread_match": true,
+   "thread": {
+    "want": [
+     "2112632133357346889",
+     "2112647599413190877"
+    ],
+    "got": [
+     "2112632133357346889",
+     "2112647599413190877"
+    ]
+   },
+   "media_match": true,
+   "media": {
+    "want": [],
+    "got": []
+   },
+   "repos_match": true,
+   "repos_recall": "0/0",
+   "repos": {
+    "want": [],
+    "got": []
+   },
+   "completeness": "partial",
+   "missing": [
+    {
+     "reason": "the 2026-10-26 archive does not record the post this one replies to, if any",
+     "ref": "2112632133357346889",
+     "what": "upstream"
+    },
+    {
+     "reason": "posts that quote or link this one were not captured in the 2026-10-26 archive",
+     "ref": "2112632133357346889",
+     "what": "linking"
+    },
+    {
+     "reason": "blocked at rung 7: every rung failed: no site adapter for this host; HTTP 404; r.jina.ai: target refused; ConnectTimeout: _ssl.c:983: The handshake operation timed out; login wall in the browser",
+     "ref": "https://academy.dair.ai/dashboard/resources/jev-as-a-judge",
+     "what": "link"
+    }
+   ],
+   "replies_kept": 1,
+   "replies_in_archive": 2,
+   "replies_overlap": 1,
+   "ocr_uncertain": []
+  }
+ ]
+}
