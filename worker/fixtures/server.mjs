@@ -9,6 +9,9 @@
 //   /gone.xml   always 404, like the YouTube channel feed since 2026-11-04
 //   /t3-webhook stand-in for the T3 webhook; records each POST body and
 //               answers with state.webhookStatus
+//   /hook/<name> stand-in for a mailbox wake target; records each POST's
+//               headers and raw body and answers with state.hookStatus[name]
+//               (default 200)
 //
 // Usage: node fixtures/server.mjs [port]   (default 8799)
 
@@ -30,6 +33,8 @@ export function createFixture() {
     hits: [],
     webhooks: [],
     webhookStatus: 200,
+    hooks: [],
+    hookStatus: {},
   };
 
   const atom = () =>
@@ -70,6 +75,11 @@ export function createFixture() {
           case "/control/webhook-status":
             state.webhookStatus = b.status;
             return send(200, "{}");
+          case "/control/hooks":
+            return send(200, JSON.stringify(state.hooks));
+          case "/control/hook-status":
+            state.hookStatus[b.name] = b.status;
+            return send(200, "{}");
           case "/control/atom":
             return send(200, atom(), { "content-type": "application/atom+xml" });
           default:
@@ -85,6 +95,18 @@ export function createFixture() {
       req.on("end", () => {
         state.webhooks.push({ ts: Date.now(), status: state.webhookStatus, body: JSON.parse(raw) });
         send(state.webhookStatus, "{}");
+      });
+      return;
+    }
+
+    if (url.pathname.startsWith("/hook/") && req.method === "POST") {
+      let raw = "";
+      req.on("data", (c) => (raw += c));
+      req.on("end", () => {
+        const name = url.pathname.slice("/hook/".length);
+        const status = state.hookStatus[name] ?? 200;
+        state.hooks.push({ ts: Date.now(), name, status, headers: req.headers, raw });
+        send(status, "{}");
       });
       return;
     }
