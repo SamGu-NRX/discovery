@@ -101,7 +101,9 @@ async function start() {
 async function refuseToStart(owner) {
   if (running) return "A fetch run is already going.";
   if (await pausedOrPausing()) return "The extension is paused after an X signal; see the popup.";
-  if (!(await getLocal("lastAccount", null))) return "Open x.com once while logged in, so the account is known.";
+  // The Worker files batches under an account, so a run that sends them
+  // needs it before it starts; a bundle-only run reads it from its own tab.
+  if ($("to-worker").checked && !(await getLocal("lastAccount", null))) return "Open x.com once while logged in, so the account is known.";
   const reply = await chrome.runtime.sendMessage({ type: "fetch-acquire", owner });
   if (reply?.error) return reply.error;
   return reply?.refused ?? null;
@@ -109,7 +111,7 @@ async function refuseToStart(owner) {
 
 async function run({ jobs, limits }, owner) {
   const config = await loadConfig();
-  const account = await getLocal("lastAccount", null);
+  let account = await getLocal("lastAccount", null);
   const sessionId = crypto.randomUUID();
   const toWorker = $("to-worker").checked;
   const r = { owner, stop: false, tabId: null, windowId: null, expects: null, opened: null, summaries: {}, batches: 0, startedAt: Date.now() };
@@ -144,7 +146,15 @@ async function run({ jobs, limits }, owner) {
       random: Math.random,
       paused: () => pausedOrPausing(),
       stopRequested: () => r.stop,
-      prime: (kind, arg) => prime(r, kind, arg),
+      prime: async (kind, arg) => {
+        await prime(r, kind, arg);
+        // The handle in the side nav of the page the run just opened.
+        const seen = await fetcher(r, "account");
+        if (account && seen && seen !== account) throw new FetchRefused(`X shows @${seen}, but this run started as @${account}`);
+        account ??= seen;
+        if (!account) throw new FetchRefused("X shows no logged-in account in the run's tab");
+        $("account").textContent = `@${account}`;
+      },
       template: async (operation) => (r.summaries[operation] ? parseTemplate(r.summaries[operation]) : null),
       send: (operation, url) => send(r, operation, url),
       onBatch: async ({ batch }) => {

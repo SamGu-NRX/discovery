@@ -30,7 +30,22 @@
 
 (() => {
   const apply = Reflect.apply;
-  const getter = (proto, name) => Object.getOwnPropertyDescriptor(proto, name).get;
+  // Another extension may have run first and replaced XMLHttpRequest or
+  // Request with a subclass, whose prototype has none of these getters as
+  // its own; they are found further up the chain. A getter that is missing
+  // altogether throws when used, inside the try blocks that guard every use,
+  // instead of stopping this whole script at load. Found live in Sam's
+  // Chrome, where the hook died at load on x.com/home and captured nothing.
+  const missingGetter = () => {
+    throw new TypeError("built-in getter unavailable");
+  };
+  const getter = (proto, name) => {
+    for (let p = proto; p; p = Object.getPrototypeOf(p)) {
+      const descriptor = Object.getOwnPropertyDescriptor(p, name);
+      if (descriptor) return descriptor.get ?? missingGetter;
+    }
+    return missingGetter;
+  };
   const dispatch = EventTarget.prototype.dispatchEvent;
   const listen = EventTarget.prototype.addEventListener;
   const unlisten = EventTarget.prototype.removeEventListener;
@@ -206,6 +221,13 @@
   // The method, headers and body each XHR was sent with, since its last open().
   const requests = new WeakMap();
   const onXhrLoad = (event) => {
+    try {
+      readXhr(event);
+    } catch {
+      // Never let capture break X.
+    }
+  };
+  const readXhr = (event) => {
     if (!isTrusted(event)) return;
     const xhr = event.target;
     const graphql = parseGraphql(apply(xhrResponseURL, xhr, []));
@@ -226,11 +248,7 @@
       }
     }
     report(href, operation, status, body);
-    try {
-      sendTemplate(href, operation, status, apply(weakGet, requests, [xhr]));
-    } catch {
-      // Never let capture break X.
-    }
+    sendTemplate(href, operation, status, apply(weakGet, requests, [xhr]));
   };
 
   XMLHttpRequest.prototype.open = function () {

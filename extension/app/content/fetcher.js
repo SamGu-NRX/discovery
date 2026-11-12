@@ -3,9 +3,9 @@
 // isolated world, beside bridge.js, so page scripts can neither call it nor
 // see what it fetches.
 //
-// It has three commands: list the templates the bridge has learned (without
-// header values), inspect the page for a blocker (detect.js), and GET one
-// GraphQL read. A GET goes to https://x.com/i/api/graphql/<id>/<operation>
+// Its commands: list the templates the bridge has learned (without header
+// values), read the logged-in handle, inspect the page for a blocker
+// (detect.js), and GET one GraphQL read. A GET goes to https://x.com/i/api/graphql/<id>/<operation>
 // for an operation on the read list only, with the headers X's own page sent
 // for that operation; the browser adds the page's cookies. It never sends
 // any other method, never follows a redirect, and returns the raw response
@@ -87,8 +87,15 @@
     return { status: res.status, contentType: res.headers.get("content-type") ?? "", text, ms: ms(), rate, bodyError };
   }
 
+  // The logged-in handle, from X's side nav, as bridge.js reads it.
+  function account() {
+    const href = document.querySelector('a[data-testid="AppTabBar_Profile_Link"]')?.getAttribute("href");
+    return (href && /^\/([A-Za-z0-9_]{1,15})$/.exec(href)?.[1]) ?? null;
+  }
+
   const COMMANDS = Object.freeze({
     templates: () => templates(),
+    account: () => account(),
     inspect: () => globalThis.__dxDetect.inspect(),
     get: (arg) => get(arg),
   });
