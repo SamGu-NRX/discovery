@@ -61,24 +61,29 @@ def build(ctx: Ctx, payload: dict) -> dict:
             "mime": res["mime"],
         }
         if c["kind"] == "image":
-            rd = res["read"]
+            rd = ctx.api.get_json(res["read_sha"])
+            second = None
+            if res.get("second_sha"):
+                second = {"text": ctx.api.get_json(res["second_sha"]).get("text", ""), "agreement": res["agreement"], "by": res["second_by"]}
             item["image"] = {
                 "text": rd.get("text", ""),
                 "kind": rd.get("kind"),
                 "description": rd.get("description"),
                 "ocr_uncertain": res["ocr_uncertain"],
-                "by": rd["by"],
-                "second_reader": res["second_reader"] and {k: res["second_reader"][k] for k in ("text", "agreement", "by")},
+                "by": res["read_by"],
+                "second_reader": second,
             }
         else:
-            p, t, rd = res["probe"], res["transcript"], res["read"]
+            p = res["probe"]
+            rd = ctx.api.get_json(res["read_sha"])
+            t = ctx.api.get_json(res["transcript_sha"]) if res.get("transcript_sha") else {"language": None, "segments": []}
             item["video"] = {
                 "duration_s": p["duration_s"],
                 "width": p["width"],
                 "height": p["height"],
                 "has_audio": p["has_audio"],
-                "transcript": {"language": t.get("language"), "segments": t["segments"], "note": t.get("note"), "by": t.get("by")},
-                "read": {"description": rd.get("description"), "scenes": rd.get("scenes", []), "by": rd["by"]},
+                "transcript": {"language": t.get("language"), "segments": t["segments"], "note": res.get("transcript_note"), "by": res.get("transcript_by")},
+                "read": {"description": rd.get("description"), "scenes": rd.get("scenes", []), "by": res["read_by"]},
                 "key_frames": [{"t": f["t"], "sha256": f["sha256"], "r2_key": f"sha256/{f['sha256']}"} for f in res["key_frames"]],
             }
         media.append(item)

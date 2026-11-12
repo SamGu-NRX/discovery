@@ -182,26 +182,32 @@ def cmd_check(a) -> None:
     bundles_dir.mkdir(parents=True, exist_ok=True)
     rows = []
     for pid, what in SAVES.items():
-        b = m.tool("knowledge_bundle", {"post_id": pid})
-        md = m.tool("knowledge_bundle", {"post_id": pid, "sections": ["markdown"]})
-        md_text = md.get("markdown") or md.get("sections", {}).get("markdown")
-        (bundles_dir / f"{pid}.md").write_text(md_text or "", encoding="utf-8")
-        bj = b.get("bundle", b)
+        # One section per call, so a long media or links section cannot push
+        # the fields compared below out of the 48 KiB answer.
+        bj, cut = {}, []
+        for sec in ("front", "post", "thread", "quoted", "replies", "media", "repos", "markdown"):
+            r = m.tool("knowledge_bundle", {"post_id": pid, "sections": [sec]})
+            bj[sec] = r["sections_untrusted"].get(sec)
+            if r.get("truncated") or r.get("omitted"):
+                cut.append(sec)
+        (bundles_dir / f"{pid}.md").write_text(bj.pop("markdown") or "", encoding="utf-8")
+        bj["completeness"] = (bj.get("front") or {}).get("completeness")
+        bj["missing"] = (bj.get("front") or {}).get("missing")
         g = gold_posts[pid]
         want_media = sorted(x["sha256"] for x in media_index if x["post_id"] == pid)
-        got_media = sorted(x["sha256"] for x in bj.get("media", []) if x.get("post_id") == pid and x.get("sha256"))
+        got_media = sorted(x["sha256"] for x in (bj.get("media") or []) if x.get("post_id") == pid and x.get("sha256"))
         want_repos = sorted(r.lower() for r in g.get("repos", []))
-        got_repos = sorted(r["url"].lower() for r in bj.get("repos", []))
+        got_repos = sorted(r["url"].lower() for r in (bj.get("repos") or []))
         thread_want = gold_threads.get(pid, [pid])
-        thread_got = [t["id"] for t in bj.get("thread", [])]
+        thread_got = [t["id"] for t in (bj.get("thread") or [])]
         kept_truth = {_norm(r["text"]) for r in data["replies"] if r["root_id"] == pid}
-        kept_got = {_norm(r["text"]) for r in bj.get("replies", [])}
+        kept_got = {_norm(r["text"]) for r in (bj.get("replies") or [])}
         rows.append(
             {
                 "post_id": pid,
                 "what": what,
-                "truncated": b.get("truncated"),
-                "text_match": _norm(bj.get("post", {}).get("text")) == _norm(g["text"]),
+                "cut_sections": cut,
+                "text_match": _norm((bj.get("post") or {}).get("text")) == _norm(g["text"]),
                 "thread_match": thread_got == thread_want,
                 "thread": {"want": thread_want, "got": thread_got},
                 "media_match": got_media == want_media,
@@ -214,14 +220,14 @@ def cmd_check(a) -> None:
                 "replies_kept": len(kept_got),
                 "replies_in_archive": len(kept_truth),
                 "replies_overlap": len(kept_truth & kept_got),
-                "ocr_uncertain": [x["id"] for x in bj.get("media", []) if (x.get("image") or {}).get("ocr_uncertain")],
+                "ocr_uncertain": [x["id"] for x in (bj.get("media") or []) if (x.get("image") or {}).get("ocr_uncertain")],
             }
         )
     blob_check = None
     first_media = next((r["media"]["got"][0] for r in rows if r["media"]["got"]), None)
     if first_media:
         part = m.tool("knowledge_blob", {"key": f"sha256/{first_media}", "offset": 0, "length": 64})
-        blob_check = {"key": first_media, "returned": {k: (v if k != "data" else f"{len(v)} chars") for k, v in part.items()}}
+        blob_check = {k: (v if k != "data_untrusted" else f"{len(v)} chars") for k, v in part.items()}
     out = {"tools_listed": sorted(listed), "has": has, "search_og_video": search, "blob": blob_check, "saves": rows}
     (EVIDENCE / "mcp-check.json").write_text(json.dumps(out, indent=1, ensure_ascii=False), encoding="utf-8")
     for r in rows:

@@ -84,13 +84,17 @@ def image_job(ctx: Ctx, payload: dict) -> dict:
 
     first = models.run(ctx, "image_read", build_read)
     read = json.loads(first.output)
+    # Job results are capped at 32 KiB, so the readings travel as blob shas.
     out = {
         "sha256": sha,
         "mime": mime,
         "source_url": payload["source_url"],
         "post_id": payload["post_id"],
-        "read": {**read, "by": first.by.as_dict(), "output_sha": first.output_sha},
-        "second_reader": None,
+        "read_sha": first.output_sha,
+        "read_by": first.by.as_dict(),
+        "second_sha": None,
+        "second_by": None,
+        "agreement": None,
         "ocr_uncertain": False,
     }
     # A text screenshot is worth a second, independent reading.
@@ -104,6 +108,5 @@ def image_job(ctx: Ctx, payload: dict) -> dict:
         second = models.run(ctx, "image_second_read", build_second)
         read2 = json.loads(second.output)
         ratio = difflib.SequenceMatcher(None, _norm(read.get("text", "")), _norm(read2.get("text", ""))).ratio()
-        out["second_reader"] = {"text": read2.get("text", ""), "by": second.by.as_dict(), "agreement": round(ratio, 4), "output_sha": second.output_sha}
-        out["ocr_uncertain"] = ratio < AGREE_AT
+        out.update(second_sha=second.output_sha, second_by=second.by.as_dict(), agreement=round(ratio, 4), ocr_uncertain=ratio < AGREE_AT)
     return out

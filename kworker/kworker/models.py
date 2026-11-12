@@ -25,7 +25,9 @@ PROMPTS = Path(__file__).parent / "prompts"
 
 
 def prompt(name: str) -> str:
-    return (PROMPTS / f"{name}.md").read_text(encoding="utf-8")
+    # A Windows checkout may turn these files to CRLF. The text is part of
+    # every cache key, so line endings are fixed here, not left to git.
+    return (PROMPTS / f"{name}.md").read_text(encoding="utf-8").replace("\r\n", "\n")
 
 
 @dataclass(frozen=True)

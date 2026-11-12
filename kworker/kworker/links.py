@@ -280,7 +280,13 @@ def rung2(ctx: Ctx, canon: str) -> Fetched:
         code = re.search(r"returned error (\d+)", text[:3000])
         status = "not_found" if code and code.group(1) == "404" else "blocked"
         return Fetched(2, status, canon, http_status=int(code.group(1)) if code else None, note="r.jina.ai: target refused")
-    return Fetched(2, "ok", canon, text.encode("utf-8"), "text/markdown; charset=utf-8", 200, note="r.jina.ai")
+    # r.jina.ai follows redirects and names where it ended up; a sign-in page
+    # is a wall, not the content.
+    source = re.search(r"^URL Source: (\S+)", text[:2000], re.M)
+    final = source.group(1) if source else canon
+    if _LOGIN_PATH.search(urlsplit(final).path):
+        return Fetched(2, "blocked", final, http_status=200, note="r.jina.ai landed on a login page")
+    return Fetched(2, "ok", final, text.encode("utf-8"), "text/markdown; charset=utf-8", 200, note="r.jina.ai")
 
 
 def _thin_markdown(md: str) -> bool:

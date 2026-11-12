@@ -194,13 +194,17 @@ def video_job(ctx: Ctx, payload: dict) -> dict:
         return None
 
     read = models.run(ctx, "video_read", build)
+    # Job results are capped at 32 KiB, so long outputs travel as blob shas.
     return {
         "sha256": media["sha256"],
         "mime": media["mime"],
         "source_url": payload["source_url"],
         "post_id": payload["post_id"],
         "probe": info,
-        "transcript": transcript,
-        "key_frames": frames,
-        "read": {**json.loads(read.output), "by": read.by.as_dict(), "output_sha": read.output_sha},
+        "transcript_sha": transcript.get("output_sha"),
+        "transcript_by": transcript.get("by"),
+        "transcript_note": transcript.get("note"),
+        "key_frames": frames[:MAX_FRAMES],
+        "read_sha": read.output_sha,
+        "read_by": read.by.as_dict(),
     }
