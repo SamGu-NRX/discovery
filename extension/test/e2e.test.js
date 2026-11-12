@@ -291,6 +291,61 @@ test("a login prompt that appears later on the same URL in Sam's tab still pause
   await page.close();
 });
 
+test("fetch mode: pages learn the templates, every request is a paced GET of a read operation, and batches, status and bundle carry no header value", async () => {
+  await configure({ mode: "passive", account: "fixtureuser" });
+  await worker.evaluate(async () => {
+    const keys = (await chrome.storage.local.getKeys()).filter((k) => k.startsWith("pageSignal:"));
+    await chrome.storage.local.remove([...keys, "backOffReportedUntil", "pendingBackOff"]);
+    await chrome.storage.local.set({ lastAccount: "fixtureuser" });
+    await chrome.storage.session.remove(["activeSession", "fetchRun"]);
+  });
+  site.graphql = [];
+  const startedAt = mock.requests.length;
+  const page = await context.newPage();
+  await page.goto(`chrome-extension://${extensionId}/fetch/fetch.html`);
+  const job = {
+    limits: { detailCapPerPost: 6 },
+    jobs: [
+      { type: "bookmarks_until", boundary: "402" },
+      { type: "context", ids: ["200"], rankings: ["Relevance"], branches: false, mentions: false, links: false, conversation: false, upstream: false },
+    ],
+  };
+  await page.fill("#job", JSON.stringify(job));
+  const download = page.waitForEvent("download", { timeout: 120_000 });
+  await page.click("#start");
+  const bundle = JSON.parse(await readFile(await (await download).path(), "utf8"));
+
+  assert.equal(bundle.stop, null, JSON.stringify(bundle.stop));
+  assert.deepEqual(bundle.bookmarks.ids, ["401", "402"]);
+  assert.deepEqual(bundle.context["200"].thread.reply_ids, ["203", "204", "205", "208"]);
+  assert.deepEqual(bundle.context["200"].quotes.quoted_tweet_id.Latest.ids, ["601"]);
+
+  // What reached the fake X from fetch mode: the fetcher's GETs, which carry
+  // the page's own headers, never a mutation.
+  const fetched = site.graphql.filter((r) => r.fetcher);
+  assert.ok(fetched.length >= 4, `${fetched.length} fetch-mode requests`);
+  assert.ok(fetched.every((r) => r.headers["x-csrf-token"] === "fixture-csrf-token" && r.headers["x-client-transaction-id"] === "fixture-tid"));
+  assert.ok(site.graphql.every((r) => r.method === "GET" && ["Bookmarks", "TweetDetail", "SearchTimeline"].includes(r.op)), JSON.stringify(site.graphql.map((r) => [r.method, r.op])));
+  const times = fetched.map((r) => r.at);
+  for (let i = 1; i < times.length; i += 1) assert.ok(times[i] - times[i - 1] >= 1400, `requests ${i - 1} and ${i} were ${times[i] - times[i - 1]} ms apart`);
+
+  const run = mock.requests.slice(startedAt);
+  const reservation = run.find((r) => r.path === "/x/sessions/start");
+  assert.equal(reservation.body.mode, "fetch");
+  const ingests = run.filter((r) => r.path === "/ingest/x" && r.body.session_id === reservation.body.session_id);
+  assert.ok(ingests.length && ingests.every((r) => r.body.mode === "fetch"));
+  assert.ok(ingests.flatMap((r) => r.body.batches).some((b) => b.surface === "bookmarks"));
+  const status = run.find((r) => r.path === "/ingest/x/status" && r.body.session_id === reservation.body.session_id);
+  assert.equal(status.body.status, "ok", status.body.detail);
+
+  const stored = JSON.stringify(await worker.evaluate(async () => [await chrome.storage.local.get(null), await chrome.storage.session.get(null)]));
+  for (const [where, text] of [["bundle", JSON.stringify(bundle)], ["Worker requests", JSON.stringify(run)], ["extension storage", stored]]) {
+    assert.ok(!text.includes("fixture-csrf-token") && !text.includes("fixture-bearer"), `a header value is in the ${where}`);
+  }
+  assert.deepEqual(site.clicks, []);
+  await page.close();
+});
+
 async function startFakeX(dir) {
   const key = join(dir, "key.pem");
   const cert = join(dir, "cert.pem");
@@ -324,8 +379,14 @@ async function serveX(req, res) {
   if (url.pathname === "/__fixture/shared.js") return send("text/javascript", await readFile(join(PAGES, "shared.js"), "utf8"));
   const op = /\/graphql\/[^/]+\/(\w+)$/.exec(url.pathname)?.[1];
   if (op) {
+    // The fetcher asks for no-store, which the fixture pages never do.
+    site.graphql?.push({ at: Date.now(), op, method: req.method, headers: req.headers, fetcher: req.headers["cache-control"] === "no-cache" });
     if (site.graphqlStatus !== 200) return send("application/json", "{}", site.graphqlStatus);
     const variables = JSON.parse(url.searchParams.get("variables") ?? "{}");
+    if (op === "SearchTimeline") {
+      const entries = [itemEntry(tweet({ id: "601", handle: "quoter", userId: "u-quoter" }), "6000")];
+      return json({ data: { search_by_raw_query: { search_timeline: { timeline: { instructions: [{ type: "TimelineAddEntries", entries }] } } } } });
+    }
     if (op === "HomeTimeline" && variables.cursor === "page2") return json(homePage2());
     if (op === "HomeTimeline") return json(homeResponse());
     if (op === "Bookmarks") return json(bookmarksResponse());
@@ -343,6 +404,7 @@ async function serveX(req, res) {
   if (url.pathname === "/settings/account") return html("settings.html");
   if (url.pathname === "/i/bookmarks" || url.pathname.startsWith("/i/history")) return html("history.html");
   if (/^\/i\/status\/\d+$/.test(url.pathname)) return html("status.html");
+  if (url.pathname === "/search") return html("search.html");
   return send("text/plain", "", 404);
 }
 
