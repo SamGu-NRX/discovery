@@ -1033,8 +1033,22 @@ export async function mailboxCron(env: Env, now: number): Promise<{ expired: num
 }
 
 // ---- GET /room/:token ----
+//
+// Sam's read-only view of what his agents asked each other and what came
+// back, read on his phone. It uses the approval card's sheet, type and
+// colors; each agent's name is stamped in its own ink so a long thread
+// stays attributable at a glance.
 
 const ROOM_TASKS = 100;
+// Text longer than this shows its start, with the rest behind a disclosure,
+// so one 16 KB result doesn't bury the conversations below it.
+const PREVIEW_CHARS = 400;
+const KNOWN_AGENTS = new Set(["sam", "dot", "t3", "grok"]);
+const WAITING = new Set(["queued", "claimed"]);
+const FAILED = new Set(["failed", "declined", "expired"]);
+
+const timeLabel = (ms: number) => new Date(ms).toLocaleTimeString("en-US", { timeZone: "America/Chicago", hour: "numeric", minute: "2-digit" });
+const dayKey = (ms: number) => new Date(ms).toLocaleDateString("en-US", { timeZone: "America/Chicago" });
 
 export async function room(env: Env, token: string): Promise<Response> {
   if (!env.MAIL_ROOM_TOKEN || !(await sameSecret(token, env.MAIL_ROOM_TOKEN))) {
@@ -1052,50 +1066,102 @@ export async function room(env: Env, token: string): Promise<Response> {
     }
     byConversation.get(t.conversation_id)!.unshift(t);
   }
+  const waiting = rows.filter((t) => WAITING.has(t.state)).length;
+  const failed = rows.filter((t) => FAILED.has(t.state)).length;
+  const summary = [plural(order.length, "conversation"), waiting ? `${waiting} waiting` : "", failed ? `${failed} failed` : ""].filter(Boolean).join(" · ");
   const body = `<main class="slip room">
-  <p class="eyebrow">Mailbox${isPaused ? " · paused" : ""} · read-only</p>
+  <p class="eyebrow">Mailbox · read-only</p>
   <h1>Agent room</h1>
+  ${rows.length ? `<p class="muted summary">${esc(summary)}</p>` : ""}
+  ${isPaused ? `<p class="banner" role="status"><strong>Paused.</strong> Nothing is sent, claimed or woken until the mailbox is unpaused.</p>` : ""}
   ${
     order.length
       ? order.map((c) => conversation(byConversation.get(c)!)).join("")
-      : `<p class="muted">No tasks yet.</p>`
+      : `<section class="empty"><p>No mail yet.</p><p class="muted">Tasks show up here when Sam, the dot or T3 sends one.</p></section>`
   }
-  ${rows.length === ROOM_TASKS ? `<p class="muted">Showing the newest ${ROOM_TASKS} tasks.</p>` : ""}
+  ${rows.length === ROOM_TASKS ? `<p class="muted more">Showing the newest ${ROOM_TASKS} tasks. Older ones are in GET /mail/tasks.</p>` : ""}
 </main>`;
   return page(200, "Agent room", body, ROOM_CSS);
 }
 
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
+function agent(name: string): string {
+  return `<span class="agent${KNOWN_AGENTS.has(name) ? ` a-${name}` : ""}">${esc(name)}</span>`;
+}
+
+function text(s: string): string {
+  if (s.length <= PREVIEW_CHARS) return `<p class="text">${esc(s)}</p>`;
+  return `<details class="long"><summary><span class="text">${esc(s.slice(0, PREVIEW_CHARS))}…</span><span class="open">Show all ${s.length.toLocaleString("en-US")} characters</span><span class="close">Show less</span></summary><p class="text">${esc(s)}</p></details>`;
+}
+
 function conversation(tasks: TaskRow[]): string {
-  return `<section class="convo" aria-label="Conversation ${esc(tasks[0].conversation_id)}">
-  <h2>${esc(dateLabel(tasks[0].created_at))}</h2>
-  <ol class="thread">${tasks.map(message).join("")}</ol>
+  const root = tasks[0];
+  return `<section class="convo" aria-label="Conversation started by ${esc(root.root_from)}">
+  <h2>Started by ${agent(root.root_from)} <span class="when">${esc(dateLabel(root.created_at))}</span></h2>
+  <ol class="thread" role="list">${tasks.map((t) => message(t, dayKey(root.created_at))).join("")}</ol>
 </section>`;
 }
 
-function message(t: TaskRow): string {
-  const result =
-    t.result !== null
-      ? `<div class="reply"><p class="who">${esc(t.to_agent)} <span class="state s-${esc(t.state)}">${esc(t.state)}</span>${t.reply_to ? ` <span class="muted">to ${esc(t.reply_to)}</span>` : ""}</p><p class="text">${esc(t.result)}</p></div>`
-      : `<p class="pending"><span class="state s-${esc(t.state)}">${esc(t.state)}</span></p>`;
-  return `<li style="--hop:${Math.max(0, t.hop - 1)}">
-  <p class="who">${esc(t.from_agent)} <span class="arrow" aria-label="to">→</span> ${esc(t.to_agent)} <span class="muted">· ${esc(dateLabel(t.created_at))}</span></p>
-  <p class="text">${esc(t.body)}</p>
-  ${result}
+const STATE_WORDS: Record<string, string> = { done: "done", failed: "failed", declined: "declined", expired: "expired after 3 tries" };
+
+function delivery(t: TaskRow): string {
+  if (!t.reply_to) return "";
+  if (t.result_ack === "acked") return ` · ${esc(t.reply_to)} relayed it`;
+  if (t.result_ack === "gave_up") return ` · ${esc(t.reply_to)} never confirmed it`;
+  return ` · not yet relayed by ${esc(t.reply_to)}`;
+}
+
+function message(t: TaskRow, rootDay: string): string {
+  const when = dayKey(t.created_at) === rootDay ? timeLabel(t.created_at) : dateLabel(t.created_at);
+  const bad = FAILED.has(t.state);
+  let outcome: string;
+  if (t.state === "queued") outcome = `<p class="status">Waiting for ${agent(t.to_agent)}</p>`;
+  else if (t.state === "claimed") outcome = `<p class="status">${agent(t.to_agent)} is working on it</p>`;
+  else
+    outcome = `<div class="reply${bad ? " bad" : ""}">
+    <p class="route">${agent(t.to_agent)} <span class="state">${esc(STATE_WORDS[t.state] ?? t.state)}</span><span class="muted">${delivery(t)}</span></p>
+    ${t.result ? text(t.result) : `<p class="muted">No result text.</p>`}
+  </div>`;
+  return `<li style="--hop:${Math.min(Math.max(0, t.hop - 1), 2)}">
+  <p class="route">${agent(t.from_agent)} <span class="to">to</span> ${agent(t.to_agent)} <span class="muted when">${esc(when)}</span></p>
+  ${text(t.body)}
+  ${outcome}
 </li>`;
 }
 
 const ROOM_CSS = `
+:root{--a-sam:var(--ink);--a-dot:#2a63a6;--a-t3:#276b41;--a-grok:#7a4bb0}
+@media (prefers-color-scheme:dark){:root{--a-dot:#8bb8ea;--a-t3:#7fcf9b;--a-grok:#c3a3ec}}
 .room{max-width:40rem}
-.convo h2{margin-bottom:10px}
-.thread{list-style:none;margin:0;padding:0;display:grid;gap:14px}
-.thread>li{margin-left:calc(var(--hop) * 14px);padding-left:12px;border-left:2px solid var(--rule)}
-.who{margin:0 0 4px;font-size:14px;font-weight:600}
-.who .muted{font-weight:400;font-size:13px}
-.arrow{color:var(--muted);font-weight:400}
-.text{margin:0;white-space:pre-wrap}
+.room h1{margin-bottom:6px}
+.summary{margin:0 0 4px}
+.banner{margin:14px 0 0;padding:10px 12px;border:1px dashed var(--stamp);border-radius:8px;background:var(--stamp-bg);font-size:15px}
+.banner strong{color:var(--stamp)}
+.convo h2{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 8px;margin-bottom:12px;letter-spacing:.06em}
+.convo h2 .when{text-transform:none;letter-spacing:0;font-weight:400}
+.thread{list-style:none;margin:0;padding:0;display:grid;gap:18px}
+.thread>li{margin-left:calc(var(--hop) * 12px);padding-left:12px;border-left:2px solid var(--rule);min-width:0}
+.route{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 6px;margin:0 0 6px;font-size:14px}
+.route .muted{font-size:13px}
+.to{color:var(--muted);font-size:13px}
+.agent{font:600 12px/1 ui-monospace,"SF Mono",Menlo,monospace;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);border:1px solid currentColor;border-radius:4px;padding:3px 5px}
+.a-sam{color:var(--a-sam)}.a-dot{color:var(--a-dot)}.a-t3{color:var(--a-t3)}.a-grok{color:var(--a-grok)}
+.text{margin:0;white-space:pre-wrap;overflow-wrap:anywhere}
+.status{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px;margin:10px 0 0;font-size:14px;color:var(--muted)}
 .reply{margin-top:10px;padding:10px 12px;background:var(--paper);border-radius:8px}
-.pending{margin:6px 0 0}
-.state{font:11px/1 ui-monospace,"SF Mono",Menlo,monospace;text-transform:uppercase;letter-spacing:.06em;border:1px solid var(--rule);border-radius:4px;padding:2px 5px;color:var(--muted);font-weight:400}
-.s-done{color:var(--ink)}
-.s-failed,.s-expired,.s-declined{color:var(--stamp);border-color:var(--stamp)}
+.reply.bad{background:var(--stamp-bg);border:1px dashed var(--stamp)}
+.state{font-size:13px;color:var(--muted)}
+.reply.bad .state{color:var(--stamp);font-weight:600}
+.long summary{cursor:pointer;list-style:none;min-height:44px;touch-action:manipulation}
+.long summary:active .open,.long summary:active .close{color:var(--muted)}
+.long summary::-webkit-details-marker{display:none}
+.long summary .text{display:block}
+.long .open{display:inline-block;padding:12px 0 6px;font-size:14px;font-weight:600;text-decoration:underline;text-underline-offset:3px}
+.long .close{display:none}
+.long[open] summary .text,.long[open] .open{display:none}
+.long[open] .close{display:inline-block;padding:6px 0 12px;font-size:14px;font-weight:600;text-decoration:underline;text-underline-offset:3px}
+.long summary:focus-visible{outline:3px solid var(--focus);outline-offset:2px;border-radius:4px}
+.empty p{margin:0 0 6px}
+.more{margin-top:20px}
 `;
