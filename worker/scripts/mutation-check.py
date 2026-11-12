@@ -2,7 +2,7 @@
 # the file, and prints which tests failed. Each mutation should fail a test.
 # Run from the project root: python3 scripts/mutation-check.py
 
-import re, subprocess, sys
+import os, re, subprocess, sys
 only = sys.argv[1:]
 muts = [
  ("M1 page normalizer keeps <script>", "src/adapters.ts", '.replace(/<(script|style|noscript|svg|template)\\b[\\s\\S]*?<\\/\\1>/gi, " ")', ''),
@@ -107,7 +107,8 @@ for name, path, old, new in muts:
             r = subprocess.run(["node", "--test", "test/"], capture_output=True, text=True, timeout=240)
         except subprocess.TimeoutExpired:
             # A break that hangs the Worker (M77 overflows its stack) is caught too: the suite never passes.
-            subprocess.run(["pkill", "-f", "wrangler dev --port 88"])
+            # Only this checkout's wrangler: other worktrees run their own test stacks on the same ports.
+            subprocess.run(["pkill", "-f", os.path.join(os.getcwd(), "node_modules", ".bin", "wrangler") + " dev"])
             print(f"caught  {name}: the suite hung past 240 s", flush=True)
             continue
         # node --test lists each failure twice (inline and in the summary).
