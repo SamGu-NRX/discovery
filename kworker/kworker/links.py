@@ -482,11 +482,21 @@ def _result(ctx: Ctx, payload: dict, canon: str, row: dict, cached: bool, attemp
     text, text_sha, title = extract(ctx, row["content_sha"], data, mime, canon)
     out.update(text_sha=text_sha, title=title)
     # The repo behind a product site, from its own HTML, before any model:
-    # the repo it links most, fetched through the GitHub adapter.
+    # the most-linked repo whose owner or name is in the site's host, fetched
+    # through the GitHub adapter. A page that merely links some other repo
+    # (postplan.dev linking T3 Code) has none; its repos stay in site_repos.
     if "html" in mime and not payload.get("no_site_repo"):
         found = repos_in_html(data.decode("utf-8", "replace"))
         out["site_repos"] = found[:5]
-        if found:
-            sub = link_job(ctx, {"url": found[0], "from": f"site_html:{canon}", "no_site_repo": True})
-            out["site_repo"] = {"url": found[0], "status": sub["status"], "meta": sub["meta"], "text_sha": sub.get("text_sha")}
+        behind = next((r for r in found if site_owns_repo(row.get("final_url") or canon, r)), None)
+        if behind:
+            sub = link_job(ctx, {"url": behind, "from": f"site_html:{canon}", "no_site_repo": True})
+            out["site_repo"] = {"url": behind, "status": sub["status"], "meta": sub["meta"], "text_sha": sub.get("text_sha")}
     return out
+
+
+def site_owns_repo(site_url: str, repo_url: str) -> bool:
+    host = (urlsplit(site_url).hostname or "").lower()
+    labels = set(re.split(r"[.-]", host))
+    owner, name = urlsplit(repo_url).path.strip("/").split("/")[:2]
+    return any(part.lower() in labels or part.lower() in host.replace(".", "") for part in (owner, name) if len(part) >= 3)

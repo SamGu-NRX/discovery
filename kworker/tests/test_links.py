@@ -36,3 +36,19 @@ def test_repo_from_product_site_html():
 def test_final_failure_prefers_blocked(statuses, want):
     # A login wall anywhere on the ladder is reported as blocked, not as a 404.
     assert _final_failure([{"status": s} for s in statuses]) == want
+
+
+@pytest.mark.parametrize(
+    ("site", "repo", "owns"),
+    [
+        ("https://bencho.dev/", "https://github.com/cabralorenzo/bencho", True),
+        ("https://fx0.vercel.dev/", "https://github.com/vercel-labs/fx0", True),
+        ("https://pomerado.ai/", "https://github.com/pomerado/pomerado", True),
+        # From the first acceptance run: a page linking an unrelated repo.
+        ("https://rkufoapn89co.postplan.dev/", "https://github.com/pingdotgg/t3code", False),
+    ],
+)
+def test_site_owns_repo(site, repo, owns):
+    from kworker.links import site_owns_repo
+
+    assert site_owns_repo(site, repo) is owns
