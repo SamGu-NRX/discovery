@@ -105,13 +105,15 @@ test("X's rate-limit error with no data is reported, not treated as a parse erro
   assert.equal(result.batch, null);
 });
 
-test("a permalink separates the original poster's self-thread from other replies", () => {
+test("a permalink separates the original poster's self-thread from other replies, and lists Discover more apart in X's order", () => {
   const { batch } = captureToBatch({ operation: "TweetDetail", json: detailResponse(), url: detailUrl("200"), offset: 0 });
   assert.equal(batch.surface, "detail");
   assert.deepEqual(batch.thread, {
     root_id: "200",
     op_self_thread_ids: ["200", "201", "202"],
     reply_ids: ["203", "204", "205"],
+    // 210 is op's but is only recommended here, so it is not self-thread.
+    related_ids: ["206", "210", "209"],
   });
   assert.ok(byId(batch, "206"), "Discover more posts are still captured");
 });
@@ -129,13 +131,14 @@ test("later pages of a permalink extend the same thread", () => {
     root_id: "200",
     op_self_thread_ids: ["200", "201", "202", "207"],
     reply_ids: ["203", "204", "205", "208"],
+    related_ids: ["206", "210", "209"],
   });
-  assert.deepEqual(second.batch.posts.map((p) => [p.id, p.position]), [["207", 7], ["208", 8]]);
+  assert.deepEqual(second.batch.posts.map((p) => [p.id, p.position]), [["207", 9], ["208", 10]]);
 });
 
 test("a permalink in the middle of a thread includes the original poster's earlier posts", () => {
   const { batch } = captureToBatch({ operation: "TweetDetail", json: midThreadDetailResponse(), url: detailUrl("302"), offset: 0 });
-  assert.deepEqual(batch.thread, { root_id: "302", op_self_thread_ids: ["300", "301", "302", "303"], reply_ids: ["304"] });
+  assert.deepEqual(batch.thread, { root_id: "302", op_self_thread_ids: ["300", "301", "302", "303"], reply_ids: ["304"], related_ids: [] });
 });
 
 test("a later permalink page seen without its first page keeps its posts but builds no thread", () => {
@@ -192,13 +195,19 @@ test("a reply also shown under Discover more stays a reply", () => {
     ]),
   ]);
   assert.deepEqual(batch.posts.map((p) => p.id), ["200", "201"]);
-  assert.deepEqual(batch.thread, { root_id: "200", op_self_thread_ids: ["200"], reply_ids: ["201"] });
+  assert.deepEqual(batch.thread, { root_id: "200", op_self_thread_ids: ["200"], reply_ids: ["201"], related_ids: [] });
+
+  // The same post recommended on one page and shown as a reply on the next leaves related_ids.
+  const first = permalink([addEntries([itemEntry(op("200"), "9000"), moduleEntry("tweetdetailrelatedtweets-1", "8990", [other("201"), other("202")])])]);
+  assert.deepEqual(first.batch.thread.related_ids, ["201", "202"]);
+  const next = permalink([addEntries([moduleEntry("conversationthread-201", "8980", [other("201")])])], first);
+  assert.deepEqual(next.batch.thread, { root_id: "200", op_self_thread_ids: ["200"], reply_ids: ["201"], related_ids: ["202"] });
 });
 
 test("a focal post delivered inside a conversation module still roots the thread", () => {
   const { batch, threadError } = permalink([addEntries([moduleEntry("conversationthread-200", "9000", [op("200"), op("201", "200"), other("202")])])]);
   assert.equal(threadError, null);
-  assert.deepEqual(batch.thread, { root_id: "200", op_self_thread_ids: ["200", "201"], reply_ids: ["202"] });
+  assert.deepEqual(batch.thread, { root_id: "200", op_self_thread_ids: ["200", "201"], reply_ids: ["202"], related_ids: [] });
 });
 
 test("an impossible date, a missing count or a malformed list fails loudly", () => {

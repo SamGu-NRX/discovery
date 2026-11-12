@@ -31,6 +31,9 @@ CREATE TABLE inbox_x_items (
   run_id TEXT NOT NULL,
   part INTEGER NOT NULL,
   surface TEXT NOT NULL CHECK (surface IN ('bookmarks', 'home', 'thread')),
+  -- On surface 'thread' only, how the post relates to the bookmark: self (the
+  -- author's self-thread), reply, quote, or link (it links the status URL).
+  relation TEXT CHECK (relation IS NULL OR relation IN ('reply', 'quote', 'link', 'self')),
   position INTEGER NOT NULL,
   post_id TEXT NOT NULL,
   url TEXT NOT NULL,
@@ -42,7 +45,7 @@ CREATE TABLE inbox_x_items (
   quoted_id TEXT,
   -- NULL when the item carried no metrics.
   metrics_json TEXT,
-  -- Set only on surface 'thread': the bookmark whose self-thread this is.
+  -- Set only on surface 'thread': the bookmark this post belongs to.
   thread_root_id TEXT,
   received_at INTEGER NOT NULL
 );
@@ -69,3 +72,8 @@ CREATE INDEX inbox_x_rejects_received ON inbox_x_rejects (received_at);
 
 -- GET /admin/x/sightings reads the extension's sightings by seen_at.
 CREATE INDEX x_sightings_seen ON x_sightings (seen_at, id);
+
+-- The posts X recommended under a permalink ("Discover more"), in X's order,
+-- from the extension's TweetDetail thread. NULL when the extension did not
+-- report them. Never part of op_self_thread_ids or reply_ids.
+ALTER TABLE x_threads ADD COLUMN related_ids_json TEXT;

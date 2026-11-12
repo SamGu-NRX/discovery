@@ -137,6 +137,7 @@ test("an active session reads home, bookmarks and one permalink by navigation al
     root_id: "200",
     op_self_thread_ids: ["200", "201", "202", "207"],
     reply_ids: ["203", "204", "205", "208"],
+    related_ids: ["206", "210", "209"],
   });
 
   assert.deepEqual(site.pages, ["/home", "/i/bookmarks", "/i/history/bookmarks", "/i/status/200"]);

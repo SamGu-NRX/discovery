@@ -6,7 +6,10 @@
 // focal post plus every post by that author linked to it through
 // in_reply_to_status_id: the ancestors it continues and the continuations
 // below it. reply_ids is everything else in the conversation modules, in the
-// order X sent it. "Discover more" posts are not part of the thread.
+// order X sent it. "Discover more" posts are not part of the thread; their ids
+// go in related_ids, in the order X sent them, so a reader can tell what X
+// recommended under this permalink. A post X shows both under "Discover more"
+// and in the conversation is a reply, never related.
 //
 // Server order is module order, then item order inside each module. A
 // permalink loads in pages: more conversation modules on scroll, and "show
@@ -31,12 +34,13 @@ export function extendThread(state, items, focalId) {
     if (!focalItem) {
       return { state: null, thread: null, error: `TweetDetail for ${focalId}: focal post not in the first page seen` };
     }
-    state = { focal: ref(focalItem), ancestors: [], modules: [] };
+    state = { focal: ref(focalItem), ancestors: [], modules: [], related: [] };
   } else {
     state = {
       focal: state.focal,
       ancestors: [...state.ancestors],
       modules: state.modules.map((m) => ({ id: m.id, refs: [...m.refs] })),
+      related: [...state.related],
     };
   }
 
@@ -51,6 +55,10 @@ export function extendThread(state, items, focalId) {
       const key = item.module ?? "";
       if (!arrivals.has(key)) arrivals.set(key, { prepend: item.prepend, refs: [] });
       arrivals.get(key).refs.push(ref(item));
+    } else if (item.role === "related") {
+      // Not added to `known`: a later page may show the same post as a reply.
+      if (!state.related.includes(item.post.id)) state.related.push(item.post.id);
+      continue;
     } else {
       continue;
     }
@@ -96,6 +104,7 @@ export function extendThread(state, items, focalId) {
         ...conversation.filter((r) => self.has(r.id)).map((r) => r.id),
       ],
       reply_ids: conversation.filter((r) => !self.has(r.id)).map((r) => r.id),
+      related_ids: state.related.filter((id) => !known.has(id)),
     },
   };
 }

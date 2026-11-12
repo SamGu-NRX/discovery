@@ -33,15 +33,15 @@ const part = (run_id, n, items, extra = {}) => ({ run_id, account: "sdotgu", par
 const send = (body, token = "inbox") => s.call("POST", "/inbox/x", body, { raw: true, token });
 const exportInbox = () => s.call("GET", "/admin/inbox/x?since=0&until=" + (Date.now() + 60_000));
 
-test("the inbox token reaches only POST /inbox/x, and only the inbox and admin tokens reach it", async () => {
+test("the inbox token reaches only POST /inbox/x, and no other token reaches it, the admin token included", async () => {
   const status = async (method, path, token) => (await s.call(method, path, method === "POST" ? {} : undefined, { raw: true, token })).status;
   for (const [method, path] of [["POST", "/ingest/x"], ["POST", "/x/sessions/start"], ["GET", "/x/posts"], ["POST", "/candidates/claim"], ["GET", "/admin/log"], ["GET", "/admin/inbox/x?since=0&until=1"], ["GET", "/admin/x/sightings?since=0&until=1"], ["GET", "/admin/watchers"]]) {
     assert.equal(await status(method, path, "inbox"), 403, `inbox token on ${method} ${path}`);
   }
-  for (const token of ["ingest", "runner"]) assert.equal(await status("POST", "/inbox/x", token), 403, `${token} token on POST /inbox/x`);
+  // Only GrokBot writes here, so a stray admin-token write can't pass for one of its runs.
+  for (const token of ["ingest", "runner", "admin"]) assert.equal(await status("POST", "/inbox/x", token), 403, `${token} token on POST /inbox/x`);
   assert.equal(await status("POST", "/inbox/x", "none"), 401);
   assert.equal((await send(part("scope-run", 1, [item("101")]))).status, 200);
-  assert.equal((await send(part("scope-run", 2, [item("102")]), "admin")).status, 200);
 });
 
 test("a malformed part gets a 400 naming the exact field, stores no items, and is recorded as a reject", async () => {
@@ -49,7 +49,10 @@ test("a malformed part gets a 400 naming the exact field, stores no items, and i
   const ok = part("bad-run", 1, [item("201"), item("202", { position: 1 })]);
   const cases = [
     [{ ...ok, items: [item("201"), item(2.0263e18)] }, /^items\[1\]\.post\.id must be a string of digits in quotes, got the number/],
-    [{ ...ok, items: [item("201", { surface: "thread" })] }, /^items\[0\]\.thread_root_id is required when surface is thread/],
+    [{ ...ok, items: [item("201", { surface: "thread", relation: "self" })] }, /^items\[0\]\.thread_root_id is required when surface is thread/],
+    [{ ...ok, items: [item("201", { surface: "thread", thread_root_id: "200" })] }, /^items\[0\]\.relation is required when surface is thread: one of reply, quote, link, self/],
+    [{ ...ok, items: [item("201", { surface: "thread", thread_root_id: "200", relation: "retweet" })] }, /^items\[0\]\.relation must be one of reply, quote, link, self, got "retweet"/],
+    [{ ...ok, items: [item("201", { relation: "reply" })] }, /^items\[0\]\.relation is only allowed when surface is thread/],
     [{ ...ok, items: [item("201", { surface: "bookmarks", thread_root_id: "200" })] }, /^items\[0\]\.thread_root_id is only allowed when surface is thread/],
     [{ ...ok, items: [item("201", {}, { url: "https://x.com/alice/status/999" })] }, /^items\[0\]\.post\.url points at status 999 but items\[0\]\.post\.id is 201/],
     [{ ...ok, items: [item("201", {}, { metrics: { likes: "1.2K" } })] }, /^items\[0\]\.post\.metrics\.likes must be a whole number/],
@@ -67,6 +70,12 @@ test("a malformed part gets a 400 naming the exact field, stores no items, and i
     assert.match(error, expected);
     assert.match(error, /Nothing from this part was stored/);
   }
+  // 10,000 levels of nesting where a number belongs, sent as text (the client's own JSON.stringify would
+  // overflow): the error describes it without walking into it, so it is a 400 with a reject, not a crash.
+  const deep = JSON.stringify({ ...ok, items: [item("201", {}, { metrics: { likes: "DEEP" } })] }).replace('"DEEP"', "[".repeat(10_000) + "]".repeat(10_000));
+  const deepRes = await fetch(`${s.base}/inbox/x`, { method: "POST", body: deep, headers: { authorization: `Bearer ${s.vars.INBOX_TOKEN}` } });
+  assert.equal(deepRes.status, 400);
+  assert.match((await deepRes.json()).error, /^items\[0\]\.post\.metrics\.likes must be a whole number .*got an array of 1/);
   const notJson = await fetch(`${s.base}/inbox/x`, { method: "POST", body: '{"run_id": "bad-run",', headers: { authorization: `Bearer ${s.vars.INBOX_TOKEN}` } });
   assert.equal(notJson.status, 400);
   assert.match((await notJson.json()).error, /^body is not valid JSON/);
@@ -74,7 +83,7 @@ test("a malformed part gets a 400 naming the exact field, stores no items, and i
   const { items, rejects } = await exportInbox();
   assert.deepEqual(items.filter((i) => i.run_id === "bad-run"), [], "a refused part stores no items");
   const mine = rejects.filter((r) => r.status === 400 && r.received_at >= t0);
-  assert.equal(mine.length, cases.length + 1, "every refused body is recorded");
+  assert.equal(mine.length, cases.length + 2, "every refused body is recorded");
   assert.ok(mine.some((r) => r.error.startsWith("items[1].post.id") && r.run_id === "bad-run" && r.part === 1 && r.body.includes("2026300000000000000")));
 
   // The corrected part is accepted and its items read back as sent.
@@ -87,10 +96,11 @@ test("a malformed part gets a 400 naming the exact field, stores no items, and i
 test("a repeated (run_id, part) returns 200 and writes nothing; a repeat with a different body is recorded; inbox posts never reach x_posts or candidates", async () => {
   const p1 = part("idem-run", 1, [
     item("301", { surface: "bookmarks" }),
-    item("302", { surface: "thread", thread_root_id: "301" }, { metrics: undefined }),
+    item("302", { surface: "thread", thread_root_id: "301", relation: "self" }, { metrics: undefined }),
+    item("305", { surface: "thread", thread_root_id: "301", relation: "quote" }),
   ]);
   const first = await (await send(p1)).json();
-  assert.deepEqual(first, { run_id: "idem-run", part: 1, parts: 2, items_stored: 2, duplicate: false });
+  assert.deepEqual(first, { run_id: "idem-run", part: 1, parts: 2, items_stored: 3, duplicate: false });
   const again = await (await send(p1)).json();
   assert.deepEqual(again, { run_id: "idem-run", part: 1, parts: 2, items_stored: 0, duplicate: true, same_body: true });
   const changed = await (await send({ ...p1, items: [item("303")] })).json();
@@ -99,10 +109,13 @@ test("a repeated (run_id, part) returns 200 and writes nothing; a repeat with a 
   assert.equal((await (await send(part("idem-run", 2, [item("304")]))).json()).items_stored, 1, "another part of the same run is written");
 
   const { parts, items, rejects } = await exportInbox();
-  assert.deepEqual(items.filter((i) => i.run_id === "idem-run").map((i) => i.post_id).sort(), ["301", "302", "304"]);
+  assert.deepEqual(items.filter((i) => i.run_id === "idem-run").map((i) => i.post_id).sort(), ["301", "302", "304", "305"]);
   const thread = items.find((i) => i.post_id === "302");
   assert.equal(thread.thread_root_id, "301");
+  assert.equal(thread.relation, "self");
   assert.equal(thread.metrics_json, null);
+  assert.equal(items.find((i) => i.post_id === "305").relation, "quote");
+  assert.equal(items.find((i) => i.post_id === "301").relation, null);
   const stored = parts.find((x) => x.run_id === "idem-run" && x.part === 1);
   assert.deepEqual(JSON.parse(stored.body), JSON.parse(JSON.stringify(p1)), "the raw body is the first one sent");
   const dup = rejects.filter((r) => r.run_id === "idem-run");
@@ -142,6 +155,21 @@ test("the inbox cap is 256 KB, counted while reading; an oversized body gets 413
   assert.equal(r.body_truncated, 1);
   assert.equal(new TextEncoder().encode(r.body).length, 64 * 1024);
   assert.ok(r.body_bytes > 256 * 1024);
+});
+
+test("a recorded reject body is cut at a UTF-8 character boundary and stays within 64 KB", async () => {
+  // 3-byte characters after a 2-byte prefix: 65,534 is not a multiple of 3, so a cut at exactly 65,536 bytes
+  // lands inside a character.
+  const body = "xy" + "€".repeat(30_000);
+  const res = await fetch(`${s.base}/inbox/x`, { method: "POST", body, headers: { authorization: `Bearer ${s.vars.INBOX_TOKEN}` } });
+  assert.equal(res.status, 400);
+  const r = (await exportInbox()).rejects.find((x) => x.body.startsWith("xy€"));
+  assert.ok(r);
+  const bytes = new TextEncoder().encode(r.body).length;
+  assert.ok(bytes <= 64 * 1024 && bytes > 64 * 1024 - 3, `stored ${bytes} bytes`);
+  assert.ok(!r.body.includes("\uFFFD"), "no replacement character from a split character");
+  assert.equal(r.body_truncated, 1);
+  assert.equal(r.body_bytes, 2 + 3 * 30_000);
 });
 
 test("the sightings export joins each sighting to its post with that sighting's metrics, windows by seen_at, pages without gaps, and leaves out account test", async () => {

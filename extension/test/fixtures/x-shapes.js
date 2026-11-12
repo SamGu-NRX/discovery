@@ -212,7 +212,8 @@ export function bookmarksResponse(ids = ["401", "402"]) {
 //   ├ 201 op -> 200 ─ 202 op -> 201     self-thread, one module
 //   ├ 203 x  -> 200 ─ 204 op -> 203     op answering someone: a reply
 //   ├ 205 y  -> 202                     reply to a self-thread post
-//   └ 206 related ("Discover more")     not part of the thread
+//   └ 206 z, 210 op, 209 q              "Discover more", in that order: not part of the
+//                                       thread, even 210 by op (it replies to nothing here)
 const op = (id, inReplyTo) => tweet({ id, handle: "op", userId: "u-op", conversationId: "200", inReplyTo, text: `op ${id}` });
 const other = (id, handle, inReplyTo) => tweet({ id, handle, userId: `u-${handle}`, conversationId: "200", inReplyTo, text: `${handle} ${id}` });
 
@@ -225,7 +226,11 @@ export function detailResponse() {
         moduleEntry("conversationthread-201", "8990", [op("201", "200"), op("202", "201")], { cursorItem: true }),
         moduleEntry("conversationthread-203", "8980", [other("203", "x", "200"), op("204", "203")]),
         moduleEntry("conversationthread-205", "8970", [other("205", "y", "202")]),
-        moduleEntry("tweetdetailrelatedtweets-1", "8960", [tweet({ id: "206", handle: "z", userId: "u-z" })]),
+        moduleEntry("tweetdetailrelatedtweets-1", "8960", [
+          tweet({ id: "206", handle: "z", userId: "u-z" }),
+          tweet({ id: "210", handle: "op", userId: "u-op", text: "op 210, another post" }),
+          tweet({ id: "209", handle: "q", userId: "u-q" }),
+        ]),
         cursorEntry("bottom", "8950"),
       ],
     },

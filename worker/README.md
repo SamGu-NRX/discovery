@@ -14,8 +14,8 @@ Results and raw logs are in [EVIDENCE.md](EVIDENCE.md).
 
 ```sh
 npm install
-npm test                         # 30 tests against three real wrangler dev stacks and the fixture server, about 12 s
-python3 scripts/mutation-check.py # breaks the code 70 ways, one at a time; every break must fail a test, about 9 min
+npm test                         # 31 tests against three real wrangler dev stacks and the fixture server, about 12 s
+python3 scripts/mutation-check.py # breaks the code 73 ways, one at a time; every break must fail a test, about 9 min
 npm run evidence                 # live sources plus the fixture phases, about 2 min; writes evidence/<timestamp>/
 ```
 
@@ -44,14 +44,14 @@ No secret is printed. Then `node scripts/verify-production.mjs <base-url> ~/.age
 
 `$BASE` is `https://discovery-watcher.sgu07966.workers.dev`. Send tokens from their files so they stay out of shell history, for example `-H @<(printf 'authorization: Bearer %s' "$(cat ~/.agent-secrets/discovery-admin-token)")`.
 
-**Tokens.** Each route declares which tokens may call it (`ROUTES` in `src/index.ts`). Any other token gets 403, and a missing or wrong token gets 401.
+**Tokens.** Each route declares which tokens may call it (`ROUTES` in `src/index.ts`). The admin token may call every route except one marked `exclusive` (only `POST /inbox/x`). Any other token gets 403, and a missing or wrong token gets 401.
 
 | Token file in `~/.agent-secrets/` | Secret | Holder | May call |
 | --- | --- | --- | --- |
 | `discovery-admin-token` | `ADMIN_TOKEN` | director | every route |
 | `discovery-ingest-token` | `INGEST_TOKEN` | extension | `POST /ingest/x`, `POST /ingest/x/status`, `GET /x/detail-queue` |
 | `discovery-runner-token` | `RUNNER_TOKEN` | runner | `/x/posts*`, `/embed`, `/positives`, `/candidates*`, `/proposals` |
-| `discovery-inbox-token` | `INBOX_TOKEN` | GrokBot's scheduled routine, pasted in by Sam | `POST /inbox/x` |
+| `discovery-inbox-token` | `INBOX_TOKEN` | GrokBot's scheduled routine, pasted in by Sam | `POST /inbox/x`, which no other token may call, admin included |
 | none, minted per proposal | none | approval link | `GET` and `POST /a/:token` |
 
 **Routes.** All bodies are JSON. Times the Worker sets are epoch milliseconds; `since` parameters take ISO or milliseconds.
@@ -73,7 +73,7 @@ No secret is printed. Then `node scripts/verify-production.mjs <base-url> ~/.age
 | `POST /candidates/:id/complete` | `{owner, lease_token, state, note}`. Succeeds only with the current claim's token; a reclaim replaces it, so the earlier claimant gets 409 even under the same owner name. An owner whose lease expired but was never reclaimed still completes. `state` is `proposed`, `done`, `skipped` or `failed`, or `new` to defer: that releases the lease, clears the owner, keeps `attempts` and stores the note. |
 | `POST /proposals`, `GET /proposals?state=&since=` | See below. |
 | `POST /proposals/:id/rotate-token` | Re-mints the approval link of an unspent proposal, keeping `expires_at` and `inputs_hash`; the old link stops working. Refused with 409 once the notification went to T3 unless the body is `{"force": true}`, because the old link is the one in Sam's question card. Not in the contract. |
-| `POST /inbox/x` | GrokBot's run, in parts of at most 256 KB, counted in bytes as the body arrives (413 over). Each 400 names the field path and what was wrong, and says nothing from the part was stored. `(run_id, part)` is the idempotency key: a repeat returns 200 with `duplicate: true` and `same_body`, and writes nothing. Refused bodies and conflicting repeats go to `inbox_x_rejects`, cut to 64 KB. Nothing here reaches `x_posts` or candidates. Format in the contract. |
+| `POST /inbox/x` | Inbox token only (the admin token gets 403). GrokBot's run, in parts of at most 256 KB, counted in bytes as the body arrives (413 over). Each 400 names the field path and what was wrong, and says nothing from the part was stored. Values in error messages are described, never serialized, so a deeply nested value still gets a 400 and a reject row. `(run_id, part)` is the idempotency key: a repeat returns 200 with `duplicate: true` and `same_body`, and writes nothing. Refused bodies and conflicting repeats go to `inbox_x_rejects`, cut to 64 KB at a UTF-8 character boundary. Nothing here reaches `x_posts` or candidates. Format in the contract. |
 | `GET /admin/inbox/x?since=&until=` | Admin only. Every part (with its raw body), item and reject received in `[since, until)`. Both times are required. Refused with 400 when any list would pass 10,000 rows. |
 | `GET /admin/x/sightings?since=&until=&after_id=` | Admin only. The extension's sightings seen in `[since, until)`, account `test` excluded, each joined to its post: `surface`, `position`, `session_id`, `mode`, `seen_at`, the sighting's own `metrics_json`, and the post's latest stored fields. 1000 per page, oldest first; pass the previous page's `next_after_id` (null on the last page). The first page also has `threads` captured and `sessions` started or ended in the window. |
 | `GET /admin/log?since=` | Admin only. Counts and rows since a time (default 24 h): sessions, candidates, proposals, watcher events, the last cron run. |
@@ -125,7 +125,7 @@ npx wrangler d1 execute DB --remote --command "DELETE FROM proposals WHERE title
 | `migrations/0001_init.sql` | `watchers`, `seen_items`, `events` (`dedupe_key UNIQUE`), `jobs`, `fetch_log`, `websub_subscriptions`, and the trigger that adds one triage job per event |
 | `migrations/0002_notify.sql` | Notify rules, fallback URL, `notifications` (unused since v2), `settings`, `cron_runs` |
 | `migrations/0003_discovery_v2.sql` | `x_posts`, `x_sightings`, `x_threads`, `x_sessions`, `positives`, `candidates`, `proposals`, and the candidate backfill |
-| `migrations/0007_inbox_x.sql` | `inbox_x_parts`, `inbox_x_items`, `inbox_x_rejects` for `POST /inbox/x`, and an index on `x_sightings (seen_at, id)` for the sightings export |
+| `migrations/0007_inbox_x.sql` | `inbox_x_parts`, `inbox_x_items`, `inbox_x_rejects` for `POST /inbox/x`, an index on `x_sightings (seen_at, id)` for the sightings export, and `x_threads.related_ids_json` |
 | `src/adapters.ts` | Atom, Greenhouse, HN Algolia, HTML page, YouTube videos tab. They produce item ids or normalized page text. |
 | `src/check.ts` | One check: conditional GET, the fallback, parse, compare, write events and candidates, compute the next interval |
 | `src/watcher.ts` | `WatcherDO`, whose alarm is the watcher's schedule |

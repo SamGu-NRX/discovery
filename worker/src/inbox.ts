@@ -21,7 +21,10 @@ const EXPORT_MAX_ROWS = 10_000;
 
 const SURFACES = ["bookmarks", "home", "thread"] as const;
 const TOP_KEYS = ["run_id", "account", "part", "parts", "collected_at", "items"];
-const ITEM_KEYS = ["surface", "position", "thread_root_id", "post"];
+const ITEM_KEYS = ["surface", "position", "thread_root_id", "relation", "post"];
+// How a thread item relates to its bookmark: the author's own self-thread, a reply under it, a post quoting it,
+// or a post linking its status URL.
+const RELATIONS = ["reply", "quote", "link", "self"] as const;
 const POST_KEYS = ["id", "url", "author_handle", "author_name", "created_at", "text", "quoted_id", "metrics"];
 const METRIC_KEYS = ["likes", "reposts", "replies", "quotes", "bookmarks", "views"];
 
@@ -38,10 +41,15 @@ function bad(msg: string): never {
   throw new Invalid(msg);
 }
 
-const show = (v: unknown) => {
+// Describes a value in at most about 80 characters without walking into it: JSON.stringify recurses, and a
+// value nested 10,000 deep overflows the stack, turning a 400 into a 500 that records no reject.
+function show(v: unknown): string {
+  if (v === undefined) return "nothing";
+  if (Array.isArray(v)) return `an array of ${v.length}`;
+  if (typeof v === "object" && v !== null) return `an object with keys ${Object.keys(v).slice(0, 5).join(", ") || "none"}`;
   const s = JSON.stringify(v);
-  return s === undefined ? "nothing" : s.length > 80 ? s.slice(0, 77) + "..." : s;
-};
+  return s.length > 80 ? s.slice(0, 77) + "..." : s;
+}
 
 function object(v: unknown, at: string, keys: string[]): Record<string, unknown> {
   if (typeof v !== "object" || v === null || Array.isArray(v)) bad(`${at || "the body"} must be a JSON object, got ${show(v)}`);
@@ -102,6 +110,7 @@ function metrics(v: unknown, at: string): Record<string, number | null> | null {
 
 interface Item {
   surface: (typeof SURFACES)[number];
+  relation: (typeof RELATIONS)[number] | null;
   position: number;
   post_id: string;
   url: string;
@@ -146,11 +155,17 @@ function validate(body: unknown): Part {
     const surface = it.surface as Item["surface"];
     const position = integer(it.position, `${at}.position`, 0, 100_000);
     let root: string | null = null;
+    let relation: Item["relation"] = null;
+    const given = (v: unknown) => v !== undefined && v !== null;
     if (surface === "thread") {
-      if (it.thread_root_id === undefined || it.thread_root_id === null) bad(`${at}.thread_root_id is required when surface is thread: the id of the bookmarked post whose thread this is`);
+      if (!given(it.thread_root_id)) bad(`${at}.thread_root_id is required when surface is thread: the id of the bookmarked post this item belongs to`);
       root = postId(it.thread_root_id, `${at}.thread_root_id`);
-    } else if (it.thread_root_id !== undefined && it.thread_root_id !== null) {
-      bad(`${at}.thread_root_id is only allowed when surface is thread; remove it or set it to null`);
+      if (!given(it.relation)) bad(`${at}.relation is required when surface is thread: one of ${RELATIONS.join(", ")}`);
+      if (!RELATIONS.includes(it.relation as (typeof RELATIONS)[number])) bad(`${at}.relation must be one of ${RELATIONS.join(", ")}, got ${show(it.relation)}`);
+      relation = it.relation as (typeof RELATIONS)[number];
+    } else {
+      if (given(it.thread_root_id)) bad(`${at}.thread_root_id is only allowed when surface is thread; remove it or set it to null`);
+      if (given(it.relation)) bad(`${at}.relation is only allowed when surface is thread; remove it or set it to null`);
     }
     if (!("post" in it)) bad(`${at}.post is missing`);
     const p = object(it.post, `${at}.post`, POST_KEYS);
@@ -161,6 +176,7 @@ function validate(body: unknown): Part {
     if (m[1] !== id) bad(`${at}.post.url points at status ${m[1]} but ${at}.post.id is ${id}; they must be the same post`);
     const item: Item = {
       surface,
+      relation,
       position,
       post_id: id,
       url,
@@ -172,9 +188,9 @@ function validate(body: unknown): Part {
       metrics: metrics(p.metrics, `${at}.post.metrics`),
       thread_root_id: root,
     };
-    const key = `${surface}|${root ?? ""}|${id}`;
+    const key = `${surface}|${root ?? ""}|${relation ?? ""}|${id}`;
     const first = seen.get(key);
-    if (first !== undefined) bad(`${at} repeats post ${id} on surface ${surface}${root ? ` under thread_root_id ${root}` : ""}, already sent as items[${first}]; send each post once per surface`);
+    if (first !== undefined) bad(`${at} repeats post ${id} on surface ${surface}${root ? ` under thread_root_id ${root} as ${relation}` : ""}, already sent as items[${first}]; send each post once per surface`);
     seen.set(key, i);
     return item;
   });
@@ -223,11 +239,24 @@ async function sha256Hex(bytes: Uint8Array): Promise<string> {
   return [...new Uint8Array(d)].map((x) => x.toString(16).padStart(2, "0")).join("");
 }
 
+// The first REJECT_BODY_BYTES of a body as text, cut back to the start of a UTF-8 character so the stored
+// text holds no replacement character from a split one and re-encodes within the limit.
+function rejectText(bytes: Uint8Array): string {
+  let end = Math.min(bytes.length, REJECT_BODY_BYTES);
+  // 0b10xxxxxx is a continuation byte; back up to the lead byte of a character the cut would split.
+  if (end < bytes.length) while (end > 0 && (bytes[end] & 0xc0) === 0x80) end--;
+  let text = new TextDecoder().decode(bytes.subarray(0, end));
+  // Invalid bytes already in the body decode to U+FFFD, 3 bytes each, which can push the text back over.
+  const again = new TextEncoder().encode(text);
+  if (again.length > REJECT_BODY_BYTES) text = rejectText(again);
+  return text;
+}
+
 async function recordReject(
   env: Env,
   r: { status: number; error: string; runId: string | null; part: number | null; bytes: Uint8Array; total: number },
 ) {
-  const body = new TextDecoder().decode(r.bytes.subarray(0, REJECT_BODY_BYTES));
+  const body = rejectText(r.bytes);
   await env.DB.prepare(
     `INSERT INTO inbox_x_rejects (received_at, status, error, run_id, part, body_bytes, body_truncated, body)
      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)`,
@@ -289,9 +318,9 @@ export async function inbox(env: Env, req: Request): Promise<Response> {
       .bind(v.run_id, v.part, v.parts, v.account, v.collected_at, requestId, now, v.items.length, total, sha, raw),
     db
       .prepare(
-        `INSERT INTO inbox_x_items (run_id, part, surface, position, post_id, url, author_handle, author_name, created_at, text,
+        `INSERT INTO inbox_x_items (run_id, part, surface, relation, position, post_id, url, author_handle, author_name, created_at, text,
            quoted_id, metrics_json, thread_root_id, received_at)
-         SELECT ?2, ?3, json_extract(value, '$.surface'), json_extract(value, '$.position'), json_extract(value, '$.post_id'),
+         SELECT ?2, ?3, json_extract(value, '$.surface'), json_extract(value, '$.relation'), json_extract(value, '$.position'), json_extract(value, '$.post_id'),
                 json_extract(value, '$.url'), json_extract(value, '$.author_handle'), json_extract(value, '$.author_name'),
                 json_extract(value, '$.created_at'), json_extract(value, '$.text'), json_extract(value, '$.quoted_id'),
                 json(json_extract(value, '$.metrics')), json_extract(value, '$.thread_root_id'), ?5
