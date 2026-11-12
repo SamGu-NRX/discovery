@@ -7,7 +7,7 @@ import type { Env } from "./check";
 import { onlyFields } from "./devices";
 import { fail, HttpError, isoUtc, randomHex, readJson } from "./http";
 import { MailRefusal } from "./mailbox";
-import { chooseRouting, loadTable, wireRouting } from "./routing";
+import { classifyText, decide, loadTable, wireRouting, type Classification, type Decided, type Kind as RoutingKind } from "./routing";
 
 const KINDS = ["thought", "direction", "task", "reply", "agent_push"] as const;
 type Kind = (typeof KINDS)[number];
@@ -84,26 +84,69 @@ const ROUTED_ON_ARRIVAL: readonly Kind[] = ["thought", "direction", "task"];
 
 export async function insertInbox(
   env: Env,
-  i: { kind: Kind; text: string; source: string; claimedSource?: string | null; refs?: string[]; audioId?: string | null; replyTo?: string | null },
+  i: {
+    kind: Kind;
+    text: string;
+    source: string;
+    claimedSource?: string | null;
+    refs?: string[];
+    audioId?: string | null;
+    replyTo?: string | null;
+    // A voice note's, from the call that transcribed it. Typed text is
+    // classified here.
+    classification?: Classification | null;
+  },
 ) {
   const id = "i_" + randomHex(8);
+  const routed = i.source.startsWith("device:") && ROUTED_ON_ARRIVAL.includes(i.kind);
+  let classification: Classification | null = null;
+  let classifierError: string | null = null;
+  let decided: Decided | null = null;
+  if (routed) {
+    const table = await loadTable(env);
+    if (i.classification !== undefined) classification = i.classification;
+    else ({ c: classification, error: classifierError } = await classifyText(env, i.text, table));
+    decided = decide(i.text, i.kind as RoutingKind, classification, table);
+  }
   const now = Date.now();
-  const chosen =
-    i.source.startsWith("device:") && ROUTED_ON_ARRIVAL.includes(i.kind) ? chooseRouting(i.text, i.kind as "thought" | "direction" | "task", await loadTable(env)) : null;
+  const stored = routed
+    ? JSON.stringify({ title: classification?.title ?? null, work_type: decided!.work_type, confidence: classification?.confidence ?? null, target_hint: classification?.target ?? null, classifier_error: classifierError })
+    : null;
   await env.DB.prepare(
-    `INSERT INTO inbox_items (id, kind, text, source, claimed_source, refs_json, audio_id, reply_to, created_at, routing_json, routing_source, routed_at)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, CASE WHEN ?10 IS NULL THEN NULL ELSE ?9 END)`,
+    `INSERT INTO inbox_items (id, kind, text, source, claimed_source, refs_json, audio_id, reply_to, created_at, routing_json, routing_source, routed_at, classification_json)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, CASE WHEN ?10 IS NULL THEN NULL ELSE ?9 END, ?12)`,
   )
-    .bind(id, i.kind, i.text, i.source, i.claimedSource ?? null, JSON.stringify(i.refs ?? []), i.audioId ?? null, i.replyTo ?? null, now, chosen ? JSON.stringify(chosen.routing) : null, chosen?.source ?? null)
+    .bind(
+      id,
+      i.kind,
+      i.text,
+      i.source,
+      i.claimedSource ?? null,
+      JSON.stringify(i.refs ?? []),
+      i.audioId ?? null,
+      i.replyTo ?? null,
+      now,
+      decided ? JSON.stringify(decided.routing) : null,
+      decided?.source ?? null,
+      stored,
+    )
     .run();
-  console.log(`[inbox] ${id} ${i.kind} from ${i.source}${chosen ? ` routed to ${chosen.routing.agent}/${chosen.routing.model} (${chosen.source})` : ""}`);
+  console.log(`[inbox] ${id} ${i.kind} from ${i.source}${decided ? ` routed to ${decided.routing.agent}/${decided.routing.model} (${decided.source}, ${decided.work_type})` : ""}`);
   return {
     id,
     kind: i.kind,
     source: i.source,
     created_at: isoUtc(now),
-    ...(chosen ? { routing: wireRouting(JSON.stringify(chosen.routing), chosen.source) } : {}),
+    ...(decided ? { routing: wireRouting(JSON.stringify(decided.routing), decided.source), classification: presentClassification(stored) } : {}),
   };
+}
+
+// The classifier's title, work type and confidence, for the app to show next
+// to the routing chip. Null fields when Gemini didn't answer.
+export function presentClassification(json: string | null) {
+  if (!json) return undefined;
+  const c = JSON.parse(json) as { title: string | null; work_type: string; confidence: number | null };
+  return { title: c.title, work_type: c.work_type, confidence: c.confidence };
 }
 
 export async function inboxRoute(env: Env, caller: Caller, req: Request) {

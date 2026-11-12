@@ -1,5 +1,5 @@
 -- Routing for Sam's thoughts and the structured stake of an approval
--- (docs/APPROVALS.md, "Wire details" 10 to 13). Additive only.
+-- (docs/APPROVALS.md, "Wire details" 10 to 14). Additive only.
 
 -- The routing the Worker chose for a device's thought, direction or task:
 -- {agent, model, effort, project, kind} as JSON. routing_source is spoken
@@ -8,6 +8,10 @@
 ALTER TABLE inbox_items ADD COLUMN routing_json TEXT;
 ALTER TABLE inbox_items ADD COLUMN routing_source TEXT CHECK (routing_source IN ('spoken', 'table', 'person'));
 ALTER TABLE inbox_items ADD COLUMN routed_at INTEGER;
+-- What the Gemini classification said: {title, work_type, confidence,
+-- target_hint, classifier_error}. The routing above is decided from it, the
+-- explicit words and the routing table; target_hint never routes.
+ALTER TABLE inbox_items ADD COLUMN classification_json TEXT;
 -- Set once, by POST /inbox/:id/dispatch, with the mailbox task it filed.
 ALTER TABLE inbox_items ADD COLUMN dispatched_at INTEGER;
 ALTER TABLE inbox_items ADD COLUMN dispatch_task_id TEXT;
@@ -16,3 +20,7 @@ ALTER TABLE inbox_items ADD COLUMN dispatch_task_id TEXT;
 -- base?, amount?, currency?, recipient?}. Built from the proposal's inputs,
 -- the values its inputs_hash binds.
 ALTER TABLE approval_requests ADD COLUMN stake_json TEXT;
+
+-- Dispatch files from sam, and Sam's policy sends what people say on X to
+-- GrokBot. Nothing leaves grok, as before.
+INSERT OR IGNORE INTO mail_routes (from_agent, to_agent) VALUES ('sam', 'grok');

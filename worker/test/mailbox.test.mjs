@@ -360,7 +360,7 @@ test("every send rule refuses with its name and stores nothing", async () => {
   const count = async () => (await s.d1("SELECT count(*) AS n FROM mail_tasks"))[0].n;
   const before = await count();
 
-  await refused(await send("sam", { to: "grok" }), 403, "route_not_allowed");
+  await refused(await send("t3", { to: "sam" }), 403, "route_not_allowed");
   // grok reads hostile X text: its token can't file work, over REST or MCP.
   await refused(await send("grok", { to: "t3" }), 403, "route_not_allowed");
   await refused(await send("grok", { to: "dot" }), 403, "route_not_allowed");

@@ -57,7 +57,9 @@ export function createFixture() {
     },
     apns: {},
     pushes: [],
-    gemini: { transcript: "Remember to ship the hub branch.", status: 200, requests: [], uploads: [], seq: 0 },
+    // answer: what an interactions call returns as its JSON output text; the
+    // transcript is added for a call that carries audio.
+    gemini: { transcript: "Remember to ship the hub branch.", answer: null, status: 200, requests: [], uploads: [], seq: 0 },
   };
 
   const atom = () =>
@@ -200,7 +202,10 @@ export function createFixture() {
           return send(200, JSON.stringify({ file }), { "content-type": "application/json" });
         }
         if (url.pathname === "/gemini/v1beta/interactions" && req.method === "POST") {
-          const answer = { id: `int-${g.seq}`, status: "completed", steps: [{ type: "user_input" }, { type: "model_output", content: [{ type: "text", text: g.transcript }] }] };
+          const asked = JSON.parse(raw.toString());
+          const audio = asked.input?.some((p) => p.type === "audio");
+          const out = { kind: "thought", title: "A note", project: null, target: null, work_type: "note", confidence: 0.6, ...(g.answer ?? {}), ...(audio ? { transcript: g.transcript } : {}) };
+          const answer = { id: `int-${g.seq}`, status: "completed", steps: [{ type: "user_input" }, { type: "model_output", content: [{ type: "text", text: JSON.stringify(out) }] }] };
           return send(200, JSON.stringify(answer), { "content-type": "application/json" });
         }
         if (req.method === "DELETE") return send(200, "{}");

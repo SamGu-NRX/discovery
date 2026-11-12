@@ -466,71 +466,157 @@ test("the stake comes from the inputs the hash binds, in exact shapes only: a pu
 
 // ---- routing ----
 
-const routed = async (kind, text) => (await ok(req(devices.phone.bearer, "POST", "/inbox", { kind, text }), 201));
+// What Gemini says about the text. Each test sets it, so a routing below
+// comes from the explicit words, the table or this answer, and the test
+// says which.
+const classifyAs = (answer) => s.control("gemini-set", { status: 200, answer });
+const routed = async (kind, text) => ok(req(devices.phone.bearer, "POST", "/inbox", { kind, text }), 201);
+const R = (agent, model, effort, source, project = null, kind = "task") => ({ agent, model, effort, project, kind, source });
 
-test("a thought is routed when filed: a model and effort named first are spoken, otherwise the table's rule for its kind decides", async () => {
-  const spoken = await routed("task", "Opus high, refactor the discovery mailbox leases");
-  assert.match(spoken.id, /^i_[0-9a-f]{16}$/);
-  assert.deepEqual(spoken.routing, { agent: "t3", model: "opus", effort: "high", project: "discovery", kind: "task", source: "spoken" });
-  assert.deepEqual((await routed("direction", "Sol on max: tighten the Nod widget")).routing, { agent: "t3", model: "sol", effort: "max", project: "nod", kind: "direction", source: "spoken" });
-  assert.deepEqual((await routed("direction", "Extra high. Look at the worker errors")).routing, { agent: "t3", model: "opus", effort: "xhigh", project: "discovery", kind: "direction", source: "spoken" }, "an effort alone keeps the rule's model");
-  assert.deepEqual((await routed("thought", "High time we cleaned the garage")).routing, { agent: "dot", model: "chatgpt", effort: "medium", project: null, kind: "thought", source: "table" }, "a sentence that starts with an effort word names nothing");
-  assert.deepEqual((await routed("task", "Opus, make the room page faster")).routing.effort, "high", "a spoken model without an effort takes the rule's");
-  assert.equal((await routed("reply", "Yes, go ahead")).routing, undefined, "a reply isn't routed");
-  assert.equal((await ok(req("mail_dot", "POST", "/inbox", { kind: "agent_push", text: "News." }), 201)).routing, undefined, "an agent's post isn't routed");
+// One correct routing per phrase. The classifier says "note" for all of
+// them, which the table sends to the dot, so anything else came from the
+// words themselves; the phrases marked "work" set another work type.
+const PHRASES = [
+  ["Opus high, refactor the reel exporter", R("t3", "opus", "high", "spoken")],
+  ["refactor the reel exporter with sonnet at max effort", R("t3", "sonnet", "max", "spoken")],
+  ["compare Opus and Sonnet on the eval, then use Sol at max effort to write the fix", R("t3", "sol", "max", "spoken")],
+  ["Sonnet wrote the draft; have Opus review it", R("t3", "opus", "high", "spoken")],
+  ["Opus versus Astra for the benchmark", R("t3", "opus", "high", "spoken")],
+  ["Astra, low priority: tidy the room page", R("t3", "astra", "medium", "spoken")],
+  ["go extra high effort with Astra on the proof", R("t3", "astra", "xhigh", "spoken")],
+  ["Terra medium, tidy the docs", R("t3", "terra", "medium", "spoken")],
+  ["Grok, what are people saying about the T3 release", R("grok", "grok", "medium", "spoken")],
+  ["GrokBot check the replies to my bookmark", R("grok", "grok", "medium", "spoken")],
+  ["ask the dot to remind me about the dentist", R("dot", "dot", "medium", "spoken")],
+  ["Luna, find the file that sets the cron", R("t3", "luna", "max", "spoken")],
+  ["use haiku model for the summary", R("t3", "haiku", "high", "spoken")],
+  // An effort named with "effort" and no model keeps the table's model.
+  ["max effort: why does the cron miss alarms", R("t3", "sol", "max", "spoken"), "investigation"],
+  // Ordinary words that are not model or effort names.
+  ["look at the console logs and find a solution", R("t3", "sol", "medium", "table"), "investigation"],
+  ["this login bug is high on my list", R("t3", "sol", "medium", "table"), "clear_cut_tested"],
+  ["write a haiku about the launch", R("dot", "dot", "medium", "table")],
+  ["dot the i's in the cover letter", R("dot", "dot", "medium", "table")],
+  ["Luna's answer was wrong, figure out why", R("t3", "astra", "medium", "table"), "hard_reasoning"],
+  ["the solar quote is due on Friday", R("dot", "dot", "medium", "table")],
+  ["make the settings screen feel calmer", R("t3", "opus", "high", "table"), "ui_engineering"],
+  ["what does X think of the new T3 pricing", R("grok", "grok", "medium", "table"), "x_context"],
+  ["where is the APNs key file", R("t3", "luna", "max", "table"), "quick_lookup"],
+];
+
+test("the parse: each phrase gets its one routing, from the words when Sam named a model or effort, else from the table", async () => {
+  for (const [text, want, work = "note"] of PHRASES) {
+    await classifyAs({ kind: "task", title: "x", work_type: work, confidence: 0.9 });
+    assert.deepEqual((await routed("task", text)).routing, want, text);
+  }
 });
 
-test("GET /routing/models publishes the agents, models, efforts, projects and rules; POST /admin/routing replaces them after checking them", async () => {
+test("a project named in the words beats the classifier's, the classifier's counts only if it is in the list, and a correct item keeps its kind and title", async () => {
+  await classifyAs({ kind: "task", title: "Fix the mailbox leases in discovery today please now", project: "nod", work_type: "clear_cut_tested", confidence: 0.8 });
+  const named = await routed("task", "Opus high, fix the discovery mailbox leases");
+  assert.deepEqual(named.routing, R("t3", "opus", "high", "spoken", "discovery"));
+  assert.deepEqual(named.classification, { title: "Fix the mailbox leases in discovery today please", work_type: "clear_cut_tested", confidence: 0.8 }, "the title is cut to 8 words");
+  assert.equal((await routed("task", "tidy the widget")).routing.project, "nod", "the classifier's project, from the list");
+  await classifyAs({ kind: "task", title: "x", project: "made-up", work_type: "note", confidence: 0.4 });
+  assert.equal((await routed("task", "tidy the widget")).routing.project, null, "a project outside the list is dropped");
+  // The kind Sam sent wins over the classifier's.
+  await classifyAs({ kind: "thought", title: "x", work_type: "note", confidence: 0.4 });
+  assert.equal((await routed("direction", "Opus, always run the tests first")).routing.kind, "direction");
+  // A classifier answer outside the schema is ignored, not trusted.
+  await classifyAs({ kind: "order", title: 7, work_type: "deploy", confidence: "high", target: { agent: "root" } });
+  const loose = await routed("task", "tidy the widget");
+  assert.deepEqual(loose.routing, R("t3", "opus", "high", "table"), "task without a work type is general engineering");
+  assert.deepEqual(loose.classification, { title: null, work_type: "general_engineering", confidence: null });
+  // The classifier naming a model is a hint; only Sam's words route.
+  await classifyAs({ kind: "task", title: "x", work_type: "note", confidence: 0.9, target: { agent: "t3", model: "fable", effort: "max" } });
+  const hinted = await routed("thought", "remember the dentist");
+  assert.deepEqual(hinted.routing, R("dot", "dot", "medium", "table", null, "thought"));
+  assert.deepEqual(JSON.parse((await s.d1(`SELECT classification_json FROM inbox_items WHERE id = '${hinted.id}'`))[0].classification_json).target_hint, { agent: "t3", model: "fable", effort: "max" });
+});
+
+test("with Gemini down the item is still filed and routed from the words and its kind; the text classification asks for the schema", async () => {
+  await s.control("gemini-set", { status: 503 });
+  try {
+    const t = await routed("task", "tidy the widget");
+    assert.deepEqual(t.routing, R("t3", "opus", "high", "table"));
+    assert.equal(t.classification.title, null);
+    assert.match(JSON.parse((await s.d1(`SELECT classification_json FROM inbox_items WHERE id = '${t.id}'`))[0].classification_json).classifier_error, /503/);
+    assert.deepEqual((await routed("thought", "Sol high, look at the logs")).routing, R("t3", "sol", "high", "spoken", null, "thought"));
+    assert.deepEqual((await routed("thought", "remember the dentist")).routing, R("dot", "dot", "medium", "table", null, "thought"));
+  } finally {
+    await s.control("gemini-set", { status: 200 });
+  }
+  await classifyAs(null);
+  await routed("task", "check the cron");
+  const call = (await s.control("gemini")).requests.filter((x) => x.path === "/gemini/v1beta/interactions").at(-1);
+  const body = JSON.parse(call.body);
+  assert.equal(body.model, "models/gemini-3.8-flash");
+  assert.equal(call.headers["api-revision"], "2026-05-20");
+  assert.deepEqual(body.input.at(-1), { type: "text", text: "check the cron" });
+  assert.equal(body.response_format.mime_type, "application/json");
+  assert.deepEqual(body.response_format.schema.required, ["kind", "title", "work_type", "confidence"]);
+  assert.deepEqual(body.response_format.schema.properties.work_type.enum, ["ui_engineering", "general_engineering", "clear_cut_tested", "investigation", "hard_reasoning", "x_context", "quick_lookup", "note"]);
+});
+
+test("GET /routing/models publishes the agents, models, efforts, projects and policy; POST /admin/routing replaces them, checked, without a deploy", async () => {
   const t = await ok(req(devices.phone.bearer, "GET", "/routing/models"));
   assert.deepEqual(t.efforts, ["low", "medium", "high", "xhigh", "max"]);
-  assert.deepEqual(t.kinds, ["thought", "direction", "task", "reply"]);
-  assert.deepEqual(t.agents.map((a) => a.id), ["t3", "dot"]);
-  assert.deepEqual(t.agents[0].models.map((m) => m.id), ["opus", "sonnet", "haiku", "fable", "sol", "astra", "luna"]);
-  assert.deepEqual(t.rules.at(-1).when, {});
+  assert.deepEqual(t.kinds, ["task", "thought", "direction", "reply"]);
+  assert.deepEqual(t.agents.map((a) => a.id), ["t3", "grok", "dot"]);
+  assert.deepEqual(t.agents[0].models.map((x) => x.id), ["opus", "sonnet", "haiku", "fable", "sol", "astra", "luna", "terra"]);
+  assert.deepEqual(t.policy.ui_engineering, { agent: "t3", model: "opus", effort: "high" });
+  assert.deepEqual(t.policy.clear_cut_tested, { agent: "t3", model: "sol", effort: "medium" });
+  assert.deepEqual(t.policy.x_context, { agent: "grok", model: "grok", effort: "medium" });
   assert.equal((await req("mail_t3", "GET", "/routing/models")).status, 403);
   assert.equal((await req(devices.phone.bearer, "POST", "/admin/routing", t)).status, 403);
 
-  const table = { agents: t.agents, projects: t.projects, rules: [{ when: { kind: "thought" }, agent: "t3", model: "sonnet", effort: "low" }, ...t.rules] };
+  const table = { agents: t.agents, projects: [...t.projects, { name: "reel-exporter", keywords: ["reel exporter"] }], policy: { ...t.policy, investigation: { agent: "t3", model: "astra", effort: "high" } } };
   for (const [bad, field] of [
-    [{ ...table, rules: table.rules.slice(0, 1) }, /^the last rule must match everything/],
-    [{ ...table, rules: [{ when: {}, agent: "dot", model: "opus", effort: "high" }] }, /^rules\[0\] must name an agent and one of its models/],
-    [{ ...table, agents: [{ ...t.agents[0], id: "grok" }] }, /^agents\[0\]\.id /],
+    [{ ...table, policy: { ...table.policy, investigation: undefined } }, /^policy\.investigation is missing/],
+    [{ ...table, policy: { ...table.policy, note: { agent: "dot", model: "opus", effort: "high" } } }, /^policy\.note must name an agent and one of its models/],
+    [{ ...table, agents: [{ ...t.agents[0], id: "root" }, t.agents[1], t.agents[2]] }, /^agents\[0\]\.id /],
+    [{ ...table, agents: [t.agents[0], { ...t.agents[1], models: [{ ...t.agents[1].models[0], aliases: ["opus"] }] }, t.agents[2]] }, /aliases repeats opus/],
   ]) {
     // An admin route: its 400 is the sentence form.
     const r = await req("admin", "POST", "/admin/routing", bad);
-    assert.equal(r.status, 400);
+    assert.equal(r.status, 400, JSON.stringify(bad).slice(0, 80));
     assert.match(r.body.error, field);
   }
   await ok(req("admin", "POST", "/admin/routing", table));
   try {
-    assert.deepEqual((await routed("thought", "Remember the dentist")).routing, { agent: "t3", model: "sonnet", effort: "low", project: null, kind: "thought", source: "table" });
+    await classifyAs({ kind: "task", title: "x", work_type: "investigation", confidence: 0.9 });
+    assert.deepEqual((await routed("task", "why does the reel exporter drop frames")).routing, R("t3", "astra", "high", "table", "reel-exporter"), "the new policy row and a two-word project keyword");
   } finally {
-    await ok(req("admin", "POST", "/admin/routing", { agents: t.agents, projects: t.projects, rules: t.rules }));
+    await ok(req("admin", "POST", "/admin/routing", { agents: t.agents, projects: t.projects, policy: t.policy }));
   }
 });
 
 test("POST /inbox/:id/route stores a correction checked against the table and answers it as stored", async () => {
+  await classifyAs({ kind: "task", title: "x", work_type: "general_engineering", confidence: 0.9 });
   const item = await routed("task", "Refactor the reel exporter");
   const route = (body, token = devices.phone.bearer) => req(token, "POST", `/inbox/${item.id}/route`, body);
   const good = { agent: "t3", model: "astra", effort: "xhigh", project: null, kind: "task" };
   assert.deepEqual((await ok(route(good))).routing, { ...good, source: "spoken" });
   assert.deepEqual(JSON.parse((await s.d1(`SELECT routing_json FROM inbox_items WHERE id = '${item.id}'`))[0].routing_json), good);
-  badField(await route({ ...good, agent: "grok" }), /^agent must be one of t3\|dot/);
+  badField(await route({ ...good, agent: "root" }), /^agent must be one of t3\|grok\|dot/);
   badField(await route({ ...good, agent: "dot" }), /^model must be one of dot's models/);
   badField(await route({ ...good, effort: "turbo" }), /^effort must be one of/);
   badField(await route({ ...good, project: "Reel Exporter" }), /^project /);
   badField(await route({ ...good, kind: "agent_push" }), /^kind /);
   badField(await route({ ...good, source: "table" }), /^source is not a routing field/);
+  assert.equal((await route(good, "mail_t3")).status, 403, "only a device corrects");
   const news = await ok(req("mail_dot", "POST", "/inbox", { kind: "agent_push", text: "Agent news." }), 201);
+  assert.equal(news.routing, undefined, "an agent's post isn't routed");
   const notMine = await req(devices.phone.bearer, "POST", `/inbox/${news.id}/route`, good);
   assert.deepEqual([notMine.status, notMine.body.error], [409, "not_routable"]);
   const missing = await req(devices.phone.bearer, "POST", "/inbox/i_0000000000000000/route", good);
   assert.deepEqual([missing.status, missing.body.error], [404, "inbox_item_not_found"]);
 });
 
-test("dispatch files one mailbox task from sam to the routing's agent; a repeat, a racing second call or a later correction gets already_dispatched", async () => {
+test("dispatch files one mailbox task from sam to the agent (t3 with model and effort); a repeat, a racing second call or a later correction gets already_dispatched", async () => {
+  await classifyAs({ kind: "task", title: "x", work_type: "note", confidence: 0.9 });
   const item = await routed("task", "Opus high, refactor the discovery mailbox leases");
-  const dispatchIt = () => req(devices.phone.bearer, "POST", `/inbox/${item.id}/dispatch`);
+  const dispatchIt = (id = item.id) => req(devices.phone.bearer, "POST", `/inbox/${id}/dispatch`);
   // The mailbox starts paused: the refusal is coded and nothing is marked.
   const paused = await dispatchIt();
   assert.deepEqual([paused.status, paused.body.error], [423, "paused"]);
@@ -548,18 +634,19 @@ test("dispatch files one mailbox task from sam to the routing's agent; a repeat,
     assert.equal(tasks.length, 1, "one task for both calls");
     assert.equal(tasks[0].id, won.task_id);
     assert.deepEqual([tasks[0].from_agent, tasks[0].to_agent], ["sam", "t3"]);
-    assert.ok(tasks[0].body.endsWith("\n\nOpus high, refactor the discovery mailbox leases"), "Sam's words, unchanged, after the routing line");
-    assert.match(tasks[0].body, /model opus, effort high/);
+    assert.match(tasks[0].body, /^From Sam's iPhone \(inbox item i_[0-9a-f]+, task, project discovery\)\. Run it with model opus at effort high\.\n\nOpus high, refactor the discovery mailbox leases$/);
     assert.equal((await dispatchIt()).body.error, "already_dispatched");
-    const late = await req(devices.phone.bearer, "POST", `/inbox/${item.id}/route`, { agent: "dot", model: "chatgpt", effort: "low", project: null, kind: "task" });
+    const late = await req(devices.phone.bearer, "POST", `/inbox/${item.id}/route`, { agent: "dot", model: "dot", effort: "low", project: null, kind: "task" });
     assert.deepEqual([late.status, late.body.error], [409, "already_dispatched"]);
 
-    // A corrected routing is the one dispatched.
-    const fixed = await routed("thought", "Think about the brief wording");
-    await ok(req(devices.phone.bearer, "POST", `/inbox/${fixed.id}/route`, { agent: "t3", model: "fable", effort: "max", project: "nod", kind: "task" }));
-    const sent = await ok(req(devices.phone.bearer, "POST", `/inbox/${fixed.id}/dispatch`));
-    assert.equal(sent.agent, "t3");
-    assert.match((await s.d1(`SELECT body FROM mail_tasks WHERE id = '${sent.task_id}'`))[0].body, /\(inbox item i_[0-9a-f]+, task, project nod\)\. Sam's routing: model fable, effort max\./);
+    // A corrected routing is the one dispatched; grok and the dot get no model line.
+    const fixed = await routed("thought", "what are people saying about Nod");
+    await ok(req(devices.phone.bearer, "POST", `/inbox/${fixed.id}/route`, { agent: "grok", model: "grok", effort: "medium", project: "nod", kind: "task" }));
+    const sent = await ok(dispatchIt(fixed.id));
+    assert.equal(sent.agent, "grok");
+    const [g] = await s.d1(`SELECT from_agent, to_agent, body FROM mail_tasks WHERE id = '${sent.task_id}'`);
+    assert.deepEqual([g.from_agent, g.to_agent], ["sam", "grok"]);
+    assert.match(g.body, /^From Sam's iPhone \(inbox item i_[0-9a-f]+, task, project nod\)\.\n\nwhat are people saying about Nod$/);
   } finally {
     await s.call("POST", "/admin/mailbox/pause", { paused: true });
   }
@@ -671,8 +758,8 @@ const voice = (token, bytes, headers = {}) =>
     r.end(bytes);
   });
 
-test("a voice note is stored and answered at once, then transcribed with Gemini and filed as a thought with its audio_id", async () => {
-  await s.control("gemini-set", { status: 200, transcript: "Opus high, ship the discovery hub branch." });
+test("a voice note is stored and answered at once, then transcribed and classified in one Gemini call and filed, verbatim and routed, with its audio_id", async () => {
+  await s.control("gemini-set", { status: 200, transcript: "Opus high, ship the discovery hub branch.", answer: { kind: "task", title: "Ship the hub branch", work_type: "general_engineering", confidence: 0.9 } });
   const audio = randomBytes(64 * 1024);
   const res = await voice(devices.phone.bearer, audio);
   assert.equal(res.status, 201);
@@ -683,15 +770,16 @@ test("a voice note is stored and answered at once, then transcribed with Gemini 
     return v.state === "done" && v;
   }, "the transcription");
   const [filed] = await s.d1(`SELECT id, kind, source, audio_id, text FROM inbox_items WHERE audio_id = '${audio_id}'`);
-  assert.deepEqual(filed, { id: done.inbox_id, kind: "thought", source: `device:${devices.phone.id}`, audio_id, text: "Opus high, ship the discovery hub branch." });
+  assert.deepEqual(filed, { id: done.inbox_id, kind: "task", source: `device:${devices.phone.id}`, audio_id, text: "Opus high, ship the discovery hub branch." }, "the classifier's kind, the transcript verbatim");
   assert.deepEqual(done, {
     state: "done",
     transcript: "Opus high, ship the discovery hub branch.",
     inbox_id: filed.id,
-    routing: { agent: "t3", model: "opus", effort: "high", project: "discovery", kind: "thought", source: "spoken" },
+    routing: { agent: "t3", model: "opus", effort: "high", project: "discovery", kind: "task", source: "spoken" },
+    classification: { title: "Ship the hub branch", work_type: "general_engineering", confidence: 0.9 },
   });
   // The status follows a correction made after the note was filed.
-  await ok(req(devices.phone.bearer, "POST", `/inbox/${filed.id}/route`, { agent: "dot", model: "chatgpt", effort: "low", project: null, kind: "thought" }));
+  await ok(req(devices.phone.bearer, "POST", `/inbox/${filed.id}/route`, { agent: "dot", model: "dot", effort: "low", project: null, kind: "thought" }));
   assert.equal((await ok(req(devices.phone.bearer, "GET", `/voice/${audio_id}`))).routing.agent, "dot");
   const g = await s.control("gemini");
   const upload = g.uploads.at(-1);
@@ -701,8 +789,12 @@ test("a voice note is stored and answered at once, then transcribed with Gemini 
   assert.equal(start.headers["x-goog-api-key"], s.vars.GEMINI_API_KEY);
   assert.equal(start.headers["x-goog-upload-protocol"], "resumable");
   assert.equal(start.headers["x-goog-upload-header-content-length"], String(audio.length));
-  const call = JSON.parse(g.requests.filter((x) => x.path === "/gemini/v1beta/interactions").at(-1).body);
-  assert.deepEqual(call, { model: "models/gemini-3.5-transcribe", input: [{ type: "file", file_uri: `https://generativelanguage.googleapis.com/v1beta/files/f${upload.n}` }] });
+  const calls = g.requests.filter((x) => x.path === "/gemini/v1beta/interactions" && x.body.includes(`files/f${upload.n}`));
+  assert.equal(calls.length, 1, "one call transcribes and classifies");
+  const call = JSON.parse(calls[0].body);
+  assert.equal(call.model, "models/gemini-3.8-flash");
+  assert.deepEqual(call.input.at(-1), { type: "audio", uri: `https://generativelanguage.googleapis.com/v1beta/files/f${upload.n}`, mime_type: "audio/m4a" });
+  assert.deepEqual(call.response_format.schema.required, ["transcript", "kind", "title", "work_type", "confidence"]);
   // Another device can't read it.
   assert.equal((await req(devices.ipad.bearer, "GET", `/voice/${audio_id}`)).status, 404);
 });

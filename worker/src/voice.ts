@@ -1,23 +1,20 @@
-// Voice notes (docs/APPROVALS.md, "Voice"). The phone uploads AAC audio; the
-// Worker streams it to R2 and answers at once, then transcribes it with
-// Gemini and files the transcript to the inbox as a thought.
+// Voice notes (docs/APPROVALS.md, "Voice" and "Wire details" 11). The phone
+// uploads AAC audio; the Worker streams it to R2 and answers at once, then
+// one Gemini call transcribes and classifies it, and the transcript is filed
+// to the inbox verbatim with its routing.
 //
-// Gemini request shapes are from Google's docs as read on 2026-11-12
-// (aistudio.google.com/docs/files and /docs/speech-to-text): a resumable
-// Files API upload, then POST /v1beta/interactions with model
-// gemini-3.5-transcribe and an input part {type: "file", file_uri}. That
-// page's REST sample puts the text at steps[].content[].text in the
-// model_output step and names output_text as the SDK accessor; both are read.
-// Neither shape has been checked against the live API.
+// The upload is the Files API's resumable upload (aistudio.google.com/docs/
+// files, read 2026-11-12); the call is src/routing.ts's interact(). Neither
+// has been checked against the live API.
 
 import type { Caller } from "./auth";
 import type { Env } from "./check";
 import { HttpError, randomHex } from "./http";
 import { insertInbox } from "./hub";
-import { wireRouting } from "./routing";
+import { classificationOf, classificationPrompt, classificationSchema, interact, loadTable, wireRouting, type Classification } from "./routing";
+import { presentClassification } from "./hub";
 
 export const VOICE_MAX_BYTES = 25 * 1024 * 1024;
-const MODEL = "models/gemini-3.5-transcribe";
 // Google's audio pages list audio/m4a and audio/aac, not audio/mp4, which is
 // what an AAC .m4a file is. The upload is labelled audio/m4a.
 const GEMINI_MIME = "audio/m4a";
@@ -67,7 +64,7 @@ export async function uploadVoice(env: Env, ctx: ExecutionContext, caller: Calle
 
 export async function voiceStatus(env: Env, caller: Caller, id: string) {
   const v = await env.DB.prepare(
-    `SELECT v.id, v.device_id, v.state, v.transcript, v.error, v.inbox_id, i.routing_json, i.routing_source
+    `SELECT v.id, v.device_id, v.state, v.transcript, v.error, v.inbox_id, i.routing_json, i.routing_source, i.classification_json
      FROM voice_notes v LEFT JOIN inbox_items i ON i.id = v.inbox_id WHERE v.id = ?`,
   )
     .bind(id)
@@ -80,6 +77,7 @@ export async function voiceStatus(env: Env, caller: Caller, id: string) {
       inbox_id: string | null;
       routing_json: string | null;
       routing_source: string | null;
+      classification_json: string | null;
     }>();
   if (!v || (caller.scope === "device" && v.device_id !== caller.deviceId)) throw new HttpError(404, `voice note ${id} not found`);
   // docs/APPROVALS.md, "Wire details": { state, transcript?, error? }, and
@@ -88,7 +86,7 @@ export async function voiceStatus(env: Env, caller: Caller, id: string) {
   return {
     state: v.state,
     ...(v.state === "done" ? { transcript: v.transcript ?? "" } : {}),
-    ...(v.state === "done" && v.inbox_id ? { inbox_id: v.inbox_id, ...(routing ? { routing } : {}) } : {}),
+    ...(v.state === "done" && v.inbox_id ? { inbox_id: v.inbox_id, ...(routing ? { routing, classification: presentClassification(v.classification_json) } : {}) } : {}),
     ...(v.state === "failed" ? { error: v.error ?? "transcription failed" } : {}),
   };
 }
@@ -106,18 +104,11 @@ async function gemini(env: Env, url: string, init: RequestInit): Promise<Respons
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-function transcriptOf(x: Record<string, unknown>): string | null {
-  if (typeof x.output_text === "string") return x.output_text;
-  if (!Array.isArray(x.steps)) return null;
-  const parts: string[] = [];
-  for (const step of x.steps as { type?: string; content?: { type?: string; text?: string }[] }[]) {
-    if (step.type !== "model_output" || !Array.isArray(step.content)) continue;
-    for (const c of step.content) if (c.type === "text" && typeof c.text === "string") parts.push(c.text);
-  }
-  return parts.length ? parts.join("") : null;
-}
 
-async function runGemini(env: Env, note: { id: string; r2_key: string; bytes: number }): Promise<string> {
+// Uploads the audio, then one structured-output call transcribes and
+// classifies it (src/routing.ts has the schema), so the routing is ready when
+// the transcript is.
+async function runGemini(env: Env, note: { id: string; r2_key: string; bytes: number }): Promise<Classification> {
   const origin = env.GEMINI_API_ORIGIN ?? "https://generativelanguage.googleapis.com";
   const obj = await env.VOICE.get(note.r2_key);
   if (!obj) throw new GeminiError(`the audio ${note.r2_key} is missing from R2`);
@@ -150,25 +141,24 @@ async function runGemini(env: Env, note: { id: string; r2_key: string; bytes: nu
     file = (await (await gemini(env, `${origin}/v1beta/${file.name}`, { method: "GET" })).json()) as typeof file;
   }
   if (file!.state && file!.state !== "ACTIVE") throw new GeminiError(`the uploaded file is ${file!.state}`);
-  let answer = (await (
-    await gemini(env, `${origin}/v1beta/interactions`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ model: MODEL, input: [{ type: "file", file_uri: file!.uri }] }),
-    })
-  ).json()) as Record<string, unknown>;
-  for (let i = 0; answer.status !== undefined && answer.status !== "completed" && i < POLLS; i++) {
-    if (answer.status === "failed" || answer.status === "cancelled") break;
-    await sleep(POLL_MS);
-    answer = (await (await gemini(env, `${origin}/v1beta/interactions/${encodeURIComponent(String(answer.id))}`, { method: "GET" })).json()) as Record<string, unknown>;
+  const table = await loadTable(env);
+  let answer: unknown;
+  try {
+    answer = await interact(
+      env,
+      [{ type: "text", text: classificationPrompt(true, table) }, { type: "audio", uri: file!.uri, mime_type: GEMINI_MIME }],
+      classificationSchema(true, table),
+      60_000,
+    );
+  } catch (e) {
+    throw new GeminiError(e instanceof Error ? e.message : String(e));
   }
-  if (answer.status !== undefined && answer.status !== "completed") throw new GeminiError(`the transcription is ${String(answer.status)}`);
-  const text = transcriptOf(answer);
-  if (text === null) throw new GeminiError("Gemini's answer has no transcript text (no output_text, no model_output text step)");
+  const c = classificationOf(answer, table, true);
+  if (!c) throw new GeminiError("Gemini's answer has no transcript in the schema's shape");
   // Uploaded files expire after 48 hours; this removes Sam's audio sooner.
   // A failure here changes nothing.
   await fetch(`${origin}/v1beta/${file!.name}`, { method: "DELETE", headers: { "x-goog-api-key": env.GEMINI_API_KEY! } }).then((r) => r.body?.cancel(), () => {});
-  return text.trim();
+  return { ...c, transcript: c.transcript!.trim() };
 }
 
 export async function transcribe(env: Env, id: string): Promise<void> {
@@ -186,8 +176,13 @@ export async function transcribe(env: Env, id: string): Promise<void> {
     .first<{ id: string; device_id: string; r2_key: string; bytes: number; attempts: number }>();
   if (!note) return;
   try {
-    const transcript = await runGemini(env, note);
-    const filed = transcript ? await insertInbox(env, { kind: "thought", text: transcript, source: `device:${note.device_id}`, audioId: note.id }) : null;
+    const c = await runGemini(env, note);
+    const transcript = c.transcript!;
+    // The transcript is filed verbatim, as the kind the classifier read
+    // (thought when it couldn't tell), with the classification it came with.
+    const filed = transcript
+      ? await insertInbox(env, { kind: c.kind ?? "thought", text: transcript, source: `device:${note.device_id}`, audioId: note.id, classification: c })
+      : null;
     await env.DB.prepare("UPDATE voice_notes SET state = 'done', transcript = ?2, inbox_id = ?3, error = NULL, updated_at = ?4 WHERE id = ?1")
       .bind(id, transcript, filed?.id ?? null, Date.now())
       .run();

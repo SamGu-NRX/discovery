@@ -15,7 +15,7 @@ Results and raw logs are in [EVIDENCE.md](EVIDENCE.md).
 
 ```sh
 npm install
-npm test                         # 74 tests against real wrangler dev stacks and the fixture server
+npm test                         # 76 tests against real wrangler dev stacks and the fixture server
 python3 scripts/mutation-check.py # breaks the code many ways, one at a time; every break must fail a test
 npm run evidence                 # live sources plus the fixture phases, about 2 min; writes evidence/<timestamp>/
 ```
@@ -139,10 +139,10 @@ No secret is printed. Then `node scripts/verify-production.mjs <base-url> ~/.age
 | `POST /voice` | Device token. `content-type: audio/mp4`, a `content-length` (411 without), at most 25 MB (413 from the declared length), `x-recorded-at` as ISO 8601 with seconds and a zone. The body streams to R2 at `voice/<audio_id>.m4a`; the answer is `{audio_id}` (201). |
 | `GET /voice/:audio_id` | The recording device or admin. `{state, transcript?, error?}`. |
 
-- Transcription follows Google's docs as read on 2026-11-12: a resumable Files API upload streamed from R2 (labelled `audio/m4a`, because the docs list that and not `audio/mp4`), then `POST /v1beta/interactions` with `model: "models/gemini-3.5-transcribe"` and `input: [{type: "file", file_uri}]`. The transcript is read from `output_text`, or from the text of the `model_output` step. Neither shape has been checked against the live API. The uploaded file is deleted afterwards.
+- Transcription follows Google's docs as read on 2026-11-12: a resumable Files API upload streamed from R2 (labelled `audio/m4a`, because the docs list that and not `audio/mp4`), then one `POST /v1beta/interactions` on `gemini-3.8-flash` with the audio part and the classification schema (Routing, below), which returns the transcript and the classification together. The JSON is read from `output_text`, `outputs[].text` or the text of the `model_output` step. None of this has been checked against the live API. The uploaded file is deleted afterwards.
 - `waitUntil` ends 30 s after the response, so a transcription it didn't finish is picked up by the cron, 2 a run, at most 3 attempts, then `failed`.
 
-**Routing** (`src/routing.ts`, `migrations/0010_routing.sql`). Wire details 11 to 13 have the rules. The routing table lives in the `routing_table` setting; until `POST /admin/routing` sets one, the defaults in `src/routing.ts` apply: task and direction to `t3` on `opus` at `high`, everything else to `dot` on `chatgpt` at `medium`, projects `discovery` and `nod`. No traffic backs those defaults. Dispatch needs the mailbox unpaused, files from `sam` (so `sam`'s routes decide the agents: `t3` and `dot`), and uses `inbox-<id>` as the idempotency key, so two dispatches can't file two tasks.
+**Routing** (`src/routing.ts`, `migrations/0010_routing.sql`). Wire details 11 to 13 have the rules. The routing table lives in the `routing_table` setting; until `POST /admin/routing` sets one, `DEFAULT_TABLE` in `src/routing.ts` applies (Sam's model policy, and projects `discovery` and `nod`). The efforts the policy brief left open, Astra medium and Luna max, and every model's `default_effort` come from the router's named roles, not from any measurement. The classification call follows Google's structured-output and audio pages as read on 2026-11-12 (`gemini-3.8-flash`, `response_format`, `Api-Revision: 2026-05-20`); neither page shows audio and a schema in one request, and nothing here has reached the live API. Dispatch needs the mailbox unpaused and files from `sam`; migration 0010 adds the route `sam → grok` for it. The idempotency key `inbox-<id>` means two dispatches can't file two tasks.
 
 **Agents as models** (`src/bridge.ts`). The contract's "Agents as models" section has the behaviour. To turn it on, add an `openai-compatibility` entry to CLIProxyAPI whose base URL is `$BASE/v1`, whose API key is the contents of `~/.agent-secrets/discovery-bridge-token`, and whose models are `agent-dot` and `agent-grokbot`. The entry's exact YAML was not checked against CLIProxyAPI's docs here. The mailbox must be unpaused for tasks to be filed.
 
