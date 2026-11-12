@@ -26,7 +26,11 @@ import { send } from "./mailbox";
 
 const MODELS: Record<string, string> = { "agent-grokbot": "grok", "agent-dot": "dot" };
 const BRIEF_MAX_BYTES = 4096;
-const REQUEST_MAX_BYTES = 4 * 1024 * 1024;
+// The whole body is parsed to read the first user message, so it is capped
+// where JSON.parse stays well inside the 10 ms CPU limit: the probe's
+// Claude Code request (157 tools, 7.5K-character system prompt, 30K-character
+// user message) is about 150 KB. No CPU run backs 512 KB; it is a margin.
+const REQUEST_MAX_BYTES = 512 * 1024;
 const STREAM_WAIT_MS = 15 * 60_000;
 const PLAIN_WAIT_MS = 5 * 60_000;
 const KEEPALIVE_MS = 10_000;

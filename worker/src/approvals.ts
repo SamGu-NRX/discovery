@@ -13,6 +13,10 @@ import { inputsHash } from "./inputs";
 import { fromBase64, importDeviceKey, verifyDer } from "./p256";
 
 export const SIGNATURE_SKEW_S = 300;
+// Workers Free allows 50 subrequests per invocation, and filing a proposal
+// spends about 6 on D1 before the pushes. Sam has one or two devices; the
+// newest push tokens get the alert and the rest still see it in the queue.
+const MAX_PUSH_DEVICES = 10;
 const ACTION_LABELS: Record<string, string> = {
   submit: "Submit",
   send: "Send",
@@ -194,8 +198,10 @@ export const anyDeviceEver = (env: Env) =>
 export async function pushRequest(env: Env, r: RequestRow): Promise<"sent" | "failed" | "no_apns"> {
   if (!apnsConfigured(env)) return "no_apns";
   const devices = await env.DB.prepare(
-    "SELECT id, apns_token, apns_env FROM devices WHERE revoked_at IS NULL AND apns_invalid_at IS NULL ORDER BY enrolled_at",
-  ).all<{ id: string; apns_token: string; apns_env: "development" | "production" }>();
+    "SELECT id, apns_token, apns_env FROM devices WHERE revoked_at IS NULL AND apns_invalid_at IS NULL ORDER BY apns_token_updated_at DESC, id LIMIT ?",
+  )
+    .bind(MAX_PUSH_DEVICES)
+    .all<{ id: string; apns_token: string; apns_env: "development" | "production" }>();
   if (devices.results.length === 0) return "failed";
   const payload = fitPayload({
     aps: {

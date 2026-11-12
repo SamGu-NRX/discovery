@@ -164,7 +164,11 @@ async function runGemini(env: Env, note: { id: string; r2_key: string; bytes: nu
 export async function transcribe(env: Env, id: string): Promise<void> {
   const now = Date.now();
   if (!env.GEMINI_API_KEY) {
-    await env.DB.prepare("UPDATE voice_notes SET error = 'GEMINI_API_KEY is not set' WHERE id = ? AND state = 'queued'").bind(id).run();
+    // Retrying can't help, so the note fails at once instead of waiting in
+    // the queue forever.
+    await env.DB.prepare("UPDATE voice_notes SET state = 'failed', error = 'GEMINI_API_KEY is not set', updated_at = ?2 WHERE id = ?1 AND state = 'queued'")
+      .bind(id, Date.now())
+      .run();
     return;
   }
   const note = await env.DB.prepare(

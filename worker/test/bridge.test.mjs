@@ -188,6 +188,11 @@ test("a declined task says so; a bad model, no brief, or a mailbox refusal is an
   const msg = JSON.parse((await (await pending).json()).choices[0].message.tool_calls[0].function.arguments).message;
   assert.match(msg, /, declined\)\./);
 
+  const filedBefore = await bridgeTasks();
+  const huge = await chat({ model: "agent-dot", messages: [{ role: "user", content: "x".repeat(512 * 1024) }] });
+  assert.equal(huge.status, 413, "refused before parsing");
+  assert.equal((await huge.json()).error.code, "invalid_body");
+  assert.equal(await bridgeTasks(), filedBefore, "nothing filed");
   const bad = await chat({ model: "gpt-6", messages: [{ role: "user", content: "x" }] });
   assert.equal(bad.status, 404);
   assert.equal((await bad.json()).error.code, "model_not_found");

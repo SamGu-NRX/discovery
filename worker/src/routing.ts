@@ -487,7 +487,7 @@ export async function correctRouting(env: Env, id: string, req: Request) {
   const model = agent.models.find((x) => x.id === b.model);
   if (!model) fail(`model must be one of ${agent.id}'s models: ${agent.models.map((x) => x.id).join("|")}`);
   if (!model.efforts.includes(b.effort as Effort)) fail(`effort must be one of ${model.efforts.join("|")} for ${model.id}`);
-  if (b.project !== null && (typeof b.project !== "string" || !NAME.test(b.project))) fail("project must be a lowercase project name or null");
+  if (b.project !== null && !table.projects.some((p) => p.name === b.project)) fail(`project must be null or one of ${table.projects.map((p) => p.name).join("|")}`);
   if (!KINDS.includes(b.kind as Kind)) fail(`kind must be one of ${KINDS.join("|")}`);
   const routing: Routing = { agent: agent.id, model: model.id, effort: b.effort as Effort, project: b.project as string | null, kind: b.kind as Kind };
   // Only while not dispatched, checked in the write itself.

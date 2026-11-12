@@ -241,6 +241,23 @@ test("an irreversible proposal sends every live device a time-sensitive APPROVAL
   assert.deepEqual(await s.d1(`SELECT apns_invalid_at IS NULL AS live FROM devices WHERE id = '${devices.ipad.id}'`), [{ live: 1 }]);
 });
 
+test("a proposal pushes to at most the 10 newest live push tokens, so 51 devices can't spend the 50-subrequest budget", async () => {
+  const now = Date.now();
+  const rows = Array.from({ length: 51 }, (_, i) => `('d_fan${String(i).padStart(13, "0")}', 'fanout', 'x', '${randomBytes(32).toString("hex")}', 'production', '${randomBytes(32).toString("hex")}', ${now}, ${now + i})`);
+  await s.d1(`INSERT INTO devices (id, name, public_key_spki_b64, apns_token, apns_env, device_token_hash, enrolled_at, apns_token_updated_at) VALUES ${rows.join(", ")}`);
+  try {
+    await resetNotifyCap();
+    const p = await ok(proposal(prInputs()), 201);
+    assert.equal(p.notify_state, "sent");
+    const pushes = (await s.control("pushes")).filter((x) => x.body.request_id === p.approval_request_id);
+    assert.equal(pushes.length, 10);
+    const newest = (await s.d1("SELECT apns_token FROM devices WHERE name = 'fanout' ORDER BY apns_token_updated_at DESC LIMIT 10")).map((d) => d.apns_token).sort();
+    assert.deepEqual(pushes.map((x) => x.token).sort(), newest);
+  } finally {
+    await s.d1("DELETE FROM devices WHERE name = 'fanout'");
+  }
+});
+
 test("deciding checks the device, the request, the clock, then the signature, in that order, and records nothing on a refusal", async () => {
   const p = await ok(proposal(prInputs()), 201);
   const r = await requestFor(p.id);
@@ -602,6 +619,7 @@ test("POST /inbox/:id/route stores a correction checked against the table and an
   badField(await route({ ...good, agent: "dot" }), /^model must be one of dot's models/);
   badField(await route({ ...good, effort: "turbo" }), /^effort must be one of/);
   badField(await route({ ...good, project: "Reel Exporter" }), /^project /);
+  badField(await route({ ...good, project: "made-up" }), /^project must be null or one of discovery\|nod/);
   badField(await route({ ...good, kind: "agent_push" }), /^kind /);
   badField(await route({ ...good, source: "table" }), /^source is not a routing field/);
   assert.equal((await route(good, "mail_t3")).status, 403, "only a device corrects");
