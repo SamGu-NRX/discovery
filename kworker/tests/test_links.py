@@ -52,3 +52,16 @@ def test_site_owns_repo(site, repo, owns):
     from kworker.links import site_owns_repo
 
     assert site_owns_repo(site, repo) is owns
+
+
+def test_no_x_refuses_x_hosts_only():
+    from types import SimpleNamespace
+
+    from kworker.api import Stats
+    from kworker.ctx import Ctx, XFetchRefused
+
+    ctx = Ctx(SimpleNamespace(no_x=True), None, Stats(), None, None)
+    for url in ("https://video.twimg.com/a.mp4", "https://cdn.syndication.twimg.com/tweet-result?id=1", "https://x.com/a/status/1", "https://t.co/abc"):
+        with pytest.raises(XFetchRefused):
+            ctx.fetch("GET", url)
+    assert ctx.stats.fetches == {}

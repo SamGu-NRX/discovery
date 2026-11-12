@@ -22,6 +22,13 @@ from .config import Config
 BROWSER_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36"
 
 
+X_HOSTS = {"x.com", "twitter.com", "api.fxtwitter.com", "fxtwitter.com", "api.x.com", "t.co"}
+
+
+class XFetchRefused(RuntimeError):
+    pass
+
+
 @dataclass
 class Ctx:
     cfg: Config
@@ -33,11 +40,18 @@ class Ctx:
     def fetch(self, method: str, url: str, **kw) -> httpx.Response:
         """Every request kworker makes to anything but the Worker and the model
         gateway goes through here, so a rerun can prove it made none."""
+        self._allowed(url)
         self.stats.fetches[urlsplit(url).hostname or "?"] += 1
         return self.web.request(method, url, **kw)
 
+    def _allowed(self, url: str) -> None:
+        host = (urlsplit(url).hostname or "").lower()
+        if self.cfg.no_x and (host in X_HOSTS or host.endswith(".twimg.com")):
+            raise XFetchRefused(f"X fetches are off (KWORKER_NO_X=1) and {host} is not in the archive's records")
+
     @contextmanager
     def stream(self, method: str, url: str, **kw):
+        self._allowed(url)
         self.stats.fetches[urlsplit(url).hostname or "?"] += 1
         with self.web.stream(method, url, **kw) as r:
             yield r

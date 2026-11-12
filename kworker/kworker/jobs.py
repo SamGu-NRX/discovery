@@ -37,13 +37,18 @@ def save_job(ctx: Ctx, payload: dict) -> dict:
 
     children: list[dict] = []
     seen_media = set()
-    for t in exp["thread"]:
-        for m in t.get("media", []):
+    quoted = exp.get("quoted") or {}
+    owners = [(t["id"], t.get("media", [])) for t in exp["thread"]] + [(quoted.get("id") or "quoted", quoted.get("media") or [])]
+    for owner, items in owners:
+        for m in items:
             if m["source_url"] in seen_media:
                 continue
             seen_media.add(m["source_url"])
             kind = "video" if m["kind"] in ("video", "gif") else "image"
-            children.append({"kind": kind, "key": url_hash(canonical_url(m["source_url"])), "source_url": m["source_url"], "media_kind": m["kind"], "post_id": t["id"]})
+            child = {"kind": kind, "key": url_hash(canonical_url(m["source_url"])), "source_url": m["source_url"], "media_kind": m["kind"], "post_id": owner}
+            # Where the archive already has the file (read-only, sha-checked).
+            child.update({k: m[k] for k in ("sha256", "local_file") if m.get(k)})
+            children.append(child)
 
     wanted: list[tuple[str, str]] = []  # (url, from)
     for l in exp["post"]["links"]:

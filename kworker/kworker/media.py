@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 
 from . import models
+from .api import sha256_file
 from .canon import canonical_url, is_immutable, url_hash
 from .ctx import Ctx
 
@@ -23,15 +24,42 @@ IMAGE_SCHEMA = {
 AGREE_AT = 0.92
 
 
-def fetch_media(ctx: Ctx, url: str) -> dict:
+_MIME_BY_EXT = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".gif": "image/gif", ".webp": "image/webp", ".mp4": "video/mp4", ".mov": "video/quicktime"}
+
+
+def _archive_copy(ctx: Ctx, local_file: str | None, expect_sha: str | None) -> Path | None:
+    """The archive's own download of this media, if it is in a media dir and
+    hashes to what the archive recorded."""
+    if not (local_file and expect_sha):
+        return None
+    for d in ctx.cfg.media_dirs:
+        p = d / Path(local_file).name
+        if p.is_file() and sha256_file(p) == expect_sha:
+            return p
+    return None
+
+
+def fetch_media(ctx: Ctx, url: str, expect_sha: str | None = None, local_file: str | None = None) -> dict:
     """Downloads a media URL once. {sha256, mime, bytes, cached}; the bytes
-    live in R2, not on disk, unless a later step asks for them."""
+    live in R2, not on disk, unless a later step asks for them. A copy the
+    archive already downloaded is used instead of the origin when its hash
+    matches."""
     canon = canonical_url(url)
     h = url_hash(canon)
     prior = ctx.api.lookup_fetches([h]).get(h)
     if prior and prior["status"] == "ok" and prior.get("content_sha"):
         ctx.stats.cache_hits["fetch"] += 1
         return {"sha256": prior["content_sha"], "mime": prior.get("mime") or "application/octet-stream", "cached": True, "url": canon}
+    copy = _archive_copy(ctx, local_file, expect_sha)
+    if copy is not None:
+        mime = _MIME_BY_EXT.get(copy.suffix.lower(), "application/octet-stream")
+        ctx.api.put_file(copy, mime, expect_sha)
+        ctx.api.record_fetches(
+            [{"url_hash": h, "canonical_url": canon, "final_url": canon, "content_sha": expect_sha, "mime": mime, "http_status": 200,
+              "rung": 1, "status": "ok", "immutable": 1 if is_immutable(canon) else 0, "note": "the archive's own download, sha256 checked"}]
+        )
+        ctx.stats.cache_hits["archive_media"] += 1
+        return {"sha256": expect_sha, "mime": mime, "cached": False, "url": canon, "path": str(copy)}
     dest = ctx.scratch / f"dl-{h[:16]}"
     digest = hashlib.sha256()
     with ctx.stream("GET", url) as r:
@@ -85,7 +113,7 @@ def agreement(a: str, b: str) -> float:
 
 
 def image_job(ctx: Ctx, payload: dict) -> dict:
-    m = fetch_media(ctx, payload["source_url"])
+    m = fetch_media(ctx, payload["source_url"], payload.get("sha256"), payload.get("local_file"))
     sha, mime = m["sha256"], m["mime"]
 
     def build_read(cap: dict):

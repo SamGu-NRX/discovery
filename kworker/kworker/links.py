@@ -20,7 +20,7 @@ import httpx
 
 from .api import canonical_json
 from .canon import canonical_url, is_immutable, url_hash
-from .ctx import Ctx
+from .ctx import X_HOSTS, Ctx
 from .models import cached_code
 
 EXTRACTOR = ("code/trafilatura", "trafilatura-2.3.1+v1")
@@ -153,6 +153,9 @@ def _xml(text: str, tag: str, nth: int) -> str:
 
 
 def x_post(ctx: Ctx, status_id: str, url: str) -> Fetched:
+    cached = _x_from_cache(ctx, status_id, url)
+    if cached is not None:
+        return cached
     # The token react-tweet computes for the public syndication endpoint.
     token = _syndication_token(status_id)
     r = ctx.fetch("GET", f"https://cdn.syndication.twimg.com/tweet-result?id={status_id}&token={token}&lang=en")
@@ -165,6 +168,25 @@ def x_post(ctx: Ctx, status_id: str, url: str) -> Fetched:
     doc = f"@{user.get('screen_name')} ({user.get('name')}), {j.get('created_at')}:\n\n{j.get('text', '')}"
     meta = {"x_post": {"id": status_id, "author_handle": user.get("screen_name"), "text": j.get("text"), "created_at": j.get("created_at")}}
     return _adapter(url, "x_syndication", meta, doc, "X syndication JSON")
+
+
+def _x_from_cache(ctx: Ctx, status_id: str, url: str) -> Fetched | None:
+    """An fxtwitter record the archive already holds (KWORKER_X_CACHE), so a
+    run over archived saves adds nothing to X's load."""
+    for d in ctx.cfg.x_cache:
+        p = d / f"{status_id}.json"
+        if not p.is_file():
+            continue
+        t = json.loads(p.read_text(encoding="utf-8")).get("tweet") or {}
+        if not t.get("text") and not t.get("raw_text"):
+            continue
+        author = t.get("author") or {}
+        text = t.get("text") or (t.get("raw_text") or {}).get("text", "")
+        ctx.stats.cache_hits["x_archive"] += 1
+        doc = f"@{author.get('screen_name')} ({author.get('name')}), {t.get('created_at')}:\n\n{text}"
+        meta = {"x_post": {"id": status_id, "author_handle": author.get("screen_name"), "text": text, "created_at": t.get("created_at")}}
+        return _adapter(url, "x_fxtwitter_archive", meta, doc, "fxtwitter record from the archive")
+    return None
 
 
 def _syndication_token(status_id: str) -> str:
@@ -377,9 +399,15 @@ def link_job(ctx: Ctx, payload: dict) -> dict:
     got: Fetched | None = None
     rungs = [(0, lambda: rung0(ctx, canon)), (1, lambda: rung1(ctx, canon, prior)), (2, lambda: rung2(ctx, canon)), (3, lambda: rung3(ctx, canon)), (4, lambda: rung4(ctx, canon))]
     worst: Fetched | None = None
+    on_x = host in X_HOSTS or host.endswith(".twimg.com")
     for n, fn in rungs:
         if n < start and n != 0:
             attempts.append({"rung": n, "skipped": f"domain_policy start_rung {start}"})
+            continue
+        if n > 0 and on_x and ctx.cfg.no_x:
+            # Proxies and the browser would still load X; only the archive's
+            # own record (rung 0) may answer.
+            attempts.append({"rung": n, "status": "blocked", "note": "X fetches are off (KWORKER_NO_X=1)"})
             continue
         t0 = time.monotonic()
         try:

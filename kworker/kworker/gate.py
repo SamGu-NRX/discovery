@@ -185,7 +185,21 @@ def _public(c: dict) -> dict:
     return {k: v for k, v in c.items() if not k.startswith("_")}
 
 
+# Items per band call. A Nov 12 save has up to several hundred candidate
+# replies; one call for all of them would run past the output budget. A save
+# with at most this many still makes the single call it always did, so its
+# cache key is unchanged.
+BAND_BATCH = 40
+
+
 def _band(ctx: Ctx, post: dict, items: list[dict]) -> list[Decision]:
+    out: list[Decision] = []
+    for i in range(0, len(items), BAND_BATCH):
+        out += _band_call(ctx, post, items[i : i + BAND_BATCH])
+    return out
+
+
+def _band_call(ctx: Ctx, post: dict, items: list[dict]) -> list[Decision]:
     brief = models.prompt("interest-brief-v1")
     listing = "\n".join(
         f"<item i=\"{i}\" author=\"@{c['author_handle']}\">{c['text']}" + (f"\nlinks: {' '.join(c['links'])}" if c.get("links") else "") + "</item>"

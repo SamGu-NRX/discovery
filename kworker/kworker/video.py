@@ -175,7 +175,7 @@ def key_frames(ctx: Ctx, media: dict, duration: float) -> list[dict]:
 
 
 def video_job(ctx: Ctx, payload: dict) -> dict:
-    media = fetch_media(ctx, payload["source_url"])
+    media = fetch_media(ctx, payload["source_url"], payload.get("sha256"), payload.get("local_file"))
     info = probe(ctx, media)
     if info["has_audio"]:
         transcript = transcribe(ctx, media)

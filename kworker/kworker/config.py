@@ -35,6 +35,13 @@ class Config:
     github_token: str | None
     chrome_profile: Path
     model_cache: Path
+    # Files an archive already downloaded: media by file name (sha-checked
+    # before use) and fxtwitter records by post id. They spare X the fetch.
+    media_dirs: tuple[Path, ...] = ()
+    x_cache: tuple[Path, ...] = ()
+    # Refuse every request to X's hosts (KWORKER_NO_X=1), so a run over an
+    # archive cannot compete with the archive's own fetch queue.
+    no_x: bool = False
 
     @property
     def cliproxy(self) -> bool:
@@ -82,4 +89,13 @@ def load() -> Config:
         chrome_profile=Path(_get("KWORKER_CHROME_PROFILE") or local / "kworker" / "chrome-profiles" / "pipeline"),
         # Model weights only (whisper, embeddings). Pipeline state never lives here.
         model_cache=Path(_get("KWORKER_MODEL_CACHE") or Path.home() / ".cache" / "kworker"),
+        media_dirs=_paths("KWORKER_MEDIA_DIRS"),
+        x_cache=_paths("KWORKER_X_CACHE"),
+        no_x=_get("KWORKER_NO_X") == "1",
     )
+
+
+def _paths(name: str) -> tuple[Path, ...]:
+    """Read-only folders another process filled (an archive's media, its
+    fxtwitter records). kworker reads from them and never writes."""
+    return tuple(Path(p) for p in (_get(name) or "").split(os.pathsep) if p)
