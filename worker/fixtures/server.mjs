@@ -14,10 +14,19 @@
 //               (default 200). An MCP Events verification request gets its
 //               challenge echoed, unless state.hookMode[name] is "wrong"
 //               (another challenge) or "flood" (8 KB that never ends)
+//   /github/*   a small GitHub REST API for the PR executor: repos, refs,
+//               commits, blobs, trees and pulls, recorded in state.github
+//   /apns/<host>/3/device/<token>  stand-in for APNs; records each push and
+//               answers state.apns[token] ?? {status: 200}
+//   /gemini/*   the Files API resumable upload and POST /v1beta/interactions,
+//               answering state.gemini.transcript (or state.gemini.status)
 //
 // Usage: node fixtures/server.mjs [port]   (default 8799)
 
+import { createHash } from "node:crypto";
 import { createServer } from "node:http";
+
+const fakeSha = (seed) => createHash("sha1").update(String(seed)).digest("hex");
 
 export function createFixture() {
   const state = {
@@ -38,6 +47,16 @@ export function createFixture() {
     hooks: [],
     hookStatus: {},
     hookMode: {},
+    github: {
+      repos: { "SamGu-NRX/discovery": { default_branch: "main", refs: { main: fakeSha("main"), "agent/pushed": fakeSha("pushed") }, pulls: 0 } },
+      requests: [],
+      // "<METHOD> <path prefix>" -> status, to make one kind of call fail.
+      fail: {},
+      seq: 0,
+    },
+    apns: {},
+    pushes: [],
+    gemini: { transcript: "Remember to ship the hub branch.", status: 200, requests: [], uploads: [], seq: 0 },
   };
 
   const atom = () =>
@@ -86,6 +105,21 @@ export function createFixture() {
           case "/control/hook-mode":
             state.hookMode[b.name] = b.mode;
             return send(200, "{}");
+          case "/control/github":
+            return send(200, JSON.stringify(state.github));
+          case "/control/github-fail":
+            state.github.fail[b.key] = b.status;
+            return send(200, "{}");
+          case "/control/pushes":
+            return send(200, JSON.stringify(state.pushes));
+          case "/control/apns":
+            state.apns[b.token] = b.reply;
+            return send(200, "{}");
+          case "/control/gemini":
+            return send(200, JSON.stringify(state.gemini));
+          case "/control/gemini-set":
+            Object.assign(state.gemini, b);
+            return send(200, "{}");
           case "/control/atom":
             return send(200, atom(), { "content-type": "application/atom+xml" });
           default:
@@ -131,6 +165,46 @@ export function createFixture() {
       return;
     }
 
+    if (url.pathname.startsWith("/github/")) return github(req, url, send);
+    if (url.pathname.startsWith("/apns/")) {
+      const chunks = [];
+      req.on("data", (c) => chunks.push(c));
+      req.on("end", () => {
+        const [, , host, , , token] = url.pathname.split("/");
+        state.pushes.push({ ts: Date.now(), host, token, headers: req.headers, body: JSON.parse(Buffer.concat(chunks).toString()) });
+        const reply = state.apns[token] ?? { status: 200 };
+        send(reply.status, reply.status === 200 ? "" : JSON.stringify({ reason: reply.reason }), { "apns-id": `apns-${state.pushes.length}` });
+      });
+      return;
+    }
+    if (url.pathname.startsWith("/gemini/")) {
+      const chunks = [];
+      req.on("data", (c) => chunks.push(c));
+      req.on("end", () => {
+        const g = state.gemini;
+        const raw = Buffer.concat(chunks);
+        const session = url.pathname.startsWith("/gemini/upload-session/");
+        g.requests.push({ ts: Date.now(), method: req.method, path: url.pathname, headers: req.headers, body: session ? `<${raw.length} bytes>` : raw.toString() });
+        if (g.status !== 200) return send(g.status, JSON.stringify({ error: { message: "fixture failure" } }));
+        if (url.pathname === "/gemini/upload/v1beta/files") {
+          return send(200, "", { "x-goog-upload-url": `http://${req.headers.host}/gemini/upload-session/${++g.seq}` });
+        }
+        if (session) {
+          const n = url.pathname.split("/").pop();
+          g.uploads.push({ n, bytes: raw.length, sha256: createHash("sha256").update(raw).digest("hex"), headers: req.headers });
+          const file = { name: `files/f${n}`, uri: `https://generativelanguage.googleapis.com/v1beta/files/f${n}`, mimeType: req.headers["x-goog-upload-header-content-type"], state: "ACTIVE" };
+          return send(200, JSON.stringify({ file }), { "content-type": "application/json" });
+        }
+        if (url.pathname === "/gemini/v1beta/interactions" && req.method === "POST") {
+          const answer = { id: `int-${g.seq}`, status: "completed", steps: [{ type: "user_input" }, { type: "model_output", content: [{ type: "text", text: g.transcript }] }] };
+          return send(200, JSON.stringify(answer), { "content-type": "application/json" });
+        }
+        if (req.method === "DELETE") return send(200, "{}");
+        send(404, "{}");
+      });
+      return;
+    }
+
     state.hits.push({
       path: url.pathname,
       if_none_match: req.headers["if-none-match"] ?? null,
@@ -162,6 +236,45 @@ export function createFixture() {
     }
     send(404, "not found");
   });
+
+  // GitHub's REST shapes for the calls src/executor.ts makes. Anything else
+  // (a PATCH to a ref, say) is recorded and answered 404.
+  function github(req, url, send) {
+    const chunks = [];
+    req.on("data", (c) => chunks.push(c));
+    req.on("end", () => {
+      const g = state.github;
+      const body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString()) : null;
+      const m = url.pathname.match(/^\/github\/repos\/([^/]+\/[^/]+)(\/.*)?$/);
+      const path = decodeURIComponent(m?.[2] ?? "");
+      g.requests.push({ ts: Date.now(), method: req.method, repo: m?.[1], path, auth: req.headers.authorization, body });
+      const out = (status, data) => send(status, JSON.stringify(data), { "content-type": "application/json" });
+      const injected = Object.entries(g.fail).find(([k, v]) => v && `${req.method} ${path}`.startsWith(k));
+      if (injected) return out(injected[1], { message: "injected failure" });
+      const repo = m && g.repos[m[1]];
+      if (!repo) return out(404, { message: "Not Found" });
+      if (req.method === "GET" && path === "") return out(200, { full_name: m[1], default_branch: repo.default_branch });
+      let r;
+      if (req.method === "GET" && (r = path.match(/^\/git\/ref\/heads\/(.+)$/))) {
+        const sha = repo.refs[r[1]];
+        return sha ? out(200, { ref: `refs/heads/${r[1]}`, object: { sha, type: "commit" } }) : out(404, { message: "Not Found" });
+      }
+      if (req.method === "GET" && (r = path.match(/^\/git\/commits\/([0-9a-f]{40})$/))) return out(200, { sha: r[1], tree: { sha: fakeSha(`tree-of-${r[1]}`) } });
+      if (req.method === "POST" && ["/git/blobs", "/git/trees", "/git/commits"].includes(path)) return out(201, { sha: fakeSha(`${path}-${++g.seq}`) });
+      if (req.method === "POST" && path === "/git/refs") {
+        const name = body.ref.replace(/^refs\/heads\//, "");
+        if (repo.refs[name]) return out(422, { message: "Reference already exists" });
+        repo.refs[name] = body.sha;
+        return out(201, { ref: body.ref, object: { sha: body.sha, type: "commit" } });
+      }
+      if (req.method === "POST" && path === "/pulls") {
+        if (!repo.refs[body.head]) return out(422, { message: "Validation Failed: head does not exist" });
+        const n = ++repo.pulls;
+        return out(201, { number: n, draft: body.draft, html_url: `https://github.com/${m[1]}/pull/${n}` });
+      }
+      out(404, { message: "Not Found" });
+    });
+  }
 
   return { server, state };
 }
