@@ -140,7 +140,7 @@ export function parseJobs(input) {
  *   onBatch({ batch, operation }): Promise<void>  a contract batch to queue,
  *   onSignal({ reason, detail })  back-off to pause on,
  *   onStart(run)  optional, the live run record, for showing progress,
- *   stopRequested(): boolean
+ *   stopRequested(): false, or why the run should stop
  * }
  */
 export async function runJobs(jobs, limits, io) {
@@ -190,7 +190,7 @@ export async function runJobs(jobs, limits, io) {
 }
 
 async function gate(run, io, operation = null) {
-  if (io.stopRequested()) throw new RunStopped("stopped", "stopped by Sam");
+  if (io.stopRequested()) throw new RunStopped("stopped", stopDetail(io));
   if (run.requests >= run.limits.runCap) throw new RunStopped("cap", `reached the run cap of ${run.limits.runCap} requests`);
   if (await io.paused()) throw new RunStopped("paused", "the extension is paused (an X signal in the last 24 hours)");
   if (operation) await keepRateReserve(run, io, operation);
@@ -200,7 +200,7 @@ async function gate(run, io, operation = null) {
     if (wait > 0) await io.sleep(wait);
   }
   // A signal can arrive while waiting, from this tab or any other.
-  if (io.stopRequested()) throw new RunStopped("stopped", "stopped by Sam");
+  if (io.stopRequested()) throw new RunStopped("stopped", stopDetail(io));
   if (await io.paused()) throw new RunStopped("paused", "the extension was paused while waiting");
   run.requests += 1;
   run.lastRequestAt = io.now();
@@ -601,4 +601,11 @@ async function searchByPage(run, io, s, result) {
   const next = cursorsOf("SearchTimeline", verdict.json).find((c) => c.type === "Bottom");
   result.exhausted = !next || capture.primary.length === 0;
   result.morePages = !result.exhausted;
+}
+
+// The page passes the reason as a string; anything else is the old "Sam
+// pressed Stop".
+function stopDetail(io) {
+  const why = io.stopRequested();
+  return typeof why === "string" ? why : "stopped by Sam";
 }

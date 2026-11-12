@@ -53,7 +53,7 @@ async function init() {
   });
   $("start").addEventListener("click", start);
   $("stop").addEventListener("click", () => {
-    if (running) running.stop = true;
+    if (running) running.stop = "stopped from the fetch page's Stop button";
     setStatus("stopping after the current request…");
   });
   $("download").addEventListener("click", () => lastBundle && download(lastBundle));
@@ -130,7 +130,7 @@ async function run({ jobs, limits }, owner) {
   // Holds the lock through rate-limit waits, which can last 16 minutes.
   const beat = setInterval(() => heartbeat(r).catch(() => {}), 20_000);
   const onRemoved = (windowId) => {
-    if (windowId === r.windowId) r.stop = true;
+    if (windowId === r.windowId) r.stop = "the run's x.com window was closed";
   };
   chrome.windows.onRemoved.addListener(onRemoved);
   try {
@@ -249,7 +249,7 @@ function statusFor(stop) {
 // a worker restart for instance, stops the run.
 async function heartbeat(r) {
   const reply = await chrome.runtime.sendMessage({ type: "fetch-heartbeat", owner: r.owner, tabId: r.tabId, windowId: r.windowId });
-  if (!reply?.held) r.stop = true;
+  if (!reply?.held) r.stop = "the service worker no longer holds this run's claim";
 }
 
 // One page load where X itself calls the operation; the runner decides
