@@ -56,7 +56,7 @@ Sam's agents file tasks for each other through the Worker. The Worker is the onl
 
 ## Devices, approvals, inbox, brief and voice
 
-[APPROVALS.md](APPROVALS.md) is the contract with the iPhone app. `worker/README.md` lists how the Worker reads its open points.
+[APPROVALS.md](APPROVALS.md) is the contract with the iPhone app. `worker/README.md` lists how the Worker reads its open points. A thought Sam dispatches from the app becomes a mailbox task from `sam` to `t3` or `dot` (APPROVALS.md, "Wire details" 11).
 
 ## Agents as models (`/v1`)
 

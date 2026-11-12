@@ -129,6 +129,16 @@ muts = [
  ("M108 no keepalive while waiting", "src/bridge.ts", "const KEEPALIVE_MS = 10_000;", "const KEEPALIVE_MS = 60_000;"),
  ("M109 mailbox_complete doesn't wake the waiter", "src/mailbox.ts", '    if (row.from_agent === "bridge") ctx.waitUntil(notifyBridge(env, id));', ""),
  ("M110 the dot's tell posts as another source", "src/mailbox.ts", 'structured = await postInbox(env, "dot", { kind: "agent_push", ...args });', 'structured = await postInbox(env, "admin", { kind: "agent_push", ...args });'),
+ ('M115 a failed spoken segment still sets the effort', 'src/routing.ts', '    if (!ok || (!segModel && !segEffort)) break;\n    model = segModel ?? model;\n    effort = segEffort ?? effort;', '    model = segModel ?? model;\n    effort = segEffort ?? effort;\n    if (!ok || (!segModel && !segEffort)) break;'),
+ ('M116 a second dispatch also succeeds', 'src/routing.ts', 'WHERE id = ?1 AND dispatched_at IS NULL RETURNING dispatched_at', 'WHERE id = ?1 RETURNING dispatched_at'),
+ ('M117 a correction may pair any agent with any model', 'src/routing.ts', '  const model = agent.models.find((m) => m.id === b.model);', '  const model = table.agents.flatMap((a) => a.models).find((m) => m.id === b.model);'),
+ ('M118 a dispatched item can be corrected', 'src/routing.ts', '  if (row.dispatched_at !== null) throw refuse(409,', '  if (false) throw refuse(409,'),
+ ("M119 an agent's post can be routed", 'src/routing.ts', '  if (!row.source.startsWith("device:")) throw refuse(409,', '  if (false) throw refuse(409,'),
+ ('M120 a numeric amount reaches the stake', 'src/approvals.ts', 'if (finalStepKind === "pay" && typeof i.amount === "string" && /^\\d{1,12}(\\.\\d{1,2})?$/.test(i.amount)) stake.amount = i.amount;', 'if (finalStepKind === "pay" && i.amount !== undefined) stake.amount = i.amount as string;'),
+ ('M121 the push leaves out the stake', 'src/approvals.ts', '    ...(r.stake_json ? { stake: JSON.parse(r.stake_json) as Stake } : {}),\n  });', '  });'),
+ ('M122 a finished voice note has no routing', 'src/voice.ts', '{ inbox_id: v.inbox_id, ...(routing ? { routing } : {}) }', '{ inbox_id: v.inbox_id }'),
+ ('M123 app routes answer sentence errors', 'src/index.ts', 'if (e instanceof HttpError && app) return', 'if (e instanceof HttpError && false) return'),
+ ("M124 the table's rules ignore the kind", 'src/routing.ts', '(!r.when.kind || r.when.kind === kind)', '(true)'),
 ]
 # MUTATION_TESTS narrows the run to the suites that own the mutated code,
 # such as "test/hub.test.mjs test/bridge.test.mjs".
@@ -141,27 +151,31 @@ for name, path, old, new in muts:
     # Compared with LF line endings whatever the checkout uses (Windows
     # checkouts have CRLF); the original bytes are written back afterwards.
     raw = open(path, "rb").read()
-    src = raw.decode("utf-8").replace("
-", "
-")
+    src = raw.decode("utf-8").replace("\r\n", "\n")
     mutated = src
     for o, n in pairs:
         assert o in mutated, name
         mutated = mutated.replace(o, n)
     open(path, "w", encoding="utf-8", newline="").write(mutated)
     try:
+        # The spec reporter prints the ✖ lines read below; piped, node
+        # otherwise picks TAP on some versions.
+        proc = subprocess.Popen(["node", "--test", "--test-reporter=spec", *tests], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8")
         try:
-            # The spec reporter prints the ✖ lines read below; piped, node
-            # otherwise picks TAP on some versions.
-            r = subprocess.run(["node", "--test", "--test-reporter=spec", *tests], capture_output=True, text=True, encoding="utf-8", timeout=240)
+            stdout, _ = proc.communicate(timeout=240)
         except subprocess.TimeoutExpired:
             # A break that hangs the Worker (M77 overflows its stack) is caught too: the suite never passes.
-            # Only this checkout's wrangler: other worktrees run their own test stacks on the same ports.
-            subprocess.run(["pkill", "-f", os.path.join(os.getcwd(), "node_modules", ".bin", "wrangler") + " dev"])
+            # Only the processes this run started: other worktrees run their own test stacks.
+            if os.name == "nt":
+                subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True)
+            else:
+                subprocess.run(["pkill", "-f", os.path.join(os.getcwd(), "node_modules", ".bin", "wrangler") + " dev"])
+                proc.kill()
+            proc.communicate()
             print(f"caught  {name}: the suite hung past 240 s", flush=True)
             continue
         # node --test lists each failure twice (inline and in the summary).
-        failed = sorted({re.sub(r" \([\d.]+ms\)$", "", l.strip()[2:]) for l in r.stdout.splitlines() if l.startswith("✖") and "failing tests:" not in l})
-        print(f"{'caught' if failed else 'MISSED'}  {name}: exit={r.returncode} failing={failed}", flush=True)
+        failed = sorted({re.sub(r" \([\d.]+ms\)$", "", l.strip()[2:]) for l in stdout.splitlines() if l.startswith("✖") and "failing tests:" not in l})
+        print(f"{'caught' if failed else 'MISSED'}  {name}: exit={proc.returncode} failing={failed}", flush=True)
     finally:
         open(path, "wb").write(raw)

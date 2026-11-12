@@ -15,7 +15,7 @@ Results and raw logs are in [EVIDENCE.md](EVIDENCE.md).
 
 ```sh
 npm install
-npm test                         # 68 tests against real wrangler dev stacks and the fixture server
+npm test                         # 74 tests against real wrangler dev stacks and the fixture server
 python3 scripts/mutation-check.py # breaks the code many ways, one at a time; every break must fail a test
 npm run evidence                 # live sources plus the fixture phases, about 2 min; writes evidence/<timestamp>/
 ```
@@ -126,7 +126,9 @@ No secret is printed. Then `node scripts/verify-production.mjs <base-url> ~/.age
 - "At least one device is enrolled" counts devices ever enrolled, revoked ones included, so revoking every device never brings the bearer link back. The link refuses skip and later too.
 - `POST /inbox`: the body's `source` is kept as `claimed_source`; the stored `source` is `device:<id>`, `admin`, `dot`, `t3` or `grok`. Agents may post `reply` and `agent_push`, a device `thought`, `direction`, `task` and `reply`, the admin any kind. An optional `reply_to` (an inbox item id) goes with `reply`; the brief uses it to find a return on something Sam said.
 - A quiet brief is `{text: "", asks: [], returns: [], counts}`.
-- Errors on routes other than decide are still `{error: "<sentence>"}`.
+- App routes answer `{error: <code>, message}` (Wire details 14); admin, runner, mailbox and `/inbox/x` routes keep `{error: "<sentence>"}`, because the runner and the tests read those sentences.
+- A stake's `additions` and `deletions` are never sent (Wire details 10).
+- A routing correction comes back with `source: "spoken"`; the app's `Routing.Source` has no value for "Sam picked it".
 
 **Inbox, brief and voice** (`src/hub.ts`, `src/voice.ts`).
 
@@ -139,6 +141,8 @@ No secret is printed. Then `node scripts/verify-production.mjs <base-url> ~/.age
 
 - Transcription follows Google's docs as read on 2026-11-12: a resumable Files API upload streamed from R2 (labelled `audio/m4a`, because the docs list that and not `audio/mp4`), then `POST /v1beta/interactions` with `model: "models/gemini-3.5-transcribe"` and `input: [{type: "file", file_uri}]`. The transcript is read from `output_text`, or from the text of the `model_output` step. Neither shape has been checked against the live API. The uploaded file is deleted afterwards.
 - `waitUntil` ends 30 s after the response, so a transcription it didn't finish is picked up by the cron, 2 a run, at most 3 attempts, then `failed`.
+
+**Routing** (`src/routing.ts`, `migrations/0010_routing.sql`). Wire details 11 to 13 have the rules. The routing table lives in the `routing_table` setting; until `POST /admin/routing` sets one, the defaults in `src/routing.ts` apply: task and direction to `t3` on `opus` at `high`, everything else to `dot` on `chatgpt` at `medium`, projects `discovery` and `nod`. No traffic backs those defaults. Dispatch needs the mailbox unpaused, files from `sam` (so `sam`'s routes decide the agents: `t3` and `dot`), and uses `inbox-<id>` as the idempotency key, so two dispatches can't file two tasks.
 
 **Agents as models** (`src/bridge.ts`). The contract's "Agents as models" section has the behaviour. To turn it on, add an `openai-compatibility` entry to CLIProxyAPI whose base URL is `$BASE/v1`, whose API key is the contents of `~/.agent-secrets/discovery-bridge-token`, and whose models are `agent-dot` and `agent-grokbot`. The entry's exact YAML was not checked against CLIProxyAPI's docs here. The mailbox must be unpaused for tasks to be filed.
 
@@ -286,6 +290,8 @@ npx wrangler d1 execute DB --remote --command "DELETE FROM proposals WHERE title
 | `src/executor.ts` | The `open_pr` rules and the Git Data API calls |
 | `src/hub.ts`, `src/voice.ts` | `POST /inbox`, `GET /brief`, voice upload and transcription |
 | `src/bridge.ts` | `/v1/models`, `/v1/chat/completions`, `BridgeWaitDO` |
+| `src/routing.ts` | The routing table, spoken and table routing, `/routing/models`, `/inbox/:id/route`, `/inbox/:id/dispatch` |
+| `migrations/0010_routing.sql` | Routing and dispatch columns on `inbox_items`, `approval_requests.stake_json` |
 | `src/inputs.ts` | `inputs_hash` |
 | `migrations/0009_hub.sql` | `devices`, `device_enroll_codes`, `approval_requests`, `approval_pushes`, `inbox_items`, `voice_notes`, `proposals.notify_channel`, the `bridge` mailbox agent |
 | `migrations/0008_mailbox.sql` | `mail_agents`, `mail_routes`, `mail_tasks`, `mail_wakes`, `mcp_subscriptions`, the wake triggers, seeded agents and routes, `mailbox_paused` |
