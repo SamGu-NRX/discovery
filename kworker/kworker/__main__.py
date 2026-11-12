@@ -33,6 +33,8 @@ def main(argv: list[str] | None = None) -> int:
     g.add_argument("--acceptance", action="store_true")
     g.add_argument("--all", action="store_true", help="every post in the archive")
     e.add_argument("--again", action="store_true", help="requeue saves already done, to rebuild them from the caches")
+    q = sub.add_parser("requeue-failed", help="run failed jobs again with their own payload")
+    q.add_argument("--kinds", default="link,image,video,bundle")
     n = sub.add_parser("enqueue-nov12")
     n.add_argument("--repo", required=True, type=Path, help="the x-bookmarks-eval clone (only read)")
     n.add_argument("--worktree", required=True, type=Path, help="the archive lead's worktree (only read)")
@@ -71,6 +73,20 @@ def main(argv: list[str] | None = None) -> int:
                 sha = ctx.api.put_json(arch.expansion(pid))
                 job = jobs.enqueue(ctx, "save", pid, {"post_id": pid, "expansion_sha": sha}, again=a.again)
                 print(f"save {pid}: job {job['id']} {job['state']} (runs {job.get('runs')})")
+        return 0
+
+    if a.cmd == "requeue-failed":
+        with job_ctx(cfg) as ctx:
+            again = 0
+            for kind in a.kinds.split(","):
+                for j in ctx.api.call("GET", "/k/jobs", params={"kind": kind, "state": "failed"})["jobs"]:
+                    payload = j["payload"] if isinstance(j["payload"], dict) else json.loads(j["payload"])
+                    deps = j.get("deps") or []
+                    deps = json.loads(deps) if isinstance(deps, str) else deps
+                    jobs.enqueue(ctx, kind, j["key"], payload, deps=deps or None, again=True)
+                    again += 1
+                    print(f"{kind} {j['key'][:24]}: queued again (was: {(j.get('error') or '')[:120]})")
+            print(json.dumps({"requeued": again}))
         return 0
 
     if a.cmd == "enqueue-nov12":

@@ -371,9 +371,16 @@ def rung3(ctx: Ctx, canon: str) -> Fetched:
 
 
 def rung4(ctx: Ctx, canon: str) -> Fetched:
+    from playwright.sync_api import Error as PlaywrightError
+
     from .browser import render
 
-    html, final, status = render(ctx, canon)
+    try:
+        html, final, status = render(ctx, canon)
+    except PlaywrightError as e:
+        # A timeout or an unresolvable host is this rung's result, not a job
+        # failure (stage a lost two link jobs to it).
+        raise RuntimeError(f"browser: {str(e).splitlines()[0][:200]}") from e
     f = Fetched(4, "ok", final, html.encode("utf-8"), "text/html; charset=utf-8", status, note="Playwright, headed Chrome profile pipeline")
     if status in (404, 410):
         f.status, f.note = "not_found", f"HTTP {status} in the browser"
