@@ -170,6 +170,17 @@
     }
     templates.set(operation, { url, method, body: body.slice(split + 2), headers, learnedAt: Date.now() });
   }
+  // The last few responses X's page itself received for those operations,
+  // in this tab only. Fetch mode reads search results this way: X refuses a
+  // replayed SearchTimeline request, so a run opens the search page and
+  // takes the first page X loads for it.
+  const RECENT_LIMIT = 8;
+  const recent = [];
+  function keepResponse({ operation, url, body }) {
+    if (!TEMPLATED.includes(operation)) return;
+    recent.push({ operation, url, body, at: Date.now() });
+    if (recent.length > RECENT_LIMIT) recent.shift();
+  }
   Object.defineProperty(globalThis, "__dxTemplates", {
     value: Object.freeze({
       // Everything but the headers' values: safe to hand to extension pages.
@@ -181,6 +192,9 @@
         const t = templates.get(operation);
         return t ? t.headers.map(([name, value]) => [name, value]) : null;
       },
+      responses(operation, since = 0) {
+        return recent.filter((r) => r.operation === operation && r.at >= since).map((r) => ({ ...r }));
+      },
     }),
   });
 
@@ -191,6 +205,7 @@
       keepTemplate(message);
       return;
     }
+    if (message.kind === "response") keepResponse(message);
     if (message.kind === "limit" || (message.kind === "status" && (message.status === 429 || message.status === 401))) {
       deliverBackOff({
         type: message.kind === "limit" ? "x-limit" : "x-status",

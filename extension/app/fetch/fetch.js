@@ -114,7 +114,7 @@ async function run({ jobs, limits }, owner) {
   let account = await getLocal("lastAccount", null);
   const sessionId = crypto.randomUUID();
   const toWorker = $("to-worker").checked;
-  const r = { owner, stop: false, tabId: null, windowId: null, expects: null, opened: null, summaries: {}, batches: 0, startedAt: Date.now() };
+  const r = { owner, stop: false, tabId: null, windowId: null, expects: null, opened: null, summaries: {}, learned: [], batches: 0, startedAt: Date.now() };
   running = r;
   let reserved = false;
   const timer = setInterval(() => {
@@ -157,6 +157,7 @@ async function run({ jobs, limits }, owner) {
       },
       template: async (operation) => (r.summaries[operation] ? parseTemplate(r.summaries[operation]) : null),
       send: (operation, url) => send(r, operation, url),
+      loadPage: (kind, query, product) => loadSearchPage(r, kind, query, product),
       onBatch: async ({ batch }) => {
         r.batches += 1;
         if (!toWorker) return;
@@ -210,6 +211,7 @@ async function run({ jobs, limits }, owner) {
       ended_at: new Date(endedAt).toISOString(),
       wall_ms: endedAt - startedAt,
       jobs,
+      templates: r.learned,
       ...rest,
     };
   } finally {
@@ -296,11 +298,37 @@ async function waitForTemplate(r, operation) {
     const summaries = await fetcher(r, "templates");
     if (summaries[operation]) {
       r.summaries = summaries;
+      // What X's page sent, for the bundle: method, path and header names,
+      // never a header value.
+      const t = summaries[operation];
+      r.learned.push({ operation, method: t.method, path: new URL(t.url).pathname, headerNames: t.headerNames, at: new Date().toISOString() });
       return true;
     }
     await sleep(500);
   }
   return false;
+}
+
+// Opens a search page and returns the first SearchTimeline response X's own
+// page received there, shaped like a fetcher reply.
+async function loadSearchPage(r, kind, query, product) {
+  if (kind !== "search") throw new FetchRefused(`no page load for ${kind}`);
+  const url = searchUrl(query, product);
+  const started = performance.now();
+  const since = Date.now();
+  await heartbeat(r);
+  await open(r, url);
+  const deadline = Date.now() + TEMPLATE_WAIT_MS;
+  while (Date.now() < deadline && !r.stop) {
+    const [first] = await fetcher(r, "responses", { operation: "SearchTimeline", since });
+    if (first) return { status: 200, contentType: "application/json", text: first.body, url: first.url, ms: Math.round(performance.now() - started) };
+    await sleep(500);
+  }
+  const seen = await fetcher(r, "inspect");
+  if (seen && ["login_wall", "challenge", "rate_limited"].includes(seen.blocker)) {
+    return { status: 0, contentType: "", text: "", ms: 0, blocked: { blocker: seen.blocker, evidence: seen.evidence, path: seen.path } };
+  }
+  throw new Error(`X loaded no search results for ${query} within ${TEMPLATE_WAIT_MS / 1000} s`);
 }
 
 async function send(r, operation, url) {

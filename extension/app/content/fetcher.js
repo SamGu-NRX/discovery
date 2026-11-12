@@ -96,6 +96,12 @@
   const COMMANDS = Object.freeze({
     templates: () => templates(),
     account: () => account(),
+    // Responses X's own page received for a read operation since `since`
+    // (ms), oldest first.
+    responses: ({ operation, since = 0 } = {}) => {
+      if (!READ.includes(operation)) throw new Error(`fetcher refused operation ${JSON.stringify(operation)}`);
+      return globalThis.__dxTemplates?.responses(operation, since) ?? [];
+    },
     inspect: () => globalThis.__dxDetect.inspect(),
     get: (arg) => get(arg),
   });

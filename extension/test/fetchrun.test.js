@@ -83,6 +83,13 @@ function harness(answer, { paused = () => false, random = () => 0.5, stopAfter =
       const reply = answer(operation, variables, sends.length);
       return reply?.status !== undefined ? { ms: 120, ...reply } : { ms: 120, ...json(reply) };
     },
+    // A search page load: what X's own page would receive for the query.
+    loadPage: async (kind, rawQuery, product) => {
+      sends.push({ at: clock, operation: "SearchTimeline", page: true, variables: { rawQuery, product } });
+      clock += 3000;
+      const reply = answer("SearchTimeline", { rawQuery, product }, sends.length);
+      return reply?.status !== undefined ? { ms: 3000, url: "https://x.com/i/api/graphql/stQueryId_0003/SearchTimeline", ...reply } : { ms: 3000, url: "https://x.com/i/api/graphql/stQueryId_0003/SearchTimeline", ...json(reply) };
+    },
     onBatch: async ({ batch }) => batches.push(batch),
     onSignal: async (signal) => signals.push(signal),
   };
@@ -187,7 +194,8 @@ test("context follows every reply cursor in both orders, merges the thread acros
   assert.equal(result.stop, null);
   const record = result.context["200"];
 
-  assert.deepEqual(h.primes, [["detail", "200"], ["search", "quoted_tweet_id:200"]], "TweetDetail on a permalink, then searches on a search page");
+  assert.deepEqual(h.primes, [["detail", "200"]], "TweetDetail on a permalink; each search is its own page load");
+  assert.ok(h.sends.filter((x) => x.operation === "SearchTimeline").every((x) => x.page), "searches open search pages, not replays");
   assert.deepEqual(log.slice(0, 5), ["Relevance:-", "Relevance:sm1", "Relevance:b1", "Relevance:spam1", "Recency:-"]);
   assert.deepEqual(record.orders.Relevance.thread.op_self_thread_ids, ["200", "201", "207"]);
   assert.deepEqual(record.orders.Relevance.thread.reply_ids, ["203", "208", "209"]);
@@ -202,7 +210,8 @@ test("context follows every reply cursor in both orders, merges the thread acros
   assert.deepEqual(record.branches.map((b) => b.id), ["201", "207", "210", "203"]);
   assert.deepEqual(record.branches.find((b) => b.id === "203").thread.reply_ids, ["7203"]);
 
-  assert.deepEqual(record.quotes.quoted_tweet_id.Latest.ids, ["901", "902"], "stops at a page with no new results");
+  assert.deepEqual(record.quotes.quoted_tweet_id.Latest.ids, ["901", "902"]);
+  assert.equal(record.quotes.quoted_tweet_id.Latest.morePages, true, "X offered a further page");
   assert.deepEqual(record.mentions["url:200"].Top.ids, ["911"]);
   assert.deepEqual(Object.keys(record.links), ["github.com/acme/tool"], "links to X itself are not searched");
   assert.deepEqual(record.links["github.com/acme/tool"].Top.ids, ["921", "922"]);
@@ -375,4 +384,24 @@ test("a fresh Top cursor on every page is not followed past the first page, and 
   assert.deepEqual(h.sends.map((s) => s.variables.cursor ?? "-"), ["-", "t1", "b1", "b2"]);
   assert.equal(result.context["300"].orders.Relevance.exhausted, true);
   assert.deepEqual(result.context["300"].thread.reply_ids, ["301", "302"]);
+});
+
+test("replayed search, when chosen, pages by cursor on a primed search page and stops at a page with no new results", async () => {
+  const h = harness(contextAnswer());
+  const result = await run({ limits: { searchVia: "replay" }, jobs: [{ type: "context", ids: ["200"], rankings: ["Relevance"], branches: false, mentions: false, links: false, conversation: false }] }, h);
+  assert.deepEqual(h.primes.map(([kind]) => kind), ["detail", "search"]);
+  assert.deepEqual(result.context["200"].quotes.quoted_tweet_id.Latest.ids, ["901", "902"]);
+  assert.equal(result.context["200"].quotes.quoted_tweet_id.Latest.pages, 2);
+});
+
+test("search page loads keep to their own budget per 15 minutes", async () => {
+  const ids = Array.from({ length: 4 }, (_, i) => String(500 + i));
+  const answer = (operation, v) => (operation === "TweetDetail" ? detail([{ type: "TimelineAddEntries", entries: [itemEntry(post(v.focalTweetId, "op"), "9000")] }]) : searchPage(["901"], null));
+  const g = harness(answer);
+  const result = await run({ limits: { searchPageLoadsPerWindow: 2 }, jobs: [{ type: "context", ids, rankings: ["Relevance"], branches: false, mentions: false, links: false, conversation: false, upstream: false }] }, g);
+  assert.equal(result.stop, null);
+  const pages = g.sends.filter((x) => x.page).map((x) => x.at);
+  assert.equal(pages.length, 4);
+  for (let i = 2; i < pages.length; i += 1) assert.ok(pages[i] - pages[i - 2] >= 15 * 60_000, `page load ${i} is the third within 15 minutes`);
+  assert.ok(result.rateWaits.some((w) => w.operation === "SearchTimeline"));
 });

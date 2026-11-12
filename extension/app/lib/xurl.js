@@ -46,11 +46,14 @@ export function permalinkUrl(postId) {
 // A search results page, for fetch mode to learn SearchTimeline's template.
 // The query comes from fetch mode's own job (quoted_tweet_id:<id>, url:...),
 // one line of at most 200 characters.
-export function searchUrl(query) {
+// `product` is the search tab: Latest (f=live) or Top (f=top).
+export function searchUrl(query, product = "Latest") {
   if (typeof query !== "string" || !query || query.length > 200 || /[\r\n]/.test(query)) {
     throw new Error(`refusing search URL for query ${JSON.stringify(query)}`);
   }
-  return mint(`https://x.com/search?q=${encodeURIComponent(query)}&src=typed_query&f=live`, "^/search$");
+  const tab = { Latest: "live", Top: "top" }[product];
+  if (!tab) throw new Error(`refusing search URL for product ${JSON.stringify(product)}`);
+  return mint(`https://x.com/search?q=${encodeURIComponent(query)}&src=typed_query&f=${tab}`, "^/search$");
 }
 
 export function isMintedXUrl(value) {

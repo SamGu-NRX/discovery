@@ -41,6 +41,14 @@ export const DEFAULT_LIMITS = Object.freeze({
   // long, and otherwise stops that run cleanly.
   rateReserveFraction: 0.3,
   maxRateWaitMs: 16 * 60_000,
+  // How searches run. "page": open the search page and take the first page
+  // of results X loads for it. "replay": replay SearchTimeline with cursors.
+  // Live X answered every replayed SearchTimeline with 404 on Nov 12 while
+  // it accepted replayed TweetDetail, so page is the default.
+  searchVia: "page",
+  // Search page loads per 15 minutes. X's SearchTimeline budget was 50 per
+  // window on Nov 12, shared with Sam's own searches.
+  searchPageLoadsPerWindow: 30,
 });
 
 export function clampLimits(given = {}) {
@@ -50,6 +58,11 @@ export function clampLimits(given = {}) {
   if (int(given.jitterMs) !== null) out.jitterMs = Math.max(DEFAULT_LIMITS.jitterMs, Math.min(10_000, int(given.jitterMs)));
   if (Number.isFinite(Number(given.rateReserveFraction))) out.rateReserveFraction = Math.max(DEFAULT_LIMITS.rateReserveFraction, Math.min(0.9, Number(given.rateReserveFraction)));
   if (int(given.maxRateWaitMs) !== null) out.maxRateWaitMs = Math.max(0, Math.min(DEFAULT_LIMITS.maxRateWaitMs, int(given.maxRateWaitMs)));
+  if (given.searchVia !== undefined) {
+    if (!["page", "replay"].includes(given.searchVia)) throw new Error("limits.searchVia must be page or replay");
+    out.searchVia = given.searchVia;
+  }
+  if (int(given.searchPageLoadsPerWindow) !== null) out.searchPageLoadsPerWindow = Math.max(1, Math.min(DEFAULT_LIMITS.searchPageLoadsPerWindow, int(given.searchPageLoadsPerWindow)));
   if (int(given.runCap) !== null) out.runCap = Math.max(1, Math.min(DEFAULT_LIMITS.runCap, int(given.runCap)));
   for (const key of ["detailCapPerPost", "branchesPerPost", "searchPagesPerQuery", "linksPerPost", "reprimesPerOperation"]) {
     if (int(given[key]) !== null) out[key] = Math.max(0, Math.min(200, int(given[key])));
@@ -149,6 +162,8 @@ export async function runJobs(jobs, limits, io) {
     // The last x-rate-limit-* headers per operation, and each wait for a reset.
     rate: {},
     rateWaits: [],
+    // When each search page load happened, for searchPageLoadsPerWindow.
+    searchPageLoads: [],
     reprimes: {},
     primedFor: {},
   };
@@ -170,7 +185,7 @@ export async function runJobs(jobs, limits, io) {
     }
   }
   run.endedAt = io.now();
-  const { lastRequestAt, reprimes, primedFor, threadStates, ...out } = run;
+  const { lastRequestAt, reprimes, primedFor, threadStates, searchPageLoads, ...out } = run;
   return out;
 }
 
@@ -351,7 +366,7 @@ async function context(run, io, job) {
   }
   const searches = records.flatMap((record) => searchesFor(run, job, record));
   if (!searches.length) return;
-  await prime(run, io, "SearchTimeline", searches[0].query);
+  if (run.limits.searchVia === "replay") await prime(run, io, "SearchTimeline", searches[0].query);
   for (const s of searches) {
     const started = io.now();
     await search(run, io, s);
@@ -519,6 +534,7 @@ async function search(run, io, s) {
   const result = { query: s.query, product: s.product, ids: [], pages: 0, exhausted: false };
   s.record[s.bucket][s.key] ??= {};
   s.record[s.bucket][s.key][s.product] = result;
+  if (run.limits.searchVia === "page") return searchByPage(run, io, s, result);
   const seenCursors = new Set();
   let cursor;
   let offset = 0;
@@ -543,4 +559,46 @@ async function search(run, io, s) {
     seenCursors.add(next.value);
     cursor = next.value;
   }
+}
+
+// Waits until fewer than searchPageLoadsPerWindow search pages were opened
+// in the last 15 minutes, or stops the run cleanly when that is too far off.
+async function keepSearchBudget(run, io) {
+  const WINDOW = 15 * 60_000;
+  const recent = run.searchPageLoads.filter((at) => io.now() - at < WINDOW);
+  run.searchPageLoads = recent;
+  if (recent.length < run.limits.searchPageLoadsPerWindow) return;
+  const wait = recent[0] + WINDOW + 2000 - io.now();
+  if (wait > run.limits.maxRateWaitMs) throw new RunStopped("rate_budget", `${recent.length} search pages opened in 15 minutes`);
+  run.rateWaits.push({ operation: "SearchTimeline", at: new Date(io.now()).toISOString(), ms: wait, remaining: null, limit: run.limits.searchPageLoadsPerWindow });
+  await io.sleep(wait);
+}
+
+// One search page load: the first page of results, as X's own page asked
+// for it. Later pages would need X to load more on scroll; a result notes
+// whether X offered more.
+async function searchByPage(run, io, s, result) {
+  await keepSearchBudget(run, io);
+  await gate(run, io);
+  run.searchPageLoads.push(io.now());
+  const note = `${s.record.id} ${s.bucket} ${s.product} (page)`;
+  const variables = { rawQuery: s.query, product: s.product };
+  let res;
+  try {
+    res = await io.loadPage("search", s.query, s.product);
+  } catch (err) {
+    ledger(run, { operation: "SearchTimeline", variables, status: 0, ms: null, note: `${note}; failed: ${err.message}` });
+    throw new RunStopped("error", `search page for ${s.query} failed: ${err.message}`, { pause: true });
+  }
+  ledger(run, { operation: "SearchTimeline", variables, status: res.status, ms: res.ms, note });
+  const verdict = classifyResponse({ operation: "SearchTimeline", ...res });
+  if (verdict.kind === "stale") throw new RunStopped("error", verdict.detail);
+  if (verdict.kind === "stop") throw new RunStopped(verdict.reason, verdict.detail, { pause: verdict.pause });
+  s.record.searchRequests += 1;
+  result.pages = 1;
+  const capture = await absorb(run, io, { operation: "SearchTimeline", json: verdict.json, url: res.url, offset: 0 });
+  for (const { post } of capture.primary) if (!result.ids.includes(post.id)) result.ids.push(post.id);
+  const next = cursorsOf("SearchTimeline", verdict.json).find((c) => c.type === "Bottom");
+  result.exhausted = !next || capture.primary.length === 0;
+  result.morePages = !result.exhausted;
 }
