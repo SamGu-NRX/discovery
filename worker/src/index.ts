@@ -1,5 +1,11 @@
 import type { Kind } from "./adapters";
-import { callerScope, type Scope } from "./auth";
+import { callerScope, type Caller, type Scope } from "./auth";
+import { backfillApprovalRequests, decideApproval, expireApprovalRequests, getApproval, listApprovals } from "./approvals";
+import { chatCompletions, listModels } from "./bridge";
+import { enroll, listDevices, mintEnrollCode, revoke, updateApnsToken } from "./devices";
+import { repoAllowlist, setRepoAllowlist } from "./executor";
+import { brief, inboxRoute } from "./hub";
+import { uploadVoice, voiceCron, voiceStatus } from "./voice";
 import { claimCandidates, completeCandidate, createCandidate, listCandidates } from "./candidates";
 import type { Env, WatcherRow } from "./check";
 import { HttpError, json, randomHex, readJson, timeParam, utcDay } from "./http";
@@ -10,6 +16,7 @@ import { handleDelivery, handleVerification, requestSubscription } from "./websu
 import { addPositives, detailQueue, embed, ingest, ingestStatus, listPositives, listPosts, postContext, saveScores, startSession } from "./x";
 
 export { WatcherDO } from "./watcher";
+export { BridgeWaitDO } from "./bridge";
 
 // A watcher whose next check is this far past due has lost its alarm; a live
 // alarm fires at next_check_at and the check moves next_check_at forward.
@@ -126,7 +133,7 @@ async function watcherDetail(env: Env, id: string) {
   return { watcher: w, alarm_at: await stub(env, id).alarmAt(), seen_items: seen?.n ?? 0, events: events.results, jobs: jobs.results, fetch_log: log.results };
 }
 
-type Handler = (req: Request, env: Env, url: URL, params: string[], ctx: ExecutionContext, scope: Scope) => Promise<Response>;
+type Handler = (req: Request, env: Env, url: URL, params: string[], ctx: ExecutionContext, caller: Caller) => Promise<Response>;
 
 interface Route {
   method: "GET" | "POST";
@@ -141,6 +148,9 @@ interface Route {
 const ok = (p: Promise<unknown>, status = 200) => p.then((data) => json(data, status));
 
 const MAIL_AGENTS: Scope[] = ["agent:dot", "agent:t3", "agent:grok"];
+// The low-risk calls an enrolled phone makes with its device token. Deciding
+// an approval takes a signature instead (POST /approvals/:id/decide, below).
+const DEVICE: Scope[] = ["device"];
 
 // docs/CONTRACT.md, "Tokens". A token not listed for a route gets 403.
 const ROUTES: Route[] = [
@@ -183,14 +193,30 @@ const ROUTES: Route[] = [
   { method: "POST", path: /^\/candidates\/claim$/, scopes: ["runner"], handler: async (req, env) => ok(claimCandidates(env, await body(req))) },
   { method: "POST", path: /^\/candidates\/([^/]+)\/complete$/, scopes: ["runner"], handler: async (req, env, _u, [id]) => ok(completeCandidate(env, id, await body(req))) },
   // Mailbox (src/mailbox.ts). The admin token speaks as agent "sam".
-  { method: "POST", path: /^\/mcp$/, scopes: MAIL_AGENTS, handler: (req, env, _u, _p, ctx, scope) => mcp(env, ctx, agentOf(scope), req) },
-  { method: "POST", path: /^\/mail\/tasks$/, scopes: MAIL_AGENTS, handler: (req, env, _u, _p, ctx, scope) => restSend(env, ctx, scope, req) },
+  { method: "POST", path: /^\/mcp$/, scopes: MAIL_AGENTS, handler: (req, env, _u, _p, ctx, caller) => mcp(env, ctx, agentOf(caller.scope), req) },
+  { method: "POST", path: /^\/mail\/tasks$/, scopes: MAIL_AGENTS, handler: (req, env, _u, _p, ctx, caller) => restSend(env, ctx, caller.scope, req) },
   { method: "GET", path: /^\/mail\/tasks$/, scopes: [], handler: (_r, env, url) => ok(listTasks(env, url)) },
-  { method: "POST", path: /^\/mail\/claim$/, scopes: MAIL_AGENTS, handler: (req, env, _u, _p, ctx, scope) => restClaim(env, ctx, scope, req) },
-  { method: "POST", path: /^\/mail\/ack$/, scopes: MAIL_AGENTS, handler: (req, env, _u, _p, _c, scope) => restAck(env, scope, req) },
-  { method: "POST", path: /^\/mail\/tasks\/([^/]+)\/complete$/, scopes: MAIL_AGENTS, handler: (req, env, _u, [id], ctx, scope) => restComplete(env, ctx, scope, id, req) },
+  { method: "POST", path: /^\/mail\/claim$/, scopes: MAIL_AGENTS, handler: (req, env, _u, _p, ctx, caller) => restClaim(env, ctx, caller.scope, req) },
+  { method: "POST", path: /^\/mail\/ack$/, scopes: MAIL_AGENTS, handler: (req, env, _u, _p, _c, caller) => restAck(env, caller.scope, req) },
+  { method: "POST", path: /^\/mail\/tasks\/([^/]+)\/complete$/, scopes: MAIL_AGENTS, handler: (req, env, _u, [id], ctx, caller) => restComplete(env, ctx, caller.scope, id, req) },
   { method: "GET", path: /^\/admin\/mailbox$/, scopes: [], handler: (_r, env) => ok(mailboxStatus(env)) },
   { method: "POST", path: /^\/admin\/mailbox\/pause$/, scopes: [], handler: (req, env) => ok(setPaused(env, req)) },
+  // Devices, approvals, inbox, brief and voice (docs/APPROVALS.md).
+  { method: "POST", path: /^\/devices\/enroll-codes$/, scopes: [], handler: (_r, env) => ok(mintEnrollCode(env), 201) },
+  { method: "GET", path: /^\/devices$/, scopes: [], handler: (_r, env) => ok(listDevices(env)) },
+  { method: "POST", path: /^\/devices\/([^/]+)\/apns-token$/, scopes: DEVICE, handler: (req, env, _u, [id], _c, caller) => ok(updateApnsToken(env, caller.deviceId, id, req)) },
+  { method: "POST", path: /^\/devices\/([^/]+)\/revoke$/, scopes: [], handler: (_r, env, _u, [id]) => ok(revoke(env, id)) },
+  { method: "GET", path: /^\/approvals$/, scopes: DEVICE, handler: (_r, env, url) => ok(listApprovals(env, url)) },
+  { method: "GET", path: /^\/approvals\/([^/]+)$/, scopes: DEVICE, handler: (_r, env, _u, [id]) => ok(getApproval(env, id)) },
+  { method: "POST", path: /^\/inbox$/, scopes: [...DEVICE, ...MAIL_AGENTS], handler: (req, env, _u, _p, _c, caller) => ok(inboxRoute(env, caller, req), 201) },
+  { method: "GET", path: /^\/brief$/, scopes: [...DEVICE, "agent:dot"], handler: (_r, env) => ok(brief(env)) },
+  { method: "POST", path: /^\/voice$/, scopes: DEVICE, handler: (req, env, _u, _p, ctx, caller) => ok(uploadVoice(env, ctx, caller, req), 201) },
+  { method: "GET", path: /^\/voice\/([^/]+)$/, scopes: DEVICE, handler: (_r, env, _u, [id], _c, caller) => ok(voiceStatus(env, caller, id)) },
+  { method: "GET", path: /^\/admin\/pr-allowlist$/, scopes: [], handler: async (_r, env) => json({ repos: await repoAllowlist(env) }) },
+  { method: "POST", path: /^\/admin\/pr-allowlist$/, scopes: [], handler: async (req, env) => ok(setRepoAllowlist(env, await body(req))) },
+  // Agents as models (src/bridge.ts), for CLIProxyAPI.
+  { method: "GET", path: /^\/v1\/models$/, scopes: ["bridge"], handler: async () => json(listModels()) },
+  { method: "POST", path: /^\/v1\/chat\/completions$/, scopes: ["bridge"], handler: (req, env, _u, _p, ctx) => chatCompletions(env, ctx, req) },
 ];
 
 function match(req: Request, url: URL): { route: Route; params: string[] } | "wrong_method" | null {
@@ -241,17 +267,22 @@ async function route(req: Request, env: Env, ctx: ExecutionContext): Promise<Res
     return mcpByPath(env, ctx, parts[1], parts[2], req);
   }
   if (parts[0] === "room" && parts.length === 2 && req.method === "GET") return room(env, parts[1]);
+  // Public: the enrollment code is the credential.
+  if (url.pathname === "/devices/enroll" && req.method === "POST") return json(await enroll(env, req), 201);
+  // Public: the device's signature is the credential, checked before anything is recorded.
+  if (parts[0] === "approvals" && parts.length === 3 && parts[2] === "decide" && req.method === "POST") return decideApproval(env, decodeURIComponent(parts[1]), req);
   // No OAuth here. A 404 tells an MCP client probing for OAuth metadata that
   // there is none, where a 401 would suggest it needs a token.
   if (parts[0] === ".well-known") return json({ error: "not found" }, 404);
 
-  const scope = await callerScope(req, env);
+  const caller = await callerScope(req, env);
+  const scope = caller.scope;
   const found = match(req, url);
   if (found === "wrong_method") throw new HttpError(405, `${req.method} is not allowed on ${url.pathname}`);
   if (found) {
     const allowed = found.route.scopes.includes(scope) || (scope === "admin" && !found.route.exclusive);
     if (!allowed) throw new HttpError(403, `the ${scope} token cannot call ${req.method} ${url.pathname}`);
-    return found.route.handler(req, env, url, found.params, ctx, scope);
+    return found.route.handler(req, env, url, found.params, ctx, caller);
   }
   // Everything below is the watcher administration API: ADMIN_TOKEN only.
   if (scope !== "admin") throw new HttpError(403, `the ${scope} token cannot call ${req.method} ${url.pathname}`);
@@ -428,10 +459,13 @@ export default {
       console.log(`[backstop] ${w.id} re-armed, next check in ${r.next_interval_s}s`);
     }
     const expired = await expireProposals(env, now);
+    const requestsExpired = await expireApprovalRequests(env, now);
+    const backfilled = await backfillApprovalRequests(env, now);
     const mail = await mailboxCron(env, now);
+    const voice = await voiceCron(env, now);
     await env.DB.prepare("INSERT INTO cron_runs (ts, cron, overdue_checked, notifications_retried) VALUES (?1, ?2, ?3, 0)")
       .bind(now, controller.cron, results.length)
       .run();
-    console.log(`[cron] done overdue_checked=${results.length} proposals_expired=${expired} mail_tasks_expired=${mail.expired} mail_tasks_requeued=${mail.requeued} wakes_retried=${mail.retried}`);
+    console.log(`[cron] done overdue_checked=${results.length} proposals_expired=${expired} mail_tasks_expired=${mail.expired} mail_tasks_requeued=${mail.requeued} wakes_retried=${mail.retried} requests_expired=${requestsExpired} requests_backfilled=${backfilled} voice_retried=${voice}`);
   },
 } satisfies ExportedHandler<Env>;

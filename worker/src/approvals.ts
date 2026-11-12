@@ -1,0 +1,335 @@
+// Device-signed approval requests (docs/APPROVALS.md, "Approval requests"
+// and "Deciding"). A proposal whose final step is irreversible gets one
+// request once any device has been enrolled. Deciding it needs an ECDSA
+// P-256 signature from an enrolled, unrevoked device's Secure Enclave key
+// over the request id, inputs_hash, decision, nonce and signing time. No
+// bearer token can stand in for that signature.
+
+import { apnsConfigured, push } from "./apns";
+import type { Env } from "./check";
+import { onlyFields } from "./devices";
+import { ExecError, openPr, validatePrSpec } from "./executor";
+import { HttpError, intParam, json, oneOf, randomHex, readJson } from "./http";
+import { inputsHash } from "./inputs";
+import { fromBase64, importDeviceKey, verifyDer } from "./p256";
+
+export const SIGNATURE_SKEW_S = 300;
+const ACTION_LABELS: Record<string, string> = {
+  submit: "Submit",
+  send: "Send",
+  post: "Post",
+  pay: "Pay",
+  rsvp: "RSVP",
+  delete: "Delete",
+  accept_terms: "Accept terms",
+  push: "Push",
+  open_pr: "Open PR",
+};
+const TITLE_MAX = 80;
+const LINE_MAX = 110;
+
+interface ProposalForRequest {
+  id: string;
+  title: string;
+  why: string;
+  final_step_kind: string | null;
+  final_step: string | null;
+  inputs_json: string;
+  inputs_hash: string;
+  expires_at: number | null;
+}
+
+interface RequestRow {
+  id: string;
+  proposal_id: string;
+  inputs_hash: string;
+  title: string;
+  body: string;
+  action_label: string;
+  project: string | null;
+  nonce: string;
+  state: string;
+  created_at: number;
+  expires_at: number;
+  decided_at: number | null;
+  device_id: string | null;
+  outcome: string | null;
+  result_url: string | null;
+  error: string | null;
+}
+
+const oneLine = (s: string, max: number) => {
+  const t = s.replace(/\s+/g, " ").trim();
+  return t.length <= max ? t : t.slice(0, max - 1).trimEnd() + "…";
+};
+
+// The title and at most 3 short lines a lock-screen alert can show. For a PR
+// the third line names the repository and branches, so Sam sees where the
+// change lands without opening anything.
+function describe(p: ProposalForRequest) {
+  const kind = p.final_step_kind ?? "";
+  const lines = [oneLine(p.why.split("\n")[0], LINE_MAX)];
+  if (p.final_step) lines.push(oneLine(p.final_step, LINE_MAX));
+  let project: string | null = null;
+  if (kind === "open_pr") {
+    const i = JSON.parse(p.inputs_json) as { repo: string; base: string; head_branch: string };
+    project = i.repo.split("/")[1];
+    lines.push(oneLine(`${i.repo}: ${i.head_branch} into ${i.base}`, LINE_MAX));
+  }
+  return { title: oneLine(p.title, TITLE_MAX), body: lines.filter(Boolean).slice(0, 3).join("\n"), action_label: ACTION_LABELS[kind] ?? kind, project };
+}
+
+// An INSERT for p's request, taking effect only while some device has been
+// enrolled and the proposal is still waiting. Safe to run twice: one request
+// per proposal.
+export function requestInsert(env: Env, p: ProposalForRequest, now: number) {
+  const d = describe(p);
+  return env.DB.prepare(
+    `INSERT OR IGNORE INTO approval_requests (id, proposal_id, inputs_hash, title, body, action_label, project, nonce, state, created_at, expires_at)
+     SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'pending', ?9, ?10
+     WHERE EXISTS (SELECT 1 FROM devices)
+       AND EXISTS (SELECT 1 FROM proposals WHERE id = ?2 AND state = 'awaiting_approval' AND inputs_hash = ?3)
+     RETURNING *`,
+  ).bind("ar_" + randomHex(12), p.id, p.inputs_hash, d.title, d.body, d.action_label, d.project, randomHex(16), now, p.expires_at ?? now);
+}
+
+// Proposals that were waiting before the first device enrolled get their
+// requests without a push: they were notified, or capped, the old way.
+export async function backfillApprovalRequests(env: Env, now: number): Promise<number> {
+  const rows = await env.DB.prepare(
+    `SELECT p.* FROM proposals p
+     WHERE p.state = 'awaiting_approval' AND p.expires_at > ?1 AND p.final_step_kind IS NOT NULL
+       AND NOT EXISTS (SELECT 1 FROM approval_requests r WHERE r.proposal_id = p.id)
+     ORDER BY p.created_at LIMIT 20`,
+  )
+    .bind(now)
+    .all<ProposalForRequest>();
+  if (rows.results.length === 0) return 0;
+  const done = await env.DB.batch(rows.results.map((p) => requestInsert(env, p, now)));
+  return done.filter((r) => r.results.length > 0).length;
+}
+
+export async function expireApprovalRequests(env: Env, now: number): Promise<number> {
+  const r = await env.DB.prepare("UPDATE approval_requests SET state = 'expired' WHERE state = 'pending' AND expires_at <= ?").bind(now).run();
+  return r.meta.changes;
+}
+
+export const anyDeviceEver = (env: Env) =>
+  env.DB.prepare("SELECT EXISTS (SELECT 1 FROM devices) AS any").first<{ any: number }>().then((r) => r?.any === 1);
+
+// Sends one alert per enrolled, unrevoked device with a live push token.
+// Returns sent when at least one device accepted it.
+export async function pushRequest(env: Env, r: RequestRow): Promise<"sent" | "failed" | "no_apns"> {
+  if (!apnsConfigured(env)) return "no_apns";
+  const devices = await env.DB.prepare(
+    "SELECT id, apns_token, apns_env FROM devices WHERE revoked_at IS NULL AND apns_invalid_at IS NULL ORDER BY enrolled_at",
+  ).all<{ id: string; apns_token: string; apns_env: "development" | "production" }>();
+  if (devices.results.length === 0) return "failed";
+  const payload = {
+    aps: {
+      alert: { title: r.title, body: r.body },
+      category: "APPROVAL",
+      "interruption-level": "time-sensitive",
+      "mutable-content": 1,
+    },
+    request_id: r.id,
+    inputs_hash: r.inputs_hash,
+    nonce: r.nonce,
+    expires_at: new Date(r.expires_at).toISOString(),
+  };
+  const results = await Promise.all(devices.results.map((d) => push(env, d, payload, { expiresAtMs: r.expires_at, collapseId: r.id })));
+  const now = Date.now();
+  await env.DB.batch([
+    ...devices.results.map((d, i) =>
+      env.DB.prepare(
+        `INSERT INTO approval_pushes (request_id, device_id, status, apns_id, reason, sent_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+         ON CONFLICT (request_id, device_id) DO UPDATE SET status = ?3, apns_id = ?4, reason = ?5, sent_at = ?6`,
+      ).bind(r.id, d.id, results[i].status, results[i].apnsId, results[i].reason, now),
+    ),
+    ...devices.results.flatMap((d, i) =>
+      results[i].deadToken
+        ? [env.DB.prepare("UPDATE devices SET apns_invalid_at = ?2, apns_invalid_reason = ?3 WHERE id = ?1").bind(d.id, now, results[i].reason ?? "Unregistered")]
+        : [],
+    ),
+  ]);
+  const ok = results.some((x) => x.status === 200);
+  console.log(`[approvals] push ${r.id} to ${devices.results.length} devices: ${results.map((x) => x.status).join(",")}`);
+  return ok ? "sent" : "failed";
+}
+
+const iso = (ms: number | null) => (ms === null ? null : new Date(ms).toISOString());
+
+export function presentRequest(r: RequestRow) {
+  return {
+    id: r.id,
+    proposal_id: r.proposal_id,
+    inputs_hash: r.inputs_hash,
+    title: r.title,
+    body: r.body,
+    action_label: r.action_label,
+    project: r.project,
+    nonce: r.nonce,
+    state: r.state,
+    created_at: iso(r.created_at),
+    expires_at: iso(r.expires_at),
+    decided_at: iso(r.decided_at),
+    outcome: r.outcome,
+    result_url: r.result_url,
+    error: r.error,
+  };
+}
+
+const REQUEST_STATES = ["pending", "approved", "denied", "expired"] as const;
+
+export async function listApprovals(env: Env, url: URL) {
+  const state = oneOf(url.searchParams.get("state") ?? "pending", REQUEST_STATES, "state");
+  const limit = intParam(url, "limit", 50, 200);
+  const now = Date.now();
+  // A pending request past its expiry is not pending, even before the cron
+  // has marked it.
+  const rows = await (state === "pending"
+    ? env.DB.prepare("SELECT * FROM approval_requests WHERE state = 'pending' AND expires_at > ?1 ORDER BY created_at LIMIT ?2").bind(now, limit)
+    : env.DB.prepare("SELECT * FROM approval_requests WHERE state = ?1 ORDER BY created_at DESC LIMIT ?2").bind(state, limit)
+  ).all<RequestRow>();
+  return { approvals: rows.results.map(presentRequest) };
+}
+
+export async function getApproval(env: Env, id: string) {
+  const r = await env.DB.prepare("SELECT * FROM approval_requests WHERE id = ?").bind(id).first<RequestRow>();
+  if (!r) throw new HttpError(404, `approval request ${id} not found`);
+  return presentRequest(r);
+}
+
+// The exact bytes the device signs: UTF-8, fields joined by \n, no trailing
+// newline.
+export const signedMessage = (requestId: string, inputsHashHex: string, decision: string, nonce: string, signedAt: number) =>
+  ["discovery-approval-v1", requestId, inputsHashHex, decision, nonce, String(signedAt)].join("\n");
+
+// A refused decision names the check that failed, in the contract's order.
+const refuse = (status: number, check: string, error: string, extra: Record<string, unknown> = {}) => json({ error, check, ...extra }, status);
+
+function signedAtOf(v: unknown): number | null {
+  if (typeof v === "number" && Number.isSafeInteger(v) && v > 0) return v;
+  if (typeof v === "string" && /^[1-9][0-9]{0,11}$/.test(v)) return Number(v);
+  return null;
+}
+
+export async function decideApproval(env: Env, requestId: string, req: Request): Promise<Response> {
+  const b = await readJson<Record<string, unknown>>(req, 4096);
+  onlyFields(b, ["device_id", "decision", "signed_at", "signature_der_b64"]);
+  if (typeof b.device_id !== "string" || !/^d_[0-9a-f]{16}$/.test(b.device_id)) return refuse(400, "body", "device_id must be the device_id enrollment returned");
+  if (b.decision !== "approve" && b.decision !== "deny") return refuse(400, "body", 'decision must be "approve" or "deny"');
+  const signedAt = signedAtOf(b.signed_at);
+  if (signedAt === null) return refuse(400, "body", "signed_at must be Unix seconds, as an integer");
+  const der = typeof b.signature_der_b64 === "string" ? fromBase64(b.signature_der_b64) : null;
+  if (!der) return refuse(400, "body", "signature_der_b64 must be the DER signature in standard base64");
+  const decision = b.decision;
+
+  const [devQ, reqQ] = await env.DB.batch<Record<string, unknown>>([
+    env.DB.prepare("SELECT id, public_key_spki_b64, revoked_at FROM devices WHERE id = ?").bind(b.device_id),
+    env.DB.prepare("SELECT * FROM approval_requests WHERE id = ?").bind(requestId),
+  ]);
+  const device = devQ.results[0] as { id: string; public_key_spki_b64: string; revoked_at: number | null } | undefined;
+  const r = reqQ.results[0] as unknown as RequestRow | undefined;
+  const now = Date.now();
+
+  // 1. The device exists and is not revoked.
+  if (!device) return refuse(403, "device", `device ${b.device_id} is not enrolled`);
+  if (device.revoked_at !== null) return refuse(403, "device", `device ${b.device_id} was revoked`);
+  // 2. The request exists, is pending and has not expired.
+  if (!r) return refuse(404, "request", `approval request ${requestId} not found`);
+  if (r.state !== "pending") return refuse(409, "request", `approval request ${requestId} is already ${r.state}`, { state: outcomeState(r), result_url: r.result_url ?? undefined });
+  if (r.expires_at <= now) return refuse(410, "request", `approval request ${requestId} expired at ${iso(r.expires_at)}`);
+  // 3. The signature is fresh.
+  const skew = Math.abs(Math.floor(now / 1000) - signedAt);
+  if (skew > SIGNATURE_SKEW_S) return refuse(401, "signed_at", `signed_at is ${skew} s from the Worker's clock; the limit is ${SIGNATURE_SKEW_S} s`);
+  // 4. The signature is valid over the exact message with the stored key.
+  const key = await importDeviceKey(device.public_key_spki_b64);
+  const message = signedMessage(r.id, r.inputs_hash, decision, r.nonce, signedAt);
+  if (!key || !(await verifyDer(key, der, message))) return refuse(401, "signature", "signature does not verify over this request, decision, nonce and signed_at with the device's key");
+
+  // The proposal must still hold exactly the inputs the request binds.
+  const p = await env.DB.prepare("SELECT * FROM proposals WHERE id = ?").bind(r.proposal_id).first<ProposalForRequest & { state: string }>();
+  if (!p || p.inputs_hash !== r.inputs_hash || (await inputsHash(p.final_step_kind, p.final_step, JSON.parse(p.inputs_json))) !== r.inputs_hash) {
+    return refuse(409, "inputs_hash", "the proposal's inputs no longer match the request's inputs_hash; nothing was recorded");
+  }
+
+  // 5. One transaction: the request is decided and its nonce spent only if it
+  // is still pending, so a replay or a second device gets 409; the proposal
+  // follows only if this UPDATE won.
+  const state = decision === "approve" ? "approved" : "denied";
+  const [won, followed] = await env.DB.batch<Record<string, unknown>>([
+    env.DB.prepare(
+      `UPDATE approval_requests SET state = ?2, decided_at = ?3, device_id = ?4, signed_at = ?5, signature_der_b64 = ?6, nonce_used_at = ?3,
+         outcome = CASE WHEN ?2 = 'approved' THEN 'running' END
+       WHERE id = ?1 AND state = 'pending' AND expires_at > ?3 AND nonce = ?7 AND inputs_hash = ?8
+       RETURNING id`,
+    ).bind(r.id, state, now, device.id, signedAt, b.signature_der_b64, r.nonce, r.inputs_hash),
+    env.DB.prepare(
+      `UPDATE proposals SET state = ?2, decided_at = ?3, result_json = ?4
+       WHERE id = ?1 AND state = 'awaiting_approval' AND inputs_hash = ?5
+         AND EXISTS (SELECT 1 FROM approval_requests WHERE id = ?6 AND decided_at = ?3 AND device_id = ?7 AND signature_der_b64 = ?8)
+       RETURNING id`,
+    ).bind(
+      r.proposal_id,
+      state === "approved" ? "approved" : "skipped",
+      now,
+      JSON.stringify({ decision, inputs_hash: r.inputs_hash, via: "device", device_id: device.id, request_id: r.id }),
+      r.inputs_hash,
+      r.id,
+      device.id,
+      b.signature_der_b64,
+    ),
+  ]);
+  if (won.results.length === 0) {
+    const current = await env.DB.prepare("SELECT * FROM approval_requests WHERE id = ?").bind(r.id).first<RequestRow>();
+    return refuse(409, "state", `approval request ${r.id} was decided by another call`, current ? { state: outcomeState(current), result_url: current.result_url ?? undefined } : {});
+  }
+  console.log(`[approvals] ${r.id} ${state} by ${device.id}`);
+  if (state === "denied") return json({ state: "denied" });
+  if (followed.results.length === 0) {
+    await finish(env, r.id, r.proposal_id, "failed", null, "the proposal was no longer awaiting approval", false);
+    return json({ state: "failed", error: "the proposal was no longer awaiting approval" });
+  }
+  return json(await execute(env, r, p));
+}
+
+const outcomeState = (r: RequestRow) => (r.state === "approved" && r.outcome && r.outcome !== "no_executor" && r.outcome !== "running" ? r.outcome : r.state);
+
+async function finish(env: Env, requestId: string, proposalId: string, outcome: string, url: string | null, error: string | null, touchProposal = true) {
+  const now = Date.now();
+  const proposalState = { executed: "executed", failed: "failed", outcome_unknown: "outcome_unknown" }[outcome];
+  await env.DB.batch([
+    env.DB.prepare("UPDATE approval_requests SET outcome = ?2, result_url = ?3, error = ?4, finished_at = ?5 WHERE id = ?1").bind(requestId, outcome, url, error, now),
+    ...(touchProposal && proposalState
+      ? [
+          env.DB.prepare(
+            `UPDATE proposals SET state = ?2, result_json = json_set(coalesce(result_json, '{}'), '$.outcome', ?2, '$.result_url', ?3, '$.error', ?4)
+             WHERE id = ?1 AND state = 'approved'`,
+          ).bind(proposalId, proposalState, url, error),
+        ]
+      : []),
+  ]);
+}
+
+// Runs the proposal's executor once, after the UPDATE that decided the
+// request. Only open_pr has one; any other approved step waits, as before.
+async function execute(env: Env, r: RequestRow, p: ProposalForRequest): Promise<{ state: string; result_url?: string; error?: string }> {
+  if (p.final_step_kind !== "open_pr") {
+    await finish(env, r.id, r.proposal_id, "no_executor", null, null, false);
+    return { state: "approved" };
+  }
+  try {
+    const url = await openPr(env, validatePrSpec(JSON.parse(p.inputs_json)));
+    await finish(env, r.id, r.proposal_id, "executed", url, null);
+    console.log(`[approvals] ${r.id} executed: ${url}`);
+    return { state: "executed", result_url: url };
+  } catch (e) {
+    const wrote = e instanceof ExecError && e.wrote;
+    const msg = (e instanceof Error ? e.message : String(e)).slice(0, 500);
+    const outcome = wrote ? "outcome_unknown" : "failed";
+    await finish(env, r.id, r.proposal_id, outcome, null, msg);
+    console.log(`[approvals] ${r.id} ${outcome}: ${msg}`);
+    return { state: outcome, error: msg };
+  }
+}

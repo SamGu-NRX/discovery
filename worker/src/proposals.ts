@@ -8,8 +8,12 @@
 // exact final step and inputs the card showed.
 
 import { sha256Hex } from "./adapters";
+import { apnsConfigured } from "./apns";
+import { anyDeviceEver, pushRequest, requestInsert } from "./approvals";
 import type { Env } from "./check";
+import { assertRepoAllowed, validatePrSpec } from "./executor";
 import { canonicalJson, fail, HttpError, intParam, oneOf, optStr, randomHex, readJson, readText, str, timeParam, utcDay } from "./http";
+import { inputsHash } from "./inputs";
 
 export const APPROVAL_DAILY_CAP = 3;
 const DEFAULT_EXPIRY_S = 7 * 86400;
@@ -61,9 +65,6 @@ function array<T>(v: unknown, field: string, max: number, each: (x: Record<strin
   });
 }
 
-const inputsHash = (finalStepKind: string | null, finalStep: string | null, inputs: unknown) =>
-  sha256Hex(canonicalJson({ final_step_kind: finalStepKind, final_step: finalStep, inputs }));
-
 export function presentProposal(r: ProposalRow) {
   const { approval_token_hash, candidate_ids_json, evidence_json, prepared_json, inputs_json, result_json, ...rest } = r;
   return {
@@ -101,6 +102,9 @@ export async function createProposal(env: Env, req: Request) {
   // a final_step sent with it is kept as a description.
   if (finalStepKind && !finalStep) fail("final_step must describe the step when final_step_kind is set");
   const inputs = b.inputs ?? null;
+  // The executor's rules are checked when the proposal is filed too, so Sam
+  // is never asked to approve a PR the executor would refuse.
+  if (finalStepKind === "open_pr") await assertRepoAllowed(env, validatePrSpec(inputs).repo);
   let expiresInS = DEFAULT_EXPIRY_S;
   if (b.expires_in_s !== undefined) {
     if (!Number.isInteger(b.expires_in_s) || (b.expires_in_s as number) < 1 || (b.expires_in_s as number) > MAX_EXPIRY_S) fail(`expires_in_s must be an integer from 1 to ${MAX_EXPIRY_S}`);
@@ -128,30 +132,58 @@ export async function createProposal(env: Env, req: Request) {
 
   const token = randomHex(32);
   const day = utcDay(now);
+  const expiresAt = now + expiresInS * 1000;
+  // Once a device has been enrolled, the approval goes to it over APNs as a
+  // signed request, and the bearer link no longer decides anything.
+  const channel = (await anyDeviceEver(env)) ? "apns" : "webhook";
+  const channelReady = channel === "apns" ? apnsConfigured(env) : Boolean(env.T3_APPROVALS_WEBHOOK_URL);
   // One statement decides the notification state, so two proposals created
-  // at once cannot both take the last of the day's 3 slots.
-  const row = await env.DB.prepare(
-    `INSERT INTO proposals (id, candidate_ids_json, kind, title, why, evidence_json, prepared_json, final_step_kind, final_step,
-       inputs_json, inputs_hash, created_at, state, approval_token_hash, expires_at, notify_day, notify_state)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 'awaiting_approval', ?13, ?14, ?15,
-       CASE
-         WHEN (SELECT value FROM settings WHERE key = 'notifications_paused') = '1' THEN 'paused'
-         WHEN ?16 = 0 THEN 'no_webhook'
-         WHEN (SELECT count(*) FROM proposals WHERE notify_day = ?15 AND notify_state IN ('pending', 'sent', 'failed')) >= ?17 THEN 'capped'
-         ELSE 'pending'
-       END)
-     ON CONFLICT (id) DO NOTHING RETURNING *`,
-  )
-    .bind(...columns, await sha256Hex(token), now + expiresInS * 1000, day, env.T3_APPROVALS_WEBHOOK_URL ? 1 : 0, APPROVAL_DAILY_CAP)
-    .first<ProposalRow>();
+  // at once cannot both take the last of the day's 3 slots. The request is
+  // written in the same transaction.
+  const [inserted, request] = await env.DB.batch<Record<string, unknown>>([
+    env.DB.prepare(
+      `INSERT INTO proposals (id, candidate_ids_json, kind, title, why, evidence_json, prepared_json, final_step_kind, final_step,
+         inputs_json, inputs_hash, created_at, state, approval_token_hash, expires_at, notify_day, notify_channel, notify_state)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 'awaiting_approval', ?13, ?14, ?15, ?18,
+         CASE
+           WHEN (SELECT value FROM settings WHERE key = 'notifications_paused') = '1' THEN 'paused'
+           WHEN ?16 = 0 THEN 'no_' || ?18
+           WHEN (SELECT count(*) FROM proposals WHERE notify_day = ?15 AND notify_state IN ('pending', 'sent', 'failed')) >= ?17 THEN 'capped'
+           ELSE 'pending'
+         END)
+       ON CONFLICT (id) DO NOTHING RETURNING *`,
+    ).bind(...columns, await sha256Hex(token), expiresAt, day, channelReady ? 1 : 0, APPROVAL_DAILY_CAP, channel),
+    requestInsert(env, { id, title, why, final_step_kind: finalStepKind, final_step: finalStep, inputs_json: JSON.stringify(inputs), inputs_hash: hash, expires_at: expiresAt }, now),
+  ]);
+  const row = inserted.results[0] as unknown as ProposalRow | undefined;
   if (!row) return duplicate(env, id);
 
   const approveUrl = `${new URL(req.url).origin}/a/${token}`;
-  const notifyState = row.notify_state === "pending" ? await notify(env, row, approveUrl) : row.notify_state;
+  const requestRow = request.results[0] as unknown as Parameters<typeof pushRequest>[1] | undefined;
+  let notifyState = row.notify_state;
+  if (notifyState === "pending") {
+    if (channel === "webhook") notifyState = await notify(env, row, approveUrl);
+    else notifyState = await recordPush(env, row.id, requestRow ? await pushRequest(env, requestRow) : "failed");
+  }
   return {
     status: 201,
-    body: { id, state: row.state, approve_url: approveUrl, expires_at: new Date(row.expires_at!).toISOString(), notify_state: notifyState },
+    body: {
+      id,
+      state: row.state,
+      approve_url: approveUrl,
+      expires_at: new Date(row.expires_at!).toISOString(),
+      notify_state: notifyState,
+      ...(requestRow ? { approval_request_id: requestRow.id } : {}),
+    },
   };
+}
+
+async function recordPush(env: Env, id: string, outcome: "sent" | "failed" | "no_apns"): Promise<string> {
+  const state = outcome === "sent" ? "sent" : "failed";
+  await env.DB.prepare("UPDATE proposals SET notify_state = ?2, notified_at = CASE WHEN ?2 = 'sent' THEN ?3 ELSE NULL END WHERE id = ?1")
+    .bind(id, state, Date.now())
+    .run();
+  return state;
 }
 
 async function duplicate(env: Env, id: string) {
@@ -271,6 +303,7 @@ export async function approvalPage(env: Env, token: string): Promise<Response> {
   if (!p) return page(404, "Link not found", messageBody("This approval link is not valid.", "Check that the whole link was copied. Links are made once per proposal."));
   if (expired(p, Date.now())) return page(410, "Link expired", messageBody("This approval has expired.", `It expired on ${dateLabel(p.expires_at!)}. Nothing was sent or submitted.`, p.title));
   if (p.state !== "awaiting_approval") return page(200, "Already decided", messageBody(decidedHeadline(p.state), decidedDetail(p), p.title));
+  if (await anyDeviceEver(env)) return page(403, "Device signature required", messageBody("Device signature required.", "Approve or deny this on your iPhone. This link no longer decides anything.", p.title));
   return page(200, p.title, card(p));
 }
 
@@ -287,6 +320,11 @@ export async function decide(env: Env, token: string, req: Request): Promise<Res
   // the body is read, and the body is read under a byte limit.
   const p = await byToken(env, token);
   if (!p) return reply(404, "Link not found.", "This approval link is not valid.");
+  // Every proposal with a link has an irreversible final step. Once a device
+  // has been enrolled (even one later revoked), only its signature decides.
+  if (await anyDeviceEver(env)) {
+    return reply(403, "Device signature required.", "Approve or deny this on your iPhone.", p.title, { error: "device signature required" });
+  }
 
   let decisionRaw: unknown;
   let boundHash: unknown;

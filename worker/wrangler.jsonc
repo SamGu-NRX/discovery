@@ -19,9 +19,20 @@
   // dev reaches the real service for this binding; the tests never call it.
   "ai": { "binding": "AI" },
   "durable_objects": {
-    "bindings": [{ "name": "WATCHER", "class_name": "WatcherDO" }]
+    "bindings": [
+      { "name": "WATCHER", "class_name": "WatcherDO" },
+      // One per bridge task (src/bridge.ts): mailbox_complete wakes the
+      // request waiting on it, so nothing polls D1.
+      { "name": "BRIDGE_WAIT", "class_name": "BridgeWaitDO" }
+    ]
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["WatcherDO"] }],
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["WatcherDO"] },
+    { "tag": "v2", "new_sqlite_classes": ["BridgeWaitDO"] }
+  ],
+  // Voice notes from the iPhone app (src/voice.ts). scripts/deploy-production.sh
+  // creates the bucket; local wrangler dev simulates it.
+  "r2_buckets": [{ "binding": "VOICE", "bucket_name": "discovery-voice" }],
   // The single dispatcher cron (Workers Free allows 5 per account). Each
   // watcher's Durable Object alarm drives its checks; this sweep catches lost
   // alarms, expires stale proposals and records itself for /health.
