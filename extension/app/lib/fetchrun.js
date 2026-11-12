@@ -16,8 +16,9 @@ import { DETAIL_CURSORS, FetchRefused, assertReadOperation, buildRequest, classi
 import { ParseError, parseResponse } from "./parse.js";
 import { extendThread } from "./thread.js";
 
-// Defaults. A job may lower any of these, never raise the gap below 1500 ms
-// or the cap above 400 (clampLimits).
+// Defaults. A job may tighten any of these but never loosen the pacing: the
+// gap stays at least 1500 ms, the jitter at least 1000 ms, the cap at most
+// 400 and the rate reserve at least 30% (clampLimits).
 export const DEFAULT_LIMITS = Object.freeze({
   // Sam's brief: at least 1.5 s between requests, with jitter on top.
   minGapMs: 1500,
@@ -46,7 +47,7 @@ export function clampLimits(given = {}) {
   const out = { ...DEFAULT_LIMITS };
   const int = (v) => (Number.isFinite(Number(v)) ? Math.floor(Number(v)) : null);
   if (int(given.minGapMs) !== null) out.minGapMs = Math.max(DEFAULT_LIMITS.minGapMs, int(given.minGapMs));
-  if (int(given.jitterMs) !== null) out.jitterMs = Math.max(0, Math.min(10_000, int(given.jitterMs)));
+  if (int(given.jitterMs) !== null) out.jitterMs = Math.max(DEFAULT_LIMITS.jitterMs, Math.min(10_000, int(given.jitterMs)));
   if (Number.isFinite(Number(given.rateReserveFraction))) out.rateReserveFraction = Math.max(DEFAULT_LIMITS.rateReserveFraction, Math.min(0.9, Number(given.rateReserveFraction)));
   if (int(given.maxRateWaitMs) !== null) out.maxRateWaitMs = Math.max(0, Math.min(DEFAULT_LIMITS.maxRateWaitMs, int(given.maxRateWaitMs)));
   if (int(given.runCap) !== null) out.runCap = Math.max(1, Math.min(DEFAULT_LIMITS.runCap, int(given.runCap)));
@@ -141,6 +142,10 @@ export async function runJobs(jobs, limits, io) {
     context: {},
     stop: null,
     lastRequestAt: null,
+    // Thread state per permalink, across every walk that opens it: the
+    // Worker keeps one thread row per root and overwrites it, so each batch
+    // must carry everything known about that root.
+    threadStates: {},
     // The last x-rate-limit-* headers per operation, and each wait for a reset.
     rate: {},
     rateWaits: [],
@@ -165,7 +170,7 @@ export async function runJobs(jobs, limits, io) {
     }
   }
   run.endedAt = io.now();
-  const { lastRequestAt, reprimes, primedFor, ...out } = run;
+  const { lastRequestAt, reprimes, primedFor, threadStates, ...out } = run;
   return out;
 }
 
@@ -191,15 +196,19 @@ const PRIMES = { Bookmarks: "bookmarks", TweetDetail: "detail", SearchTimeline: 
 // Opens a page where X itself calls `operation`, so its template is current.
 // Counts as one request against the cap, since the page load reaches X.
 async function prime(run, io, operation, arg) {
-  await gate(run, io);
-  const kind = PRIMES[operation];
-  const at = io.now();
-  await io.prime(kind, arg);
-  run.primes.push({ operation, kind, arg, at: new Date(at).toISOString(), ms: io.now() - at });
   run.primedFor[operation] = arg;
-  if (!(await io.template(operation))) {
-    throw new RunStopped("error", `opened the ${kind} page but X did not call ${operation} there, so its query id and features are unknown`);
+  // X has moved bookmarks under /i/history: /i/bookmarks may open another
+  // history tab, and /i/history/bookmarks is tried next. Each page load is
+  // its own request through the gate.
+  const kinds = operation === "Bookmarks" ? ["bookmarks", "history_bookmarks"] : [PRIMES[operation]];
+  for (const kind of kinds) {
+    await gate(run, io, operation);
+    const at = io.now();
+    await io.prime(kind, arg);
+    run.primes.push({ operation, kind, arg, at: new Date(at).toISOString(), ms: io.now() - at });
+    if (await io.template(operation)) return;
   }
+  throw new RunStopped("error", `opened ${kinds.join(" and ")} but X did not call ${operation} there, so its query id and features are unknown`);
 }
 
 // Waits for X's window to reset when the last response left no more than
@@ -232,10 +241,9 @@ async function request(run, io, operation, changes, note) {
       res = await io.send(operation, url);
     } catch (err) {
       ledger(run, { operation, variables, status: 0, ms: null, note: `${note}; failed: ${err.message}` });
-      // The fetcher refuses redirects, and X redirects a signed-out request
-      // to its login page, so a redirect counts as a login wall.
-      const redirected = /redirect/i.test(err.message);
-      throw new RunStopped(redirected ? "login_wall" : "error", `${operation} request failed: ${err.message}`, { pause: redirected });
+      // A request that never got an answer may be X refusing the connection;
+      // treat it like X backing off.
+      throw new RunStopped("error", `${operation} request failed: ${err.message}`, { pause: true });
     }
     if (res.rate?.limit != null) run.rate[operation] = res.rate;
     const verdict = classifyResponse({ operation, ...res });
@@ -352,10 +360,10 @@ async function context(run, io, job) {
 }
 
 // One permalink in one reply order, followed through every cursor until
-// none is left or the post's cap is reached. `shared` is the thread state
-// the batches carry (null to start one); returns the walk's own thread, the
-// shared state after it, and the ancestors X showed above the focal post.
-async function walkPermalink(run, io, record, { focalId, rankingMode, shared, note }) {
+// none is left or the post's cap is reached. Returns the walk's own thread
+// and the ancestors X showed above the focal post; the batches carry the
+// permalink's thread across all its walks (run.threadStates).
+async function walkPermalink(run, io, record, { focalId, rankingMode, note }) {
   const walk = { thread: null, requests: 0, exhausted: false, cursorsFollowed: {}, cursorsLeft: 0 };
   const ancestors = [];
   let own = null;
@@ -374,8 +382,8 @@ async function walkPermalink(run, io, record, { focalId, rankingMode, shared, no
     record.detailRequests += 1;
     walk.requests += 1;
     if (cursor) walk.cursorsFollowed[cursor.type] = (walk.cursorsFollowed[cursor.type] ?? 0) + 1;
-    const capture = await absorb(run, io, { operation: "TweetDetail", json, url, offset, threadState: shared });
-    shared = capture.threadState;
+    const capture = await absorb(run, io, { operation: "TweetDetail", json, url, offset, threadState: run.threadStates[focalId] ?? null });
+    run.threadStates[focalId] = capture.threadState;
     offset += capture.advance;
     const built = extendThread(own, capture.primary, focalId);
     if (built.error) throw new ParseError(built.error);
@@ -391,7 +399,7 @@ async function walkPermalink(run, io, record, { focalId, rankingMode, shared, no
     }
   }
   walk.exhausted = queue.length === 0;
-  return { walk, shared, ancestors };
+  return { walk, ancestors };
 }
 
 // Each reply order keeps its own thread; the batches carry one thread
@@ -400,15 +408,13 @@ async function walkPermalink(run, io, record, { focalId, rankingMode, shared, no
 // quotes.
 async function detailFor(run, io, job, record) {
   const { id } = record;
-  let shared = null;
-  let ancestors = [];
+  const ancestors = [];
   for (const rankingMode of job.rankings) {
-    const done = await walkPermalink(run, io, record, { focalId: id, rankingMode, shared, note: `${id} ${rankingMode}` });
+    const done = await walkPermalink(run, io, record, { focalId: id, rankingMode, note: `${id} ${rankingMode}` });
     record.orders[rankingMode] = done.walk;
-    shared = done.shared;
     for (const a of done.ancestors) if (!ancestors.includes(a)) ancestors.push(a);
   }
-  if (shared) record.thread = extendThread(shared, [], id).thread;
+  if (run.threadStates[id]) record.thread = extendThread(run.threadStates[id], [], id).thread;
 
   if (job.branches && record.thread) {
     const candidates = branchCandidates(run, record);
@@ -417,7 +423,7 @@ async function detailFor(run, io, job, record) {
         record.branchesSkipped.push(branchId);
         continue;
       }
-      const done = await walkPermalink(run, io, record, { focalId: branchId, rankingMode: "Relevance", shared: null, note: `${id} branch ${branchId}` });
+      const done = await walkPermalink(run, io, record, { focalId: branchId, rankingMode: "Relevance", note: `${id} branch ${branchId}` });
       record.branches.push({ id: branchId, ...done.walk });
     }
   }
@@ -433,7 +439,8 @@ async function detailFor(run, io, job, record) {
     }
     const { json, url } = await request(run, io, "TweetDetail", { focalTweetId: target, rankingMode: "Relevance" }, `${id} upstream ${target}`);
     record.detailRequests += 1;
-    await absorb(run, io, { operation: "TweetDetail", json, url, offset: 0 });
+    const capture = await absorb(run, io, { operation: "TweetDetail", json, url, offset: 0, threadState: run.threadStates[target] ?? null });
+    run.threadStates[target] = capture.threadState;
     upstream.fetched.push(target);
   }
   record.upstream = upstream;
@@ -447,7 +454,9 @@ async function detailFor(run, io, job, record) {
 // first, then by reply count.
 function branchCandidates(run, record) {
   const author = run.posts[record.id]?.author_handle;
-  const ids = [...record.thread.op_self_thread_ids, ...record.thread.reply_ids].filter((x) => x !== record.id);
+  // Posts above the saved one are upstream, not branches.
+  const self = record.thread.op_self_thread_ids;
+  const ids = [...self.slice(self.indexOf(record.id) + 1), ...record.thread.reply_ids];
   const eligible = ids
     .map((x) => run.posts[x])
     .filter((p) => p && p.metrics.replies > 0 && (p.author_handle === author || p.metrics.replies >= 2 || p.text.includes("?")));

@@ -25,6 +25,10 @@ before(async () => {
   const context = await browser.newContext({ serviceWorkers: "block" });
   await context.route("https://x.com/**", (route) => {
     const request = route.request();
+    if (request.url().includes("redirect-me")) {
+      seen.push({ method: request.method(), url: request.url(), headers: request.headers() });
+      return route.fulfill({ status: 302, headers: { location: "https://x.com/i/flow/login" } });
+    }
     if (request.url().includes("/graphql/")) {
       seen.push({ method: request.method(), url: request.url(), headers: request.headers() });
       return route.fulfill({ contentType: "application/json", body: JSON.stringify(detailResponse()) });
@@ -39,7 +43,7 @@ before(async () => {
   await cdp.send("Runtime.enable");
   await cdp.send("Page.enable");
   await cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: await read("../app/content/hook.js") });
-  const stub = "globalThis.sent = []; globalThis.chrome = { runtime: { sendMessage: async (m) => { sent.push(m); return { ok: true }; } }, storage: { local: { set: async () => {} } } };";
+  const stub = "globalThis.sent = []; globalThis.chrome = { runtime: { sendMessage: async (m) => { sent.push(m); return { ok: true }; } }, storage: { local: { stored: {}, set: async () => {}, get: async (k) => ({ [k]: chrome.storage.local.stored[k] }), getKeys: async () => Object.keys(chrome.storage.local.stored) } } };";
   const scripts = await Promise.all(["../app/content/detect.js", "../app/content/bridge.js", "../app/content/fetcher.js"].map(read));
   await cdp.send("Page.addScriptToEvaluateOnNewDocument", { worldName: "extension", source: [stub, ...scripts].join("\n;\n") });
   await page.goto("https://x.com/i/status/200");
@@ -73,7 +77,7 @@ const pageRequest = (via, tid) =>
           xhr.send();
         });
       } else {
-        await (await fetch(url, { headers })).text();
+        await (await fetch(new Request(url, { headers }))).text();
       }
       await new Promise((resolve) => setTimeout(resolve, 150));
     },
@@ -124,4 +128,23 @@ test("the fetcher sends a GET with the headers X's page used last, and refuses m
   }
   assert.deepEqual(seen, [], "nothing refused reached the network");
   assert.match((await fetcher({ name: "post", arg: {} })).error, /unknown fetcher command/);
+});
+
+test("the fetcher reports a redirect instead of following it, and sends nothing once the extension is paused", async () => {
+  await pageRequest("xhr", "tid-3");
+  seen.length = 0;
+  const variables = encodeURIComponent(JSON.stringify({ focalTweetId: "200", note: "redirect-me" }));
+  const redirect = await fetcher({ name: "get", arg: { operation: "TweetDetail", url: `https://x.com/i/api/graphql/${QID}/TweetDetail?variables=${variables}` } });
+  assert.equal(redirect.value?.redirected, true, JSON.stringify(redirect));
+  assert.ok(!seen.some((r) => r.url.includes("/i/flow/login")), "the login page was not requested");
+
+  // A pause another tab stored after the run's own last check.
+  for (const stored of [{ pauseUntil: new Date(Date.now() + 3600_000).toISOString() }, { "pageSignal:5d1c7a3e-0000-4000-8000-000000000000": { type: "x-status" } }]) {
+    await inExtension(`chrome.storage.local.stored = ${JSON.stringify(stored)}`);
+    seen.length = 0;
+    const reply = await fetcher({ name: "get", arg: { operation: "TweetDetail", url: `https://x.com/i/api/graphql/${QID}/TweetDetail?variables=%7B%7D` } });
+    assert.equal(reply.value?.paused, true, JSON.stringify(reply));
+    assert.deepEqual(seen, [], "nothing was sent while paused");
+  }
+  await inExtension("chrome.storage.local.stored = {}");
 });

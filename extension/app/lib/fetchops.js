@@ -208,10 +208,15 @@ export const DETAIL_CURSORS = new Set(["Bottom", "ShowMore", "ShowMoreThreads", 
  *   error); `pause` says whether it is X telling the account to back off,
  *   which pauses sessions and fetch runs for 24 hours.
  */
-export function classifyResponse({ operation, status, contentType, text, blocked = null }) {
+export function classifyResponse({ operation, status, contentType, text, blocked = null, redirected = false, bodyError = null, paused = false }) {
+  // The fetcher found the shared pause set just before sending, and sent nothing.
+  if (paused) return { kind: "stop", reason: "paused", detail: "the extension was paused just before this request", pause: false };
   // content/fetcher.js found a login wall, challenge or limit message on the
   // page and sent nothing.
   if (blocked) return { kind: "stop", reason: blocked.blocker, detail: `${blocked.evidence} at ${blocked.path}`, pause: true };
+  // X redirects a request it will not serve to its login or challenge
+  // pages; the fetcher never follows one.
+  if (redirected) return { kind: "stop", reason: "login_wall", detail: `${operation} answered with a redirect`, pause: true };
   const where = `${operation} answered`;
   if (status === 429) return { kind: "stop", reason: "rate_limited", detail: `${where} HTTP 429`, pause: true };
   if (status === 401) return { kind: "stop", reason: "login_wall", detail: `${where} HTTP 401`, pause: true };
@@ -220,6 +225,7 @@ export function classifyResponse({ operation, status, contentType, text, blocked
   // back as an empty 404. That is fetch mode's problem, not X backing off.
   if (status === 404) return { kind: "stale", detail: `${where} HTTP 404: query id or request headers not accepted` };
   if (status < 200 || status > 299) return { kind: "stop", reason: "error", detail: `${where} HTTP ${status}`, pause: status >= 500 ? false : true };
+  if (bodyError) return { kind: "stop", reason: "error", detail: `${where} HTTP ${status} but its body could not be read: ${bodyError}`, pause: true };
   if (!/^application\/json\b/i.test(contentType ?? "")) {
     return { kind: "stop", reason: "error", detail: `${where} ${contentType || "no content type"}, not JSON`, pause: true };
   }

@@ -12,7 +12,7 @@ const FIXTURE_HEADERS = { authorization: "Bearer fixture-bearer", "x-csrf-token"
 function graphql(op, variables, viaXhr) {
   const features = encodeURIComponent(JSON.stringify({ fixture_feature: true }));
   const url = `/i/api/graphql/fixtureQueryId/${op}?variables=${encodeURIComponent(JSON.stringify(variables))}&features=${features}`;
-  if (!viaXhr) return fetch(url, { headers: FIXTURE_HEADERS }).then((r) => r.text());
+  if (!viaXhr) return fetch(new Request(url, { headers: FIXTURE_HEADERS })).then((r) => r.text());
   return new Promise((resolve) => {
     const xhr = new XMLHttpRequest();
     xhr.open("GET", url);

@@ -25,6 +25,16 @@
     return out;
   }
 
+  // The extension's shared pause, as lib/store.js pausedOrPausing() reads it:
+  // a stored pause still running, or a back-off signal a page stored and the
+  // service worker has not handled yet.
+  async function pausedNow() {
+    const { pauseUntil } = await chrome.storage.local.get("pauseUntil");
+    if (pauseUntil && Date.parse(pauseUntil) > Date.now()) return true;
+    const keys = await chrome.storage.local.getKeys();
+    return keys.some((key) => key.startsWith("pageSignal:"));
+  }
+
   async function get({ operation, url } = {}) {
     if (!READ.includes(operation)) throw new Error(`fetcher refused operation ${JSON.stringify(operation)}`);
     const target = new URL(url);
@@ -39,6 +49,10 @@
     }
     const learned = globalThis.__dxTemplates?.headers(operation);
     if (!learned) throw new Error(`no ${operation} template in this tab: X has not called it on this page`);
+    // The run checked the shared pause before handing this request over, but
+    // a signal from another tab can land in between; this is the last check
+    // before the request exists.
+    if (await pausedNow()) return { status: 0, contentType: "", text: "", ms: 0, paused: true };
     const headers = new Headers();
     // A GET has no body, so the page's content-type for a POST is dropped.
     for (const [name, value] of learned) if (name !== "content-type") headers.set(name, value);
@@ -47,18 +61,30 @@
       method: "GET",
       headers,
       credentials: "include",
-      redirect: "error",
+      // A redirect comes back as an opaque response instead of being followed.
+      redirect: "manual",
       cache: "no-store",
       signal: AbortSignal.timeout(TIMEOUT_MS),
     });
-    const text = await res.text();
+    const ms = () => Math.round(performance.now() - started);
+    if (res.type === "opaqueredirect") return { status: 0, contentType: "", text: "", ms: ms(), redirected: true };
+    // Statuses that stop the run are returned before the body is read, so a
+    // body that fails to arrive cannot hide them.
+    if ([401, 403, 429].includes(res.status)) return { status: res.status, contentType: res.headers.get("content-type") ?? "", text: "", ms: ms() };
+    let text = "";
+    let bodyError = null;
+    try {
+      text = await res.text();
+    } catch (err) {
+      bodyError = String(err?.message ?? err);
+    }
     // X's per-endpoint budget for this account, shared with every X tab.
     const header = (name) => {
       const value = res.headers.get(name);
       return value !== null && /^\d+$/.test(value) ? Number(value) : null;
     };
     const rate = { limit: header("x-rate-limit-limit"), remaining: header("x-rate-limit-remaining"), reset: header("x-rate-limit-reset") };
-    return { status: res.status, contentType: res.headers.get("content-type") ?? "", text, ms: Math.round(performance.now() - started), rate };
+    return { status: res.status, contentType: res.headers.get("content-type") ?? "", text, ms: ms(), rate, bodyError };
   }
 
   const COMMANDS = Object.freeze({

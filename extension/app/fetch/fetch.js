@@ -73,7 +73,8 @@ async function start() {
     $("job-note").textContent = `Job list: ${err.message}`;
     return;
   }
-  const refusal = await refuseToStart();
+  const owner = crypto.randomUUID();
+  const refusal = await refuseToStart(owner);
   if (refusal) {
     setStatus(refusal, "bad");
     return;
@@ -82,40 +83,43 @@ async function start() {
   $("stop").disabled = false;
   $("ledger").replaceChildren();
   try {
-    lastBundle = await run(parsed);
+    lastBundle = await run(parsed, owner);
     $("download").disabled = false;
     download(lastBundle);
   } catch (err) {
     setStatus(`failed: ${err.message}`, "bad");
   } finally {
+    await chrome.runtime.sendMessage({ type: "fetch-release", owner }).catch(() => {});
     $("start").disabled = false;
     $("stop").disabled = true;
   }
 }
 
-// The same rules a session follows before it opens a window.
-async function refuseToStart() {
+// The same rules a session follows before it opens a window. The service
+// worker admits the run (lib/fetchlock.js), so a session cannot start
+// between this check and the run claiming the account.
+async function refuseToStart(owner) {
   if (running) return "A fetch run is already going.";
   if (await pausedOrPausing()) return "The extension is paused after an X signal; see the popup.";
-  const { activeSession } = await chrome.storage.session.get("activeSession");
-  if (activeSession && !activeSession.statusSent) return "A session is running or not yet reported.";
-  const { fetchRun } = await chrome.storage.session.get("fetchRun");
-  if (fetchRun && Date.now() - fetchRun.heartbeatAt < 120_000) return "Another fetch page is running.";
   if (!(await getLocal("lastAccount", null))) return "Open x.com once while logged in, so the account is known.";
-  return null;
+  const reply = await chrome.runtime.sendMessage({ type: "fetch-acquire", owner });
+  if (reply?.error) return reply.error;
+  return reply?.refused ?? null;
 }
 
-async function run({ jobs, limits }) {
+async function run({ jobs, limits }, owner) {
   const config = await loadConfig();
   const account = await getLocal("lastAccount", null);
   const sessionId = crypto.randomUUID();
   const toWorker = $("to-worker").checked;
-  const r = { stop: false, tabId: null, windowId: null, expects: null, opened: null, summaries: {}, batches: 0, startedAt: Date.now() };
+  const r = { owner, stop: false, tabId: null, windowId: null, expects: null, opened: null, summaries: {}, batches: 0, startedAt: Date.now() };
   running = r;
   let reserved = false;
   const timer = setInterval(() => {
     $("elapsed").textContent = `${Math.round((Date.now() - r.startedAt) / 1000)} s`;
   }, 1000);
+  // Holds the lock through rate-limit waits, which can last 16 minutes.
+  const beat = setInterval(() => heartbeat(r).catch(() => {}), 20_000);
   const onRemoved = (windowId) => {
     if (windowId === r.windowId) r.stop = true;
   };
@@ -200,13 +204,13 @@ async function run({ jobs, limits }) {
     };
   } finally {
     clearInterval(timer);
+    clearInterval(beat);
     chrome.windows.onRemoved.removeListener(onRemoved);
     // A run that threw before reporting still closes its reservation.
     if (reserved) {
       await postStatus(config, { account, session_id: sessionId, status: "error", detail: "fetch run ended without a result" }).catch(() => {});
     }
     if (r.windowId !== null) await chrome.windows.remove(r.windowId).catch(() => {});
-    await chrome.storage.session.remove("fetchRun");
     running = null;
   }
 }
@@ -220,26 +224,32 @@ function statusFor(stop) {
   return ["rate_limited", "login_wall", "challenge"].includes(stop.reason) ? stop.reason : "error";
 }
 
-// Sessions and other fetch pages check this before starting; the service
-// worker ignores passive captures from this tab, since the run records
-// every response itself.
-function heartbeat(r) {
-  return chrome.storage.session.set({ fetchRun: { tabId: r.tabId, windowId: r.windowId, heartbeatAt: Date.now() } });
+// Keeps this run's claim on the account fresh, and tells the service worker
+// which tab is the run's, so it ignores passive captures from it (the run
+// records every response itself). A claim the worker no longer knows, after
+// a worker restart for instance, stops the run.
+async function heartbeat(r) {
+  const reply = await chrome.runtime.sendMessage({ type: "fetch-heartbeat", owner: r.owner, tabId: r.tabId, windowId: r.windowId });
+  if (!reply?.held) r.stop = true;
 }
 
+// One page load where X itself calls the operation; the runner decides
+// whether to try another (bookmarks, then history bookmarks).
+const PAGES = {
+  bookmarks: ["Bookmarks", () => bookmarksUrl()],
+  history_bookmarks: ["Bookmarks", () => historyBookmarksUrl()],
+  detail: ["TweetDetail", (id) => permalinkUrl(id)],
+  search: ["SearchTimeline", (query) => searchUrl(query)],
+};
+
 async function prime(r, kind, arg) {
-  const url = kind === "bookmarks" ? bookmarksUrl() : kind === "detail" ? permalinkUrl(arg) : kind === "search" ? searchUrl(arg) : null;
-  if (!url) throw new FetchRefused(`unknown page kind ${kind}`);
-  const operation = { bookmarks: "Bookmarks", detail: "TweetDetail", search: "SearchTimeline" }[kind];
+  if (!Object.hasOwn(PAGES, kind)) throw new FetchRefused(`unknown page kind ${kind}`);
+  const [operation, mint] = PAGES[kind];
+  const url = mint(arg);
   setStatus(`opening ${url.href} so X calls ${operation}…`);
-  await open(r, url);
-  let learned = await waitForTemplate(r, operation);
-  // X has moved bookmarks under /i/history; the session code takes the same detour.
-  if (!learned && kind === "bookmarks") {
-    await open(r, historyBookmarksUrl());
-    learned = await waitForTemplate(r, operation);
-  }
   await heartbeat(r);
+  await open(r, url);
+  await waitForTemplate(r, operation);
   setStatus("running");
 }
 

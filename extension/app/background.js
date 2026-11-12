@@ -2,6 +2,7 @@
 // into contract batches, sends them to the Worker, and runs scheduled sessions.
 
 import { captureToBatch } from "./lib/capture.js";
+import { acquireFetchRun, beatFetchRun, releaseFetchRun } from "./lib/fetchlock.js";
 import { focalTweetIdFromUrl, operationFromUrl } from "./lib/ops.js";
 import { dropStoredSince, enqueue, flush } from "./lib/outbox.js";
 import { ParseError } from "./lib/parse.js";
@@ -113,6 +114,18 @@ async function handle(message, sender) {
       if (!fromExtensionPage) return { error: "only the popup stops sessions" };
       requestStop("stopped_by_user", "stopped from the popup");
       return { stopping: true };
+    case "fetch-acquire":
+      // sessionInfo() is set synchronously when a session starts, so this
+      // check and the claim inside acquireFetchRun happen in one step.
+      if (!fromExtensionPage) return { error: "only the fetch page runs fetch mode" };
+      return { refused: await acquireFetchRun(String(message.owner), sessionInfo() !== null) };
+    case "fetch-heartbeat":
+      if (!fromExtensionPage) return { error: "only the fetch page runs fetch mode" };
+      return { held: await beatFetchRun(String(message.owner), { tabId: message.tabId ?? null, windowId: message.windowId ?? null }) };
+    case "fetch-release":
+      if (!fromExtensionPage) return { error: "only the fetch page runs fetch mode" };
+      await releaseFetchRun(String(message.owner));
+      return { ok: true };
     case "fetch-batch":
       if (!fromExtensionPage) return { error: "only the fetch page sends fetch batches" };
       return queueFetchBatch(message);

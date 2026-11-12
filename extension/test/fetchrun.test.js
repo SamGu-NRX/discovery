@@ -54,12 +54,13 @@ const json = (body) => ({ status: 200, contentType: "application/json; charset=u
 
 // A fake x.com tab: `answer(operation, variables)` returns a response or a
 // JSON body. Records every send with the manual clock's time.
-function harness(answer, { paused = () => false, random = () => 0.5, stopAfter = Infinity } = {}) {
+function harness(answer, { paused = () => false, random = () => 0.5, stopAfter = Infinity, teaches = () => true } = {}) {
   let clock = 1_000_000;
   const sends = [];
   const primes = [];
   const batches = [];
   const signals = [];
+  let learned = false;
   const io = {
     now: () => clock,
     sleep: async (ms) => {
@@ -70,9 +71,10 @@ function harness(answer, { paused = () => false, random = () => 0.5, stopAfter =
     stopRequested: () => sends.length >= stopAfter,
     prime: async (kind, arg) => {
       primes.push([kind, arg ?? null]);
+      learned = teaches(kind);
       clock += 3000;
     },
-    template: async (operation) => pageTemplate(operation),
+    template: async (operation) => (learned ? pageTemplate(operation) : null),
     send: async (operation, href) => {
       const url = new URL(href);
       const variables = JSON.parse(url.searchParams.get("variables"));
@@ -157,11 +159,17 @@ function contextAnswer({ log = [] } = {}) {
     "conversation_id:200|Latest|": searchPage(["203", "299"], null),
   };
   // A branch permalink: the reply itself and one answer to it.
-  const branch = (id) => detail([{ type: "TimelineAddEntries", entries: [itemEntry(post(id, "b", { conversationId: "200" }), "9000"), moduleEntry(`conversationthread-7${id}`, "8990", [other(`7${id}`, "z", id)])] }]);
+  // A branch permalink: the reply itself and one answer to it, plus a second
+  // answer only in Recency order.
+  const branch = (id, rankingMode) => detail([{ type: "TimelineAddEntries", entries: [
+    itemEntry(post(id, "b", { conversationId: "200" }), "9000"),
+    moduleEntry(`conversationthread-7${id}`, "8990", [other(`7${id}`, "z", id)]),
+    ...(rankingMode === "Recency" ? [moduleEntry(`conversationthread-8${id}`, "8980", [other(`8${id}`, "y", id)])] : []),
+  ] }]);
   return (operation, v) => {
     if (operation === "TweetDetail") {
       log.push(`${v.rankingMode}:${v.cursor ?? "-"}`);
-      if (v.focalTweetId !== "200") return branch(v.focalTweetId);
+      if (v.focalTweetId !== "200") return branch(v.focalTweetId, v.rankingMode);
       return (v.rankingMode === "Recency" ? recency : relevance)[v.cursor ?? ""];
     }
     const key = `${v.rawQuery}|${v.product}|${v.cursor ?? ""}`;
@@ -216,6 +224,7 @@ test("requests are at least 1.5 s plus jitter apart, a job cannot lower that or 
   const { limits } = parseJobs({ limits: { minGapMs: 100, runCap: 5000 }, jobs: [{ type: "bookmarks_until", boundary: "1" }] });
   assert.equal(limits.minGapMs, 1500);
   assert.equal(limits.runCap, 400);
+  assert.equal(parseJobs({ limits: { jitterMs: 0 }, jobs: [{ type: "bookmarks_until", boundary: "1" }] }).limits.jitterMs, 1000, "jitter cannot be turned off");
 
   let n = 0;
   const h = harness(() => bookmarksPage([String(++n)], `c${n}`), { random: () => 0.25 });
@@ -233,6 +242,7 @@ const BACK_OFF = {
   "X error 88 with HTTP 200": [json({ errors: [{ code: 88, message: "Rate limit exceeded" }] }), "rate_limited"],
   "HTTP 401": [{ status: 401, contentType: "application/json", text: "{}" }, "login_wall"],
   "an HTML page instead of JSON": [{ status: 200, contentType: "text/html", text: "<html>log in</html>" }, "error"],
+  "a redirect": [{ status: 0, contentType: "", text: "", redirected: true }, "login_wall"],
   "a challenge on the page": [{ status: 0, contentType: "", text: "", blocked: { blocker: "challenge", evidence: "captcha iframe", path: "/i/bookmarks" } }, "challenge"],
 };
 
@@ -311,4 +321,41 @@ test("a run leaves 30% of X's per-endpoint window to Sam: it waits for the reset
   assert.equal(stopped.stop.reason, "rate_budget");
   assert.equal(late.sends.length, 1);
   assert.deepEqual(late.signals, [], "running low is not X backing off, so nothing is paused");
+});
+
+test("each page load is its own gated request: the bookmarks fallback counts against the cap and stops for a pause", async () => {
+  // /i/bookmarks teaches nothing (X opened another history tab), so the run
+  // tries /i/history/bookmarks, as a second request.
+  const h = harness(() => bookmarksPage(["1"], null), { teaches: (kind) => kind === "history_bookmarks" });
+  const result = await run({ jobs: [{ type: "bookmarks_until", boundary: "1" }] }, h);
+  assert.deepEqual(h.primes.map(([kind]) => kind), ["bookmarks", "history_bookmarks"]);
+  assert.equal(result.requests, 3, "two page loads and one GET");
+
+  const capped = harness(() => bookmarksPage(["1"], null), { teaches: () => false });
+  const stopped = await run({ limits: { runCap: 1 }, jobs: [{ type: "bookmarks_until", boundary: "1" }] }, capped);
+  assert.equal(stopped.stop.reason, "cap");
+  assert.equal(capped.primes.length, 1);
+
+  let pausedNow = false;
+  const paused = harness(() => bookmarksPage(["1"], null), { teaches: () => ((pausedNow = true), false), paused: () => pausedNow });
+  const held = await run({ jobs: [{ type: "bookmarks_until", boundary: "1" }] }, paused);
+  assert.equal(held.stop.reason, "paused");
+  assert.equal(paused.primes.length, 1, "no second page load after the pause");
+});
+
+test("a request that fails outright stops the run and pauses, whatever the error says", async () => {
+  const h = harness(() => {
+    throw new TypeError("Failed to fetch");
+  });
+  const result = await run({ jobs: [{ type: "bookmarks_until", boundary: "1" }] }, h);
+  assert.equal(result.stop.reason, "error");
+  assert.deepEqual(h.signals.map((s) => s.reason), ["error"]);
+});
+
+test("a branch walk never replaces a saved post's merged thread: the batches keep both reply orders", async () => {
+  // 203 is saved and also a branch of 200, opened after 203's own two walks.
+  const h = harness(contextAnswer());
+  await run({ jobs: [{ type: "context", ids: ["203", "200"], quotes: false, mentions: false, links: false, conversation: false }] }, h);
+  const last = h.batches.filter((b) => b.thread?.root_id === "203").at(-1).thread;
+  assert.deepEqual(last.reply_ids, ["7203", "8203"]);
 });

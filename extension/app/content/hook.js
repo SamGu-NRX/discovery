@@ -266,39 +266,24 @@
     return apply(xhrSend, this, arguments);
   };
 
-  // What a fetch() call asked for: method, kept headers and a string body,
-  // from a Request, the init dictionary, or both (init wins, as in fetch).
+  // What a fetch() call asked for, read only from a real Request passed
+  // alone, through the getters saved above, which run no page code. A call
+  // with an init dictionary teaches no template: its method, headers and body
+  // may be getters or a Proxy, and reading them would run page code an extra
+  // time, which could change what X sends. X's GraphQL client uses XHR.
   const fetchRequest = (input, init) => {
-    let headers = [];
-    let method = "GET";
-    let body = null;
-    const fromHeaders = (h) => {
-      const list = [];
-      try {
-        apply(headersForEach, h, [(value, name) => keepHeader(list, name, value)]);
-        return list;
-      } catch {
-        // Not a Headers object.
-      }
-      if (isArray(h)) {
-        for (let i = 0; i < h.length; i += 1) if (isArray(h[i])) keepHeader(list, h[i][0], h[i][1]);
-      } else if (typeof h === "object" && h !== null) {
-        for (const name in h) keepHeader(list, name, h[name]);
-      }
-      return list;
-    };
+    if (init !== undefined) return null;
+    let method;
+    let headers;
     try {
       method = apply(reqMethod, input, []);
-      headers = fromHeaders(apply(reqHeaders, input, []));
+      headers = apply(reqHeaders, input, []);
     } catch {
-      // Not a Request.
+      return null; // Not a Request.
     }
-    if (init && typeof init === "object") {
-      if (typeof init.method === "string") method = init.method;
-      if (init.headers) headers = fromHeaders(init.headers);
-      if (typeof init.body === "string") body = init.body;
-    }
-    return { method: methodOf(method), headers, body };
+    const list = [];
+    apply(headersForEach, headers, [(value, name) => keepHeader(list, name, value)]);
+    return { method: methodOf(method), headers: list, body: null };
   };
 
   window.fetch = function () {
