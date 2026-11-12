@@ -95,7 +95,7 @@ def build(ctx: Ctx, payload: dict) -> dict:
         r = results[(c["kind"], c["key"])]
         res = r["result"]
         if r["state"] != "done" or not res:
-            links.append({"url": c["url"], "from": c["from"], "status": "error", "note": r["error"]})
+            links.append({"url": c["url"], "from": c["from"], "status": "error", "rung": None, "note": r["error"], "text": None, "repo": None})
             missing.append({"what": "link", "ref": c["url"], "reason": r["error"] or f"job {r['state']}"})
             continue
         text = ctx.api.get_blob(res["text_sha"]).decode("utf-8")[:TEXT_MAX] if res.get("text_sha") else None
@@ -344,7 +344,7 @@ def render_md(b: dict) -> str:
         title = l.get("title") or urlsplit(l.get("final_url") or l["url"]).hostname
         out += [f"### {title}", "", f"<{l['url']}>" + (f", resolved to <{l['final_url']}>" if l.get("final_url") and l["final_url"] != l["url"] else ""), ""]
         source = l["from"].replace("reply:", "a kept reply ").replace("thread:", "thread post ")
-        out += [f"From: {source}. Fetch: {l['status']} at rung {l['rung']} ({l.get('note') or 'no note'})." + (f" Repo: <{l['repo']}>." if l.get("repo") else ""), ""]
+        out += [f"From: {source}. Fetch: {l['status']}{'' if l.get('rung') is None else f" at rung {l['rung']}"} ({l.get('note') or 'no note'})." + (f" Repo: <{l['repo']}>." if l.get("repo") else ""), ""]
         if l.get("text"):
             t = l["text"]
             shown = t[:MD_LINK_TEXT]

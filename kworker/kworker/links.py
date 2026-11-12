@@ -425,7 +425,7 @@ def link_job(ctx: Ctx, payload: dict) -> dict:
         "rung": got.rung,
         "status": got.status,
         "immutable": 1 if is_immutable(canon) else 0,
-        "note": got.note[:500],
+        "note": got.note[:500] or None,
     }
     ctx.api.record_fetches([row])
     _learn(ctx, host, start, attempts, got)

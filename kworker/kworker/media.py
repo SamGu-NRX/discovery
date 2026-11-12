@@ -73,6 +73,17 @@ def _norm(t: str) -> str:
     return " ".join(t.split())
 
 
+def agreement(a: str, b: str) -> float:
+    """How alike two readings are: the better of in-order similarity and
+    similarity of their sorted lines. A chart or a UI has no single reading
+    order, so two readers can list the same labels in different orders."""
+    seq = difflib.SequenceMatcher(None, _norm(a), _norm(b)).ratio()
+    def lines(t: str) -> str:
+        return "\n".join(sorted(_norm(l) for l in t.splitlines() if l.strip()))
+
+    return max(seq, difflib.SequenceMatcher(None, lines(a), lines(b)).ratio())
+
+
 def image_job(ctx: Ctx, payload: dict) -> dict:
     m = fetch_media(ctx, payload["source_url"])
     sha, mime = m["sha256"], m["mime"]
@@ -107,6 +118,6 @@ def image_job(ctx: Ctx, payload: dict) -> dict:
 
         second = models.run(ctx, "image_second_read", build_second)
         read2 = json.loads(second.output)
-        ratio = difflib.SequenceMatcher(None, _norm(read.get("text", "")), _norm(read2.get("text", ""))).ratio()
+        ratio = agreement(read.get("text", ""), read2.get("text", ""))
         out.update(second_sha=second.output_sha, second_by=second.by.as_dict(), agreement=round(ratio, 4), ocr_uncertain=ratio < AGREE_AT)
     return out
