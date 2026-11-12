@@ -324,9 +324,14 @@ async function startRepolls() {
   if (!config.lensId || !config.workerUrl || !config.ingestToken || config.mode === "off") return;
   const account = await getLocal("lastAccount", null);
   if (!account || (await getLocal("pauseUntil", null)) > new Date().toISOString()) return;
+  // One re-poll at a time: a job still waiting for its tab, or a fetch run
+  // going, waits for the next hour.
+  const { repollJob, fetchRun } = await chrome.storage.session.get(["repollJob", "fetchRun"]);
+  if (repollJob && Date.now() - repollJob.at < 10 * 60_000) return;
+  if (fetchRun && Date.now() - fetchRun.heartbeatAt < 120_000) return;
   const { post_ids: ids = [] } = await dueRepolls(config, account);
   if (!ids.length) return;
-  await chrome.storage.session.set({ repollJob: { account, ids, at: Date.now() } });
+  await chrome.storage.session.set({ repollJob: { account, lensId: config.lensId, ids, at: Date.now() } });
   await chrome.tabs.create({ url: chrome.runtime.getURL("fetch/fetch.html?auto=repoll"), active: false });
 }
 

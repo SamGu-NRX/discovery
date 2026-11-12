@@ -74,6 +74,19 @@ test("a lens's thresholds come from its exemplars, and a lens needs at least 10 
   assert.equal(few.status, 400);
   assert.match((await few.json()).error, /needs at least 10/);
   assert.equal((await s.call("POST", "/lenses", { id: "x", account: "x", charter: "c", exemplar_ids: exemplarIds }, { raw: true, token: "ingest" })).status, 403, "only admin creates lenses");
+
+  // open_at is the median of the exemplars' cosines (the mean of the middle
+  // two of twelve), glance_at their lower 10th percentile. The four distinct
+  // exemplar texts, three of each, have these cosines to the centroid.
+  const { labels } = await s.call("POST", "/lenses/harness/label", { posts: ON_TOPIC.map((text, i) => ({ id: String(9_150_000 + i), text, author_handle: "e" })) }, { token: "ingest" });
+  const t = labels.map((l) => l.taste).sort((a, b) => a - b);
+  assert.ok(Math.abs(lens.open_at - (t[1] + t[2]) / 2) < 1e-9, `open_at ${lens.open_at}, middle two ${t[1]} and ${t[2]}`);
+  assert.ok(Math.abs(lens.glance_at - t[0]) < 1e-9);
+
+  // The reader asks for its own account's lenses; without an account there is no answer.
+  assert.deepEqual((await s.call("GET", "/lenses?account=lensacct", undefined, { token: "ingest" })).lenses.map((l) => l.id), ["harness"]);
+  assert.deepEqual((await s.call("GET", "/lenses?account=someone-else", undefined, { token: "ingest" })).lenses, []);
+  assert.equal((await s.call("GET", "/lenses", undefined, { raw: true, token: "ingest" })).status, 400);
 });
 
 test("labels use the model when its answer validates, and the centroid when it does not, with interest parts", async () => {
@@ -150,6 +163,15 @@ test("ingest records the lens and whether the account follows the author, and re
     { raw: true, token: "ingest" },
   );
   assert.equal(unknown.status, 400);
+  // A lens is refused on any account but its own.
+  const elsewhere = await s.call(
+    "POST",
+    "/ingest/x",
+    { account: "sdotgu", session_id: "u2", mode: "active", captured_at: new Date().toISOString(), lens_id: "harness", batches: [] },
+    { raw: true, token: "ingest" },
+  );
+  assert.equal(elsewhere.status, 400);
+  assert.match((await elsewhere.json()).error, /not a lens of account/);
 });
 
 test("the scorecard reports purity per session beside the baseline, lead ratio, lead hours and flag precision", async () => {

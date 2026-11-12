@@ -108,9 +108,12 @@ export async function ingest(env: Env, req: Request) {
   const mode = oneOf(b.mode, MODES, "mode");
   isoTime(b.captured_at, "captured_at");
   if (!Array.isArray(b.batches)) fail("batches must be an array");
-  // A lens session's captures name their lens (docs/LENS.md); it must exist.
+  // A lens session's captures name their lens (docs/LENS.md); it must be a
+  // lens of the account that captured them.
   const lensId = b.lens_id === undefined || b.lens_id === null ? null : str(b.lens_id, "lens_id", 64);
-  if (lensId && !(await env.DB.prepare("SELECT 1 FROM lenses WHERE id = ?1").bind(lensId).first())) fail(`lens_id ${JSON.stringify(lensId)} is not a lens`);
+  if (lensId && !(await env.DB.prepare("SELECT 1 FROM lenses WHERE id = ?1 AND account = ?2").bind(lensId, account).first())) {
+    fail(`lens_id ${JSON.stringify(lensId)} is not a lens of account ${JSON.stringify(account)}`);
+  }
 
   // One version of each post per batch, the last occurrence in that batch.
   // The upsert applies them in request order and skips batches the Worker

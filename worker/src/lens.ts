@@ -147,7 +147,9 @@ export async function upsertLens(env: Env, req: Request) {
   const units = vectors.map(unit);
   const centroid = unit(units[0].map((_, i) => units.reduce((s, v) => s + v[i], 0) / units.length));
   const cosines = units.map((v) => dot(v, centroid)).sort((x, y) => x - y);
-  const openAt = quantile(cosines, 0.5);
+  // The median (the mean of the middle two for an even count), and the
+  // lower nearest-rank 10th percentile.
+  const openAt = median(cosines) as number;
   const glanceAt = quantile(cosines, 0.1);
   const now = Date.now();
   await env.DB.prepare(
@@ -165,8 +167,8 @@ export async function upsertLens(env: Env, req: Request) {
 // GET /lenses?account= (ingest): the lenses an account reads for. No
 // centroid; the extension needs only the id.
 export async function listLenses(env: Env, url: URL) {
-  const account = url.searchParams.get("account");
-  const rows = await env.DB.prepare("SELECT id, account, charter, open_at, glance_at FROM lenses WHERE ?1 IS NULL OR account = ?1 ORDER BY id")
+  const account = str(url.searchParams.get("account"), "account query parameter", 64);
+  const rows = await env.DB.prepare("SELECT id, account, charter, open_at, glance_at FROM lenses WHERE account = ?1 ORDER BY id")
     .bind(account)
     .all();
   return { lenses: rows.results };

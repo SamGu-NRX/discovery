@@ -61,7 +61,7 @@ export function sessionTabId() {
 }
 
 export function sessionInfo() {
-  return current ? { id: current.id, account: current.account, lensId: current.lens?.id ?? null } : null;
+  return current ? { id: current.id, account: current.account, lensId: current.lens?.verified ? current.lens.id : null } : null;
 }
 
 // The stop is written to session storage at once, so a service worker that
@@ -119,7 +119,7 @@ export function noteSessionCapture(sessionId, { operation, postIds, posts = [] }
   const s = current;
   if (!s || s.id !== sessionId) return;
   // A lens session reads its home feed in the order X sent it.
-  if (s.lens && (operation === "HomeTimeline" || operation === "HomeLatestTimeline")) {
+  if (s.lens && operation === "HomeTimeline") {
     for (const p of [...posts].sort((a, b) => a.position - b.position)) {
       if (s.lens.feedIds.has(p.id)) continue;
       s.lens.feedIds.add(p.id);
@@ -687,7 +687,20 @@ async function visitHomeAsLens(s) {
   if (!lenses.some((l) => l.id === s.lens.id && l.account === account)) {
     throw new StopSession("lens_unavailable", `lens ${s.lens.id} is not a lens of @${account}`);
   }
+  // From here its captures carry lens_id (sessionInfo).
+  s.lens.verified = true;
   const lens = s.lens;
+  // Steering and the baseline are about For You. X reopens home on the tab
+  // last used in this browser and selecting one takes a click, so a home
+  // that opened on Following ends the session; choosing For You once by hand
+  // fixes it.
+  for (let waited = 0; waited < 10_000 && !s.operations.has("HomeTimeline") && !s.operations.has("HomeLatestTimeline"); waited += 500) {
+    await sleep(500);
+    checkpoint(s);
+  }
+  if (s.operations.has("HomeLatestTimeline") && !s.operations.has("HomeTimeline")) {
+    throw new StopSession("lens_unavailable", "home opened on Following; choose For You once by hand in this profile");
+  }
   const io = {
     now: () => Date.now(),
     random: Math.random,
@@ -713,11 +726,15 @@ async function visitHomeAsLens(s) {
       return result.found;
     },
     label: async (posts) => {
+      let answer;
       try {
-        return await labelLensPosts(s.config, lens.id, posts);
+        answer = await labelLensPosts(s.config, lens.id, posts);
       } catch (err) {
         throw new StopSession("lens_unavailable", `the Worker did not label posts: ${err.message}`);
       }
+      const problem = labelProblem(answer, posts);
+      if (problem) throw new StopSession("lens_unavailable", `the Worker's labels are unusable: ${problem}`);
+      return answer;
     },
     openPermalink: async (id) => {
       await navigate(s, permalinkUrl(id));
@@ -732,7 +749,13 @@ async function visitHomeAsLens(s) {
   };
   if (lens.baseline) {
     const { posts, stop } = await recordBaseline(io, { count: 100 });
-    if (posts.length) await sendLensBaseline(s.config, lens.id, s.id, posts);
+    if (posts.length) {
+      try {
+        await sendLensBaseline(s.config, lens.id, s.id, posts);
+      } catch (err) {
+        throw new StopSession("lens_unavailable", `the Worker did not take the baseline: ${err.message}`);
+      }
+    }
     // The next session reads; the baseline is recorded once.
     const { config = {} } = await chrome.storage.local.get("config");
     await setLocal({ config: { ...config, lensBaseline: false } });
@@ -745,6 +768,21 @@ async function visitHomeAsLens(s) {
   } finally {
     await sendReads(s, lens);
   }
+}
+
+// Why a label answer cannot drive the reader, or null: it must label every
+// post it was asked about exactly once, with skip, glance or open.
+function labelProblem(answer, posts) {
+  if (!answer || !["model", "centroid"].includes(answer.source) || !Array.isArray(answer.labels)) return "no source or labels";
+  const want = new Set(posts.map((p) => p.id));
+  const seen = new Set();
+  for (const label of answer.labels) {
+    if (!want.has(label?.id)) return `a label for a post not asked about (${label?.id})`;
+    if (seen.has(label.id)) return `two labels for post ${label.id}`;
+    if (!["skip", "glance", "open"].includes(label.action)) return `action ${JSON.stringify(label.action)} for post ${label.id}`;
+    seen.add(label.id);
+  }
+  return seen.size === want.size ? null : "posts left unlabeled";
 }
 
 async function sendReads(s, lens) {

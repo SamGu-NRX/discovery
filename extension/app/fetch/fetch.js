@@ -68,6 +68,8 @@ async function autoRepoll() {
   const { repollJob: job } = await chrome.storage.session.get("repollJob");
   await chrome.storage.session.remove("repollJob");
   if (!job?.ids?.length || Date.now() - job.at > 10 * 60_000) return window.close();
+  // The lens may have been cleared since the alarm queued this.
+  if ((await loadConfig()).lensId !== job.lensId) return window.close();
   $("to-worker").checked = true;
   const parsed = parseJobs({
     limits: { detailCapPerPost: 1 },

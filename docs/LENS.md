@@ -17,7 +17,7 @@ X's home ranker predicts engagement from what an account does, including signals
 
 A lens session is the extension's active session, with every limit sessions already have: reservation with the Worker, the 24-hour pause after any back-off signal, request counting before a timeline appears, and minted URLs only. It runs on a browser profile whose popup names the lens.
 
-1. It opens home and checks with the Worker that the lens belongs to the account X shows. A profile signed in to Sam's own account is never read as a lens by mistake.
+1. It opens home and checks with the Worker that the lens belongs to the account X shows. A profile signed in to Sam's own account is never read as a lens by mistake. Captures carry `lens_id` only from this point on, and the Worker refuses a `lens_id` on any account but the lens's own. The lens reads For You only: X reopens home on the tab last used in the profile, selecting a tab would take a click, so a home that opened on Following ends the session (choose For You once by hand).
 2. It takes posts in the order the home feed delivered them, 20 at a time, and asks the Worker to label each as skip, glance or open (`POST /lenses/:id/label`).
 3. For each post it scrolls the post into view (`scrollToPost` in the page agent) and pauses for its label's dwell: about 1 s to skip, 4 s to glance, 20 s to open, each ±25% at random. The brief set these numbers; there is no measurement of X's dwell signal behind them. A post X has not rendered yet gets one more look 1.5 s later.
 4. When it has read everything loaded, it scrolls a screen. It stops at 120 posts or 20 minutes (configurable, capped at 150 and 25), or after six screens bring nothing new.
@@ -36,7 +36,7 @@ The Worker embeds each post (Workers AI `bge-base-en-v1.5`, the same model as `P
 - **novelty**: 0.5 if the lens has not seen the post before, plus 0.5 if the account does not follow its author. Follow state comes from X's user object (`relationship_perspectives.following`, else `legacy.following`) and is stored on each sighting as `author_followed`.
 - **project**: the share of the lens's project terms the text names, with two or more counting as 1.
 
-The action comes from a chat model when one is configured (`LENS_LABEL_URL`, an OpenAI-compatible endpoint, with `LENS_LABEL_MODEL` and an optional `LENS_LABEL_KEY` secret). Otherwise it comes from the centroid: open at or above `open_at`, glance at or above `glance_at`, skip below.
+The action comes from a chat model when one is configured (`LENS_LABEL_URL`, an OpenAI-compatible endpoint, with `LENS_LABEL_MODEL` and an optional `LENS_LABEL_KEY` secret). Otherwise it comes from the centroid: open at or above `open_at`, glance at or above `glance_at`, skip below. The extension checks the answer again: a batch that does not label every post once with skip, glance or open ends the session with `lens_unavailable`, which pauses nothing, as does a Worker that cannot list lenses, label or take a baseline.
 
 Both thresholds come from the exemplars. `open_at` is their median cosine to the centroid, and `glance_at` is their 10th percentile, so about nine exemplars in ten count as near. A model answer that does not name every post exactly once with a valid action is discarded, and the centroid labels the batch; the response says which labeler decided. The prompt marks post text as data, never instructions.
 
