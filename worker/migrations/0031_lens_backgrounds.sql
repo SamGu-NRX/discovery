@@ -17,6 +17,15 @@ CREATE TABLE lens_backgrounds (
   PRIMARY KEY (account, version)
 );
 
+-- The cron's last background attempt per account, and its error if it
+-- failed. The cron tries the account attempted longest ago first, so one
+-- that keeps failing does not hold the others back.
+CREATE TABLE lens_background_attempts (
+  account TEXT PRIMARY KEY,
+  at INTEGER NOT NULL,
+  error TEXT
+);
+
 -- The background a lens's centroid and thresholds were fitted against, and
 -- where its thresholds came from: 'baseline' (the day-1 For You top 100) or
 -- 'exemplars' (before any baseline).

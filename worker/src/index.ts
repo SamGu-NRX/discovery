@@ -410,12 +410,16 @@ export default {
       console.log(`[backstop] ${w.id} re-armed, next check in ${r.next_interval_s}s`);
     }
     const expired = await expireProposals(env, now);
-    // Lens backgrounds (src/lens.ts): retaken once a day per lens account.
-    const backgrounds = await refreshDueBackgrounds(env, now).catch((err) => {
-      console.log(`[cron] lens backgrounds failed: ${(err as Error).message}`);
-      return [];
-    });
-    if (backgrounds.length) console.log(`[cron] lens backgrounds retaken: ${backgrounds.map((b) => `${b.account} v${b.version}`).join(", ")}`);
+    // Lens backgrounds (src/lens.ts): one due account per run. A failure is
+    // the account's own, recorded in lens_background_attempts; this catch is
+    // for the lookup around it, so the run is still recorded below.
+    try {
+      const bg = await refreshDueBackgrounds(env, now);
+      if (bg?.done) console.log(`[cron] lens background retaken: ${bg.account} v${bg.done.version}`);
+      if (bg?.error) console.log(`[cron] lens background of ${bg.account} failed: ${bg.error}`);
+    } catch (err) {
+      console.log(`[cron] lens backgrounds: ${(err as Error).message}`);
+    }
     await env.DB.prepare("INSERT INTO cron_runs (ts, cron, overdue_checked, notifications_retried) VALUES (?1, ?2, ?3, 0)")
       .bind(now, controller.cron, results.length)
       .run();

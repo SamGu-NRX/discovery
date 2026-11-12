@@ -64,6 +64,9 @@ const BG_TEXTS = ["a recipe for soup", "football tonight", "agent notes", "claud
 let bgSeq = 0;
 async function background(account, texts = BG_TEXTS) {
   bgSeq += 1;
+  // A refresh within an hour of the last one is refused; tests that refit an
+  // account age its earlier backgrounds first.
+  await s.d1(`UPDATE lens_backgrounds SET created_at = created_at - 2 * 3600000 WHERE account = '${account}'`);
   const src = `bgsrc-${account}-${bgSeq}`;
   await ingest(src, Array.from({ length: 60 }, (_, i) => post(String(9_950_000 + bgSeq * 100 + i), texts[i % texts.length])));
   return s.call("POST", "/lenses/backgrounds/refresh", { account, source_account: src }, { token: "runner" });
@@ -327,6 +330,7 @@ test("the first baseline sets open_at and glance_at at its 90th and 70th percent
 test("the cron retakes a lens account's background from its own posts once a day and refits its lenses", async () => {
   await makeLens("daily", "cronacct");
   const before = (await s.d1("SELECT background_version FROM lenses WHERE id = 'daily'"))[0].background_version;
+  await s.d1("UPDATE lens_backgrounds SET created_at = created_at - 2 * 3600000 WHERE account = 'cronacct'");
   const tooFew = await s.call("POST", "/lenses/backgrounds/refresh", { account: "cronacct" }, { raw: true, token: "runner" });
   assert.equal(tooFew.status, 400, "cronacct has seen nothing itself yet");
   assert.match((await tooFew.json()).error, /needs at least 50/);
@@ -345,4 +349,85 @@ test("the cron retakes a lens account's background from its own posts once a day
   // A background taken under a day ago is not retaken.
   await fetch(`${s.base}/__scheduled?cron=*/15+*+*+*+*`);
   assert.equal((await s.d1("SELECT max(version) AS v FROM lens_backgrounds WHERE account = 'cronacct'"))[0].v, before + 1);
+});
+
+// Review round 1 (lens-v1 ec85b64..fa3dd76). Each test below fails on fa3dd76.
+
+test("a refresh takes at most 500 posts, and an account's background is retaken at most once an hour", async () => {
+  await makeLens("capped", "capacct");
+  const big = await s.call("POST", "/lenses/backgrounds/refresh", { account: "capacct", source_account: "seed", max: 501 }, { raw: true, token: "runner" });
+  assert.equal(big.status, 400);
+  assert.match((await big.json()).error, /max must be 50 to 500/);
+  const again = await s.call("POST", "/lenses/backgrounds/refresh", { account: "capacct", source_account: "seed" }, { raw: true, token: "runner" });
+  assert.equal(again.status, 429, "makeLens took one moments ago");
+  assert.match((await again.json()).error, /one per hour/);
+});
+
+// A lens account whose background is over a day old, with `texts` as the
+// posts it saw in the last day.
+async function dueAccount(account, texts, idBase) {
+  await makeLens(`lens-${account}`, account);
+  await ingest(account, texts.map((t, i) => post(String(idBase + i), t)));
+  await s.d1(`UPDATE lens_backgrounds SET created_at = created_at - 25 * 3600000 WHERE account = '${account}'`);
+}
+const latestVersion = async (account) => (await s.d1(`SELECT max(version) AS v FROM lens_backgrounds WHERE account = '${account}'`))[0].v;
+const cron = () => fetch(`${s.base}/__scheduled?cron=*/15+*+*+*+*`);
+const feed = (n) => Array.from({ length: n }, (_, i) => BG_TEXTS[i % BG_TEXTS.length]);
+
+test("the cron's gate counts only posts with text, so an account that saw only empty posts does not stop the next one", async () => {
+  await dueAccount("aaa-empty", Array.from({ length: 60 }, () => ""), 9_960_000);
+  await dueAccount("aab-ok", feed(60), 9_960_100);
+  const v = await latestVersion("aab-ok");
+  assert.equal((await cron()).status, 200);
+  assert.equal(await latestVersion("aab-ok"), v + 1, "retaken in the same run");
+  assert.deepEqual(await s.d1("SELECT account FROM lens_background_attempts WHERE account = 'aaa-empty'"), [], "the empty account was never attempted");
+});
+
+test("an account whose refresh fails is recorded and goes to the back, and the next due account is retaken", async () => {
+  await dueAccount("aba-broken", feed(60), 9_961_000);
+  await dueAccount("abb-ok", feed(60), 9_961_100);
+  // A lens with no exemplars left cannot be refit, so the account's refresh fails.
+  await s.d1("UPDATE lenses SET exemplar_ids_json = '[]' WHERE account = 'aba-broken'");
+  const v = await latestVersion("abb-ok");
+  await cron();
+  const failed = await s.d1("SELECT error FROM lens_background_attempts WHERE account = 'aba-broken'");
+  assert.equal(failed.length, 1);
+  assert.match(failed[0].error, /lens vectors: mean: no vectors/);
+  await cron();
+  assert.equal(await latestVersion("abb-ok"), v + 1, "the second run takes the account the first did not reach");
+  assert.equal((await s.d1("SELECT error IS NULL AS ok FROM lens_background_attempts WHERE account = 'abb-ok'"))[0].ok, 1);
+});
+
+test("a stored zero background or a centroid of the wrong length fails the request instead of scoring raw cosines", async () => {
+  await makeLens("vectors", "vecacct");
+  const label = () => s.call("POST", "/lenses/vectors/label", { posts: [{ id: "9962001", text: "agent mcp", author_handle: "a" }] }, { raw: true, token: "ingest" });
+  assert.equal((await label()).status, 200);
+  const version = (await s.d1("SELECT background_version FROM lenses WHERE id = 'vectors'"))[0].background_version;
+  await s.d1(`UPDATE lens_backgrounds SET mean_json = '[0,0,0,0,0,0,0,0]' WHERE account = 'vecacct' AND version = ${version}`);
+  const zero = await label();
+  assert.equal(zero.status, 500);
+  assert.match((await zero.json()).error, /lens vectors: background .* norm at least/);
+
+  await background("vecacct");
+  await s.call("POST", "/lenses", { id: "vectors", account: "vecacct", charter: "c", exemplar_ids: exemplarIds });
+  await s.d1("UPDATE lenses SET centroid_json = '[1,0,0]' WHERE id = 'vectors'");
+  const short = await label();
+  assert.equal(short.status, 500);
+  assert.match((await short.json()).error, /centroid of lens vectors has 3 dimensions, expected 8/);
+});
+
+test("a baseline recorded before 0031 gets its text back from x_posts, and the refit keeps its thresholds from it", async () => {
+  await makeLens("legacy", "legacyacct");
+  const texts = ["MCP agent harness", "Codex agent harness notes", "Claude Code harness with MCP and memory", "agent memory", "agent tips", "claude", "recipe", "football", "a recipe for soup", "weather", "codex mcp", "harness memory"];
+  const ids = texts.map((_, i) => String(9_963_000 + i));
+  await ingest("legacyfeed", ids.map((id, i) => post(id, texts[i])));
+  await s.d1(`INSERT INTO lens_baselines (lens_id, session_id, at, post_ids_json, tastes_json, purity) VALUES ('legacy', 'old', 1, '${JSON.stringify(ids)}', '[]', 0)`);
+  const refit = await background("legacyacct");
+  assert.equal(refit.lenses[0].thresholds_source, "baseline", JSON.stringify(refit));
+  const row = (await s.d1("SELECT texts_json FROM lens_baselines WHERE lens_id = 'legacy' AND session_id = 'old'"))[0];
+  assert.deepEqual(
+    JSON.parse(row.texts_json).map((p) => p.id),
+    ids,
+    "written back in feed order",
+  );
 });

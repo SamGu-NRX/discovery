@@ -7,7 +7,8 @@
 
 import type { Env } from "./check";
 import { fail, HttpError, readJson, str } from "./http";
-import { composeText, isThin, linkContext } from "./lens-text";
+import { composeText, isThin, linkContext, readBundle } from "./lens-text";
+import { centered, checkVectors, dot, isVector, meanOf, parseStoredVector, unit, VectorError } from "./lens-vec";
 import { EMBED_MODEL } from "./x";
 
 const ACTIONS = ["skip", "glance", "open"] as const;
@@ -56,22 +57,16 @@ async function embedTexts(env: Env, texts: string[]): Promise<{ model: string; v
     if (!res.ok) throw new Error(`embeddings endpoint answered ${res.status}`);
     const body = (await res.json()) as { data?: { embedding?: unknown }[] };
     const vectors = (body.data ?? []).map((d) => d.embedding);
-    if (vectors.length !== texts.length || !vectors.every(isVector)) throw new Error("embeddings endpoint returned a malformed answer");
+    if (vectors.length !== texts.length || !vectors.every(isVector)) throw new Error("embeddings endpoint returned a malformed answer (a missing, non-finite or zero vector)");
+    checkVectors(vectors, "embeddings endpoint");
     return { model: EMBED_MODEL, vectors: vectors as number[][] };
   }
   const out = (await env.AI.run(EMBED_MODEL, { text: texts })) as { data?: unknown[] };
-  if (!Array.isArray(out.data) || out.data.length !== texts.length || !out.data.every(isVector)) throw new Error("Workers AI returned malformed embeddings");
+  if (!Array.isArray(out.data) || out.data.length !== texts.length || !out.data.every(isVector)) throw new Error("Workers AI returned malformed embeddings (a missing, non-finite or zero vector)");
+  checkVectors(out.data, "Workers AI embeddings");
   return { model: EMBED_MODEL, vectors: out.data as number[][] };
 }
 
-const isVector = (v: unknown): v is number[] => Array.isArray(v) && v.length > 0 && v.every((x) => typeof x === "number" && Number.isFinite(x));
-
-export function unit(v: number[]): number[] {
-  const n = Math.hypot(...v);
-  return n > 0 ? v.map((x) => x / n) : v;
-}
-
-const dot = (a: number[], b: number[]) => a.reduce((s, x, i) => s + x * (b[i] ?? 0), 0);
 
 function quantile(sorted: number[], q: number): number {
   if (!sorted.length) return NaN;
@@ -126,30 +121,75 @@ async function modelLabels(env: Env, charter: string, posts: { id: string; text:
 // captured on Nov 12 between about 0.67 and 0.84; half of 10,142 posts sat
 // near two unrelated lenses, and held-out exemplars beat ordinary posts at an
 // AUC of only 0.69. With the mean subtracted, 0.9% sat near both and the AUC
-// was 0.94 (docs/LENS.md, "Measured on captured posts").
+// was 0.94 (docs/LENS.md, "Measured on captured posts"). The vector checks
+// that keep a zero background or mixed dimensions from scoring quietly are
+// in src/lens-vec.ts.
 
 const MIN_BACKGROUND_POSTS = 50;
+export const MAX_BACKGROUND_POSTS = 500;
 const EMBED_BATCH = 100;
+// A background is retaken at most this often per account. The cron needs it
+// once a day; the route is for the first one and for repairs.
+export const REFRESH_COOLDOWN_MS = 3600_000;
+
+// Workers Free allows 50 subrequests per invocation. Each embedding call and
+// each R2 read counts against this request's budget, which leaves room for
+// the rest of the invocation; the cron, which also checks overdue watchers,
+// gets less. Past it a request fails loudly instead of being cut off midway.
+export const SUBREQUEST_BUDGET = 40;
+export const CRON_SUBREQUEST_BUDGET = 30;
+// Thin posts read their knowledge-store bundle; at most this many reads per
+// request. Thin posts past it embed as their own text.
+export const MAX_BUNDLE_READS = 10;
+
+export class Budget {
+  constructor(
+    public left: number,
+    public bundleReads = MAX_BUNDLE_READS,
+  ) {}
+  spend(what: string) {
+    if (this.left < 1) throw new HttpError(503, `this request would need more than its ${SUBREQUEST_BUDGET} subrequests (at: ${what}); split the work`);
+    this.left -= 1;
+  }
+}
 
 interface Background {
   version: number;
   mean: number[];
 }
 
-async function embedAll(env: Env, texts: string[]): Promise<number[][]> {
-  const out: number[][] = [];
-  for (let i = 0; i < texts.length; i += EMBED_BATCH) out.push(...(await embedTexts(env, texts.slice(i, i + EMBED_BATCH))).vectors);
-  return out;
+function vectorFailure(err: unknown): never {
+  if (err instanceof VectorError) throw new HttpError(500, `lens vectors: ${err.message}`);
+  throw err;
 }
 
-const centered = (v: number[], mean: number[]) => unit(unit(v).map((x, i) => x - (mean[i] ?? 0)));
-const meanOf = (vs: number[][]) => vs[0].map((_, i) => vs.reduce((s, v) => s + v[i], 0) / vs.length);
+async function embedAll(env: Env, texts: string[], budget: Budget): Promise<number[][]> {
+  const out: number[][] = [];
+  for (let i = 0; i < texts.length; i += EMBED_BATCH) {
+    budget.spend("embedding call");
+    out.push(...(await embedTexts(env, texts.slice(i, i + EMBED_BATCH))).vectors);
+  }
+  // Each call is checked on its own; this catches batches of different lengths.
+  if (out.length) {
+    try {
+      checkVectors(out, "embeddings");
+    } catch (err) {
+      vectorFailure(err);
+    }
+  }
+  return out;
+}
 
 async function latestBackground(env: Env, account: string): Promise<(Background & { created_at: number }) | null> {
   const row = await env.DB.prepare("SELECT version, mean_json, created_at FROM lens_backgrounds WHERE account = ?1 ORDER BY version DESC LIMIT 1")
     .bind(account)
     .first<{ version: number; mean_json: string; created_at: number }>();
-  return row ? { version: row.version, mean: JSON.parse(row.mean_json), created_at: row.created_at } : null;
+  if (!row) return null;
+  try {
+    return { version: row.version, mean: parseStoredVector(row.mean_json, `background ${row.version} of ${account}`), created_at: row.created_at };
+  } catch (err) {
+    vectorFailure(err);
+  }
 }
 
 async function backgroundFor(env: Env, lens: LensRow): Promise<Background> {
@@ -158,35 +198,68 @@ async function backgroundFor(env: Env, lens: LensRow): Promise<Background> {
     .bind(lens.account, lens.background_version)
     .first<{ mean_json: string }>();
   if (!row) throw new HttpError(409, `background ${lens.background_version} of account ${lens.account} is missing`);
-  return { version: lens.background_version, mean: JSON.parse(row.mean_json) };
+  try {
+    return { version: lens.background_version, mean: parseStoredVector(row.mean_json, `background ${lens.background_version} of ${lens.account}`) };
+  } catch (err) {
+    vectorFailure(err);
+  }
 }
 
-// The knowledge store's bundle for a post (docs/KNOWLEDGE.md), when this
-// Worker has the store and the post has one.
-async function storedLinkContext(env: Env, postId: string) {
-  if (!env.KNOWLEDGE) return null;
-  let row: { json_key: string } | null;
+// A lens's stored centroid with its background, checked to share one length.
+async function storedFit(env: Env, lens: LensRow) {
+  const { mean } = await backgroundFor(env, lens);
   try {
-    row = await env.DB.prepare("SELECT json_key FROM bundles WHERE post_id = ?1 ORDER BY version DESC LIMIT 1").bind(postId).first<{ json_key: string }>();
+    return { mean, centroid: parseStoredVector(lens.centroid_json, `centroid of lens ${lens.id}`, mean.length) };
   } catch (err) {
-    if (/no such table/i.test((err as Error).message)) return null;
+    vectorFailure(err);
+  }
+}
+
+// The knowledge store's latest bundle for each of `ids` that has one, when
+// this Worker has the store: one D1 query, then at most the budget's bundle
+// reads. A read that fails costs that post its context only.
+async function storedBundles(env: Env, ids: string[], budget: Budget): Promise<Map<string, unknown>> {
+  const out = new Map<string, unknown>();
+  if (!env.KNOWLEDGE || !ids.length) return out;
+  let rows: { post_id: string; json_key: string }[];
+  try {
+    rows = (
+      await env.DB.prepare(
+        `SELECT b.post_id, b.json_key FROM bundles b
+         WHERE b.post_id IN (SELECT value FROM json_each(?1))
+           AND b.version = (SELECT max(version) FROM bundles WHERE post_id = b.post_id)`,
+      )
+        .bind(JSON.stringify(ids))
+        .all<{ post_id: string; json_key: string }>()
+    ).results;
+  } catch (err) {
+    if (/no such table/i.test((err as Error).message)) return out;
     throw err;
   }
-  if (!row) return null;
-  const obj = await env.KNOWLEDGE.get(row.json_key);
-  return obj ? linkContext(await obj.json()) : null;
+  for (const row of rows) {
+    if (budget.bundleReads < 1 || budget.left < 1) break;
+    budget.bundleReads -= 1;
+    budget.spend("knowledge bundle read");
+    out.set(row.post_id, await readBundle(env.KNOWLEDGE, row.json_key, (why) => console.log(`[lens] ${why}; the post embeds as its own text`)));
+  }
+  return out;
 }
 
 // What each post embeds as: its own text, or for a post with little text of
 // its own, that plus its linked page's title and first paragraph
 // (src/lens-text.ts).
-async function embeddingTexts(env: Env, posts: { id: string; text: string }[]): Promise<string[]> {
-  return Promise.all(posts.map(async (p) => (isThin(p.text) ? composeText(p.text, await storedLinkContext(env, p.id)) : p.text)));
+async function embeddingTexts(env: Env, posts: { id: string; text: string }[], budget: Budget): Promise<string[]> {
+  const bundles = await storedBundles(env, posts.filter((p) => isThin(p.text)).map((p) => p.id), budget);
+  return posts.map((p) => (bundles.has(p.id) ? composeText(p.text, linkContext(bundles.get(p.id))) : p.text));
 }
 
-async function tastesFor(env: Env, posts: { id: string; text: string }[], fits: { mean: number[]; centroid: number[] }[]): Promise<number[][]> {
-  const vectors = posts.length ? await embedAll(env, await embeddingTexts(env, posts)) : [];
-  return vectors.map((v) => fits.map((f) => dot(centered(v, f.mean), f.centroid)));
+async function tastesFor(env: Env, posts: { id: string; text: string }[], fits: { mean: number[]; centroid: number[] }[], budget: Budget): Promise<number[][]> {
+  const vectors = posts.length ? await embedAll(env, await embeddingTexts(env, posts, budget), budget) : [];
+  try {
+    return vectors.map((v) => fits.map((f) => dot(centered(v, f.mean), f.centroid)));
+  } catch (err) {
+    vectorFailure(err);
+  }
 }
 
 interface Fit {
@@ -206,97 +279,189 @@ interface Fit {
 // own purity is then about 0.3 by construction, and later sessions are read
 // against it. Before any baseline, the exemplars' median and 10th percentile
 // stand in.
-async function fit(env: Env, exemplars: { id: string; text: string }[], background: Background, baseline: { id: string; text: string }[] | null): Promise<Fit> {
-  const ex = (await embedAll(env, await embeddingTexts(env, exemplars))).map((v) => centered(v, background.mean));
-  const centroid = unit(meanOf(ex));
+async function fit(env: Env, exemplars: { id: string; text: string }[], background: Background, baseline: { id: string; text: string }[] | null, budget: Budget): Promise<Fit> {
+  const vectors = await embedAll(env, await embeddingTexts(env, exemplars, budget), budget);
+  let ex: number[][];
+  let centroid: number[];
+  try {
+    ex = vectors.map((v) => centered(v, background.mean));
+    centroid = unit(meanOf(ex));
+  } catch (err) {
+    vectorFailure(err);
+  }
   if (baseline?.length) {
-    const tastes = (await tastesFor(env, baseline, [{ mean: background.mean, centroid }])).map((t) => t[0]).sort((a, b) => a - b);
+    const tastes = (await tastesFor(env, baseline, [{ mean: background.mean, centroid }], budget)).map((t) => t[0]).sort((a, b) => a - b);
     return { centroid, open_at: quantile(tastes, 0.9), glance_at: quantile(tastes, 0.7), thresholds_source: "baseline" };
   }
   const cosines = ex.map((v) => dot(v, centroid)).sort((a, b) => a - b);
   return { centroid, open_at: median(cosines) as number, glance_at: quantile(cosines, 0.1), thresholds_source: "exemplars" };
 }
 
+// The posts of a lens's first baseline. Baselines recorded before migration
+// 0031 have no texts_json; their text is rebuilt from x_posts by
+// post_ids_json and written back, so the thresholds still come from the
+// baseline. One whose posts the Worker no longer has (fewer than half, or
+// fewer than 10) counts as no baseline, and the exemplars stand in.
 async function firstBaseline(env: Env, lensId: string): Promise<{ id: string; text: string }[] | null> {
-  const row = await env.DB.prepare("SELECT texts_json FROM lens_baselines WHERE lens_id = ?1 AND texts_json IS NOT NULL ORDER BY at LIMIT 1")
+  const row = await env.DB.prepare("SELECT session_id, post_ids_json, texts_json FROM lens_baselines WHERE lens_id = ?1 ORDER BY at LIMIT 1")
     .bind(lensId)
-    .first<{ texts_json: string }>();
-  return row ? JSON.parse(row.texts_json) : null;
+    .first<{ session_id: string; post_ids_json: string; texts_json: string | null }>();
+  if (!row) return null;
+  if (row.texts_json !== null) return JSON.parse(row.texts_json);
+  const ids = JSON.parse(row.post_ids_json) as string[];
+  const stored = new Map(
+    (
+      await env.DB.prepare("SELECT id, text FROM x_posts WHERE id IN (SELECT value FROM json_each(?1)) AND length(text) > 0")
+        .bind(JSON.stringify(ids))
+        .all<{ id: string; text: string }>()
+    ).results.map((r) => [r.id, r.text]),
+  );
+  const posts = ids.filter((id) => stored.has(id)).map((id) => ({ id, text: stored.get(id)! }));
+  if (posts.length < 10 || posts.length * 2 < ids.length) return null;
+  await env.DB.prepare("UPDATE lens_baselines SET texts_json = ?3 WHERE lens_id = ?1 AND session_id = ?2").bind(lensId, row.session_id, JSON.stringify(posts)).run();
+  return posts;
 }
+
+export const MAX_EXEMPLARS = 100;
 
 async function exemplarPosts(env: Env, ids: string[]) {
   return (await env.DB.prepare("SELECT id, text FROM x_posts WHERE id IN (SELECT value FROM json_each(?1))").bind(JSON.stringify(ids)).all<{ id: string; text: string }>()).results;
 }
 
+// The account's posts with text, from `source`'s sightings since `since`.
+function backgroundPosts(env: Env, source: string, since: number, max: number) {
+  return env.DB.prepare(
+    `SELECT p.id, p.text FROM x_posts p JOIN (
+       SELECT post_id, max(seen_at) AS last FROM x_sightings WHERE account = ?1 AND seen_at >= ?2 GROUP BY post_id
+     ) s ON s.post_id = p.id WHERE length(p.text) > 0 ORDER BY s.last DESC LIMIT ?3`,
+  ).bind(source, since, max);
+}
+
 // Takes a new background for `account` from the posts `source` saw in the
-// last `hours`, and refits every lens of the account against it.
-async function takeBackground(env: Env, account: string, source: string, hours: number, max: number) {
-  const since = Date.now() - hours * 3600_000;
-  const posts = (
-    await env.DB.prepare(
-      `SELECT p.id, p.text FROM x_posts p JOIN (
-         SELECT post_id, max(seen_at) AS last FROM x_sightings WHERE account = ?1 AND seen_at >= ?2 GROUP BY post_id
-       ) s ON s.post_id = p.id WHERE length(p.text) > 0 ORDER BY s.last DESC LIMIT ?3`,
-    )
-      .bind(source, since, max)
-      .all<{ id: string; text: string }>()
-  ).results;
+// last `hours`, and refits every lens of the account against it. Everything
+// is computed first and written in one batch, so a failure leaves the old
+// background and fits in place. Two refreshes at once both read the same
+// latest version; the second insert then hits the (account, version) key and
+// answers 409.
+async function takeBackground(env: Env, account: string, source: string, hours: number, max: number, budget: Budget) {
+  if (max > MAX_BACKGROUND_POSTS) fail(`max must be at most ${MAX_BACKGROUND_POSTS}`);
+  // Only the latest version and when it was taken: a refresh is also how a
+  // corrupt stored mean gets replaced, so it must not parse that mean.
+  const prev = await env.DB.prepare("SELECT version, created_at FROM lens_backgrounds WHERE account = ?1 ORDER BY version DESC LIMIT 1")
+    .bind(account)
+    .first<{ version: number; created_at: number }>();
+  const now = Date.now();
+  if (prev && now - prev.created_at < REFRESH_COOLDOWN_MS) {
+    throw new HttpError(429, `account ${account}'s background was taken ${Math.round((now - prev.created_at) / 60_000)} minutes ago; one per hour`);
+  }
+  const since = now - hours * 3600_000;
+  const posts = (await backgroundPosts(env, source, since, max).all<{ id: string; text: string }>()).results;
   if (posts.length < MIN_BACKGROUND_POSTS) {
     fail(`${source} saw ${posts.length} posts with text in the last ${hours} hours; a background needs at least ${MIN_BACKGROUND_POSTS}`);
   }
-  const mean = meanOf((await embedAll(env, posts.map((p) => p.text))).map(unit));
-  const prev = await latestBackground(env, account);
-  const version = (prev?.version ?? 0) + 1;
-  const now = Date.now();
-  await env.DB.prepare(
-    "INSERT INTO lens_backgrounds (account, version, mean_json, posts, source_account, since, embed_model, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-  )
-    .bind(account, version, JSON.stringify(mean), posts.length, source, since, EMBED_MODEL, now)
-    .run();
-  const lenses = (await env.DB.prepare("SELECT * FROM lenses WHERE account = ?1 ORDER BY id").bind(account).all<LensRow>()).results;
-  const refit = [];
-  for (const lens of lenses) {
-    const f = await fit(env, await exemplarPosts(env, JSON.parse(lens.exemplar_ids_json)), { version, mean }, await firstBaseline(env, lens.id));
-    await env.DB.prepare(
-      "UPDATE lenses SET centroid_json = ?2, open_at = ?3, glance_at = ?4, thresholds_source = ?5, background_version = ?6, updated_at = ?7 WHERE id = ?1",
-    )
-      .bind(lens.id, JSON.stringify(f.centroid), f.open_at, f.glance_at, f.thresholds_source, version, now)
-      .run();
-    refit.push({ id: lens.id, open_at: f.open_at, glance_at: f.glance_at, thresholds_source: f.thresholds_source });
+  let mean: number[];
+  try {
+    mean = meanOf((await embedAll(env, posts.map((p) => p.text), budget)).map(unit));
+    checkVectors([mean], "background mean");
+  } catch (err) {
+    vectorFailure(err);
   }
-  return { account, version, posts: posts.length, source_account: source, lenses: refit };
+  const version = (prev?.version ?? 0) + 1;
+  const lenses = (await env.DB.prepare("SELECT * FROM lenses WHERE account = ?1 ORDER BY id").bind(account).all<LensRow>()).results;
+  const fits: { lens: LensRow; f: Fit }[] = [];
+  for (const lens of lenses) {
+    fits.push({ lens, f: await fit(env, await exemplarPosts(env, JSON.parse(lens.exemplar_ids_json)), { version, mean }, await firstBaseline(env, lens.id), budget) });
+  }
+  try {
+    await env.DB.batch([
+      env.DB.prepare("INSERT INTO lens_backgrounds (account, version, mean_json, posts, source_account, since, embed_model, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)").bind(
+        account,
+        version,
+        JSON.stringify(mean),
+        posts.length,
+        source,
+        since,
+        EMBED_MODEL,
+        now,
+      ),
+      ...fits.map(({ lens, f }) =>
+        env.DB.prepare("UPDATE lenses SET centroid_json = ?2, open_at = ?3, glance_at = ?4, thresholds_source = ?5, background_version = ?6, updated_at = ?7 WHERE id = ?1").bind(
+          lens.id,
+          JSON.stringify(f.centroid),
+          f.open_at,
+          f.glance_at,
+          f.thresholds_source,
+          version,
+          now,
+        ),
+      ),
+    ]);
+  } catch (err) {
+    if (/UNIQUE|PRIMARY KEY/i.test((err as Error).message)) throw new HttpError(409, `another refresh of ${account} took version ${version} first`);
+    throw err;
+  }
+  return {
+    account,
+    version,
+    posts: posts.length,
+    source_account: source,
+    lenses: fits.map(({ lens, f }) => ({ id: lens.id, open_at: f.open_at, glance_at: f.glance_at, thresholds_source: f.thresholds_source })),
+  };
 }
 
-// POST /lenses/backgrounds/refresh (admin or runner): { account,
-// source_account?, hours? = 24, max? = 500 }. A new lens account has seen
-// nothing yet, so its first background comes from another account's posts
-// (source_account), until the daily refresh can use its own.
+// POST /lenses/backgrounds/refresh (runner): { account, source_account?,
+// hours? = 24, max? = 500 }. A new lens account has seen nothing yet, so its
+// first background comes from another account's posts (source_account),
+// until the daily refresh can use its own.
 export async function refreshBackground(env: Env, req: Request) {
   const b = await readJson<Record<string, unknown>>(req);
   const account = str(b.account, "account", 64).replace(/^@/, "");
   const source = b.source_account === undefined ? account : str(b.source_account, "source_account", 64).replace(/^@/, "");
   const hours = b.hours ?? 24;
   if (!Number.isInteger(hours) || (hours as number) < 1 || (hours as number) > 24 * 30) fail("hours must be 1 to 720");
-  const max = b.max ?? 500;
-  if (!Number.isInteger(max) || (max as number) < MIN_BACKGROUND_POSTS || (max as number) > 2000) fail(`max must be ${MIN_BACKGROUND_POSTS} to 2000`);
-  return takeBackground(env, account, source, hours as number, max as number);
+  const max = b.max ?? MAX_BACKGROUND_POSTS;
+  if (!Number.isInteger(max) || (max as number) < MIN_BACKGROUND_POSTS || (max as number) > MAX_BACKGROUND_POSTS) fail(`max must be ${MIN_BACKGROUND_POSTS} to ${MAX_BACKGROUND_POSTS}`);
+  return takeBackground(env, account, source, hours as number, max as number, new Budget(SUBREQUEST_BUDGET));
 }
 
-// From the cron: once a day, each lens account's background is retaken from
-// the posts it saw in the last 24 hours, when it saw enough of them.
+// From the cron: retakes one lens account's background per run, among those
+// whose background is over a day old and that saw at least 50 posts with
+// text in the last 24 hours. The account tried longest ago goes first, so one
+// that keeps failing does not hold the others back; each attempt and its
+// error are recorded in lens_background_attempts. One per run keeps the cron
+// inside its subrequest budget, and it runs every 15 minutes.
 export async function refreshDueBackgrounds(env: Env, now: number) {
-  const accounts = (await env.DB.prepare("SELECT DISTINCT account FROM lenses").all<{ account: string }>()).results.map((r) => r.account);
-  const done = [];
-  for (const account of accounts) {
-    const latest = await latestBackground(env, account);
-    if (latest && now - latest.created_at < 24 * 3600_000) continue;
-    const seen = await env.DB.prepare("SELECT count(DISTINCT post_id) AS n FROM x_sightings WHERE account = ?1 AND seen_at >= ?2")
+  const { results } = await env.DB.prepare(
+    `SELECT l.account FROM (SELECT DISTINCT account FROM lenses) l
+     LEFT JOIN lens_background_attempts a ON a.account = l.account
+     WHERE NOT EXISTS (SELECT 1 FROM lens_backgrounds b WHERE b.account = l.account AND b.created_at > ?1)
+     ORDER BY coalesce(a.at, 0), l.account`,
+  )
+    .bind(now - 24 * 3600_000)
+    .all<{ account: string }>();
+  for (const { account } of results) {
+    const seen = await env.DB.prepare(
+      `SELECT count(*) AS n FROM x_posts p WHERE length(p.text) > 0
+         AND p.id IN (SELECT post_id FROM x_sightings WHERE account = ?1 AND seen_at >= ?2)`,
+    )
       .bind(account, now - 24 * 3600_000)
       .first<{ n: number }>();
     if ((seen?.n ?? 0) < MIN_BACKGROUND_POSTS) continue;
-    done.push(await takeBackground(env, account, account, 24, 500));
+    let done = null;
+    let error: string | null = null;
+    try {
+      done = await takeBackground(env, account, account, 24, MAX_BACKGROUND_POSTS, new Budget(CRON_SUBREQUEST_BUDGET));
+    } catch (err) {
+      error = (err as Error).message.slice(0, 500);
+    }
+    await env.DB.prepare(
+      "INSERT INTO lens_background_attempts (account, at, error) VALUES (?1, ?2, ?3) ON CONFLICT (account) DO UPDATE SET at = excluded.at, error = excluded.error",
+    )
+      .bind(account, now, error)
+      .run();
+    return { account, done, error };
   }
-  return done;
+  return null;
 }
 
 // ---- lenses ---------------------------------------------------------------
@@ -319,11 +484,12 @@ export async function upsertLens(env: Env, req: Request) {
   const terms = b.project_terms ?? [];
   if (!Array.isArray(terms) || !terms.every((t) => typeof t === "string" && t.length > 0 && t.length <= 60)) fail("project_terms must be an array of short strings");
   const exemplarIds = [...new Set(b.exemplar_ids as string[])];
+  if (exemplarIds.length > MAX_EXEMPLARS) fail(`a lens takes at most ${MAX_EXEMPLARS} exemplars, one embedding call`);
   const found = await exemplarPosts(env, exemplarIds);
   if (found.length < MIN_EXEMPLARS) fail(`only ${found.length} of the exemplar_ids are stored posts; a lens needs at least ${MIN_EXEMPLARS}`);
   const background = await latestBackground(env, account);
   if (!background) fail(`account ${account} has no background yet; POST /lenses/backgrounds/refresh first (with source_account for an account that has seen nothing)`);
-  const f = await fit(env, found, background, await firstBaseline(env, id));
+  const f = await fit(env, found, background, await firstBaseline(env, id), new Budget(SUBREQUEST_BUDGET));
   const now = Date.now();
   await env.DB.prepare(
     `INSERT INTO lenses (id, account, charter, exemplar_ids_json, centroid_json, embed_model, open_at, glance_at, project_terms_json, created_at, updated_at, background_version, thresholds_source)
@@ -399,10 +565,8 @@ export async function labelPosts(env: Env, id: string, req: Request) {
   const lens = await loadLens(env, id);
   const b = await readJson<Record<string, unknown>>(req, 256 * 1024);
   const posts = readPosts(b.posts, MAX_LABEL_POSTS);
-  const centroid = JSON.parse(lens.centroid_json) as number[];
   const terms = JSON.parse(lens.project_terms_json) as string[];
-  const { mean } = await backgroundFor(env, lens);
-  const tastes = await tastesFor(env, posts, [{ mean, centroid }]);
+  const tastes = await tastesFor(env, posts, [await storedFit(env, lens)], new Budget(SUBREQUEST_BUDGET));
   const seen = await env.DB.prepare(
     "SELECT DISTINCT post_id FROM x_sightings WHERE lens_id = ?1 AND post_id IN (SELECT value FROM json_each(?2))",
   )
@@ -507,9 +671,7 @@ export async function recordBaseline(env: Env, id: string, req: Request) {
   const b = await readJson<Record<string, unknown>>(req, 512 * 1024);
   const sessionId = str(b.session_id, "session_id", 128);
   const posts = readPosts(b.posts, 100);
-  const centroid = JSON.parse(lens.centroid_json) as number[];
-  const { mean } = await backgroundFor(env, lens);
-  const tastes = (await tastesFor(env, posts, [{ mean, centroid }])).map((t) => t[0]);
+  const tastes = (await tastesFor(env, posts, [await storedFit(env, lens)], new Budget(SUBREQUEST_BUDGET))).map((t) => t[0]);
   let { open_at: openAt, glance_at: glanceAt } = lens;
   const first = !(await firstBaseline(env, id));
   if (first) {
@@ -675,8 +837,8 @@ export async function signals(env: Env, url: URL) {
   const byId = new Map(stored.results.map((r) => [r.id as string, r as { id: string; author_handle: string; text: string }]));
   const posts = ids.filter((id) => byId.has(id)).map((id) => byId.get(id)!);
   // Each lens scores against its own account's background.
-  const fits = await Promise.all(lenses.map(async (l) => ({ mean: (await backgroundFor(env, l)).mean, centroid: JSON.parse(l.centroid_json) as number[] })));
-  const tastes = await tastesFor(env, posts, fits);
+  const fits = await Promise.all(lenses.map((l) => storedFit(env, l)));
+  const tastes = await tastesFor(env, posts, fits, new Budget(SUBREQUEST_BUDGET));
   const lensAccounts = new Set(lenses.map((l) => l.account));
   const openedBy = new Map<string, string[]>();
   for (const r of opens.results) (openedBy.get(r.post_id as string) ?? openedBy.set(r.post_id as string, []).get(r.post_id as string)!).push(r.lens_id as string);

@@ -3,7 +3,33 @@
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { composeText, firstParagraph, isThin, linkContext } from "../src/lens-text.ts";
+import { COMPOSED_MAX, composeText, firstParagraph, isThin, linkContext, readBundle, TITLE_MAX } from "../src/lens-text.ts";
+
+test("a failed bundle read or a body that is not JSON gives no context and reports why, instead of failing the request", async () => {
+  const seen = [];
+  const note = (why) => seen.push(why);
+  const failing = {
+    get: async () => {
+      throw new Error("R2 is down");
+    },
+  };
+  assert.equal(await readBundle(failing, "bundles/1/v1.json", note), null);
+  assert.equal(await readBundle({ get: async () => ({ json: async () => JSON.parse("not json") }) }, "bundles/2/v1.json", note), null);
+  assert.equal(await readBundle({ get: async () => null }, "bundles/3/v1.json", note), null, "a missing object is no context, not an error");
+  assert.deepEqual(await readBundle({ get: async () => ({ json: async () => ({ links: [] }) }) }, "bundles/4/v1.json", note), { links: [] });
+  assert.equal(seen.length, 2);
+  assert.match(seen[0], /bundles\/1\/v1\.json: R2 is down/);
+});
+
+test("a row of markdown links is not prose, a link inside prose keeps its text, and titles, pages and the composed text are bounded", () => {
+  const nav = "[Home](https://a.b/) [About us](https://a.b/about) [Pricing plans](https://a.b/p) [Documentation](https://a.b/d) [Contact](https://a.b/c)";
+  const prose = "Skills that teach your [coding agent](https://a.b/agent) design engineering, motion and polish.";
+  assert.equal(firstParagraph(`${nav}\n\n${prose}`), "Skills that teach your coding agent design engineering, motion and polish.");
+  assert.equal(firstParagraph(`${"x\n\n".repeat(15_000)}${prose}`), null, "only the start of a long page is searched");
+  const ctx = linkContext({ links: [{ url: "https://a.b", from: "post", status: "ok", title: "T".repeat(5000), text: prose }] });
+  assert.equal(ctx.title.length, TITLE_MAX);
+  assert.equal(composeText("x ".repeat(3000), { url: "u", title: "t", paragraph: "p" }).length, COMPOSED_MAX);
+});
 
 test("a post with under 15 words, or mostly a link, counts as thin; links and mentions are not words", () => {
   assert.equal(isThin("@theo"), true);
