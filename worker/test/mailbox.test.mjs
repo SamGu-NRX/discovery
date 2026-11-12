@@ -6,7 +6,7 @@
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 import { after, before, test } from "node:test";
-import { startStack } from "../scripts/harness.mjs";
+import { freshFetch, startStack } from "../scripts/harness.mjs";
 
 const FIXTURE_PORT = 8862;
 const FIXTURE = `http://127.0.0.1:${FIXTURE_PORT}`;
@@ -54,7 +54,7 @@ const refused = async (r, status, rule) => {
   assert.equal(r.status, status, JSON.stringify(r.body));
   assert.equal(r.body.rule, rule);
 };
-const cron = () => fetch(`${s.base}/__scheduled?cron=*/15+*+*+*+*`).then((r) => assert.equal(r.status, 200));
+const cron = () => freshFetch(`${s.base}/__scheduled?cron=*/15+*+*+*+*`).then((r) => assert.equal(r.status, 200));
 
 const hooks = (name) => s.control("hooks").then((all) => all.filter((h) => h.name === name));
 async function until(fn, what, ms = 10_000) {
@@ -343,7 +343,7 @@ test("an unexpected error returns only a request id, and its log line redacts to
   await s.d1("ALTER TABLE mail_tasks RENAME TO mail_tasks_moved");
   let res;
   try {
-    res = await fetch(`${s.base}/room/${s.vars.MAIL_ROOM_TOKEN}`);
+    res = await freshFetch(`${s.base}/room/${s.vars.MAIL_ROOM_TOKEN}`);
   } finally {
     await s.d1("ALTER TABLE mail_tasks_moved RENAME TO mail_tasks");
   }
@@ -360,7 +360,7 @@ test("every send rule refuses with its name and stores nothing", async () => {
   const count = async () => (await s.d1("SELECT count(*) AS n FROM mail_tasks"))[0].n;
   const before = await count();
 
-  await refused(await send("sam", { to: "grok" }), 403, "route_not_allowed");
+  await refused(await send("t3", { to: "sam" }), 403, "route_not_allowed");
   // grok reads hostile X text: its token can't file work, over REST or MCP.
   await refused(await send("grok", { to: "t3" }), 403, "route_not_allowed");
   await refused(await send("grok", { to: "dot" }), 403, "route_not_allowed");
@@ -426,7 +426,7 @@ test("the MCP endpoint: initialize advertises events, tools say they need no acc
   assert.equal(note.status, 202);
   assert.equal(await note.text(), "");
   const tools = (await rpc(mcpPath(), "tools/list", {})).body.result.tools;
-  assert.deepEqual(tools.map((t) => t.name).sort(), ["mailbox_ack", "mailbox_claim", "mailbox_complete", "mailbox_send"]);
+  assert.deepEqual(tools.map((t) => t.name).sort(), ["get_brief", "mailbox_ack", "mailbox_claim", "mailbox_complete", "mailbox_send", "tell"]);
   assert.ok(tools.every((t) => t.securitySchemes?.[0]?.type === "noauth" && t._meta?.securitySchemes?.[0]?.type === "noauth"));
   assert.deepEqual((await rpc(mcpPath(), "events/list", {})).body.result.events.map((e) => e.name), ["task_available"]);
   assert.equal((await rpc(mcpPath(), "no/such", {})).body.error.code, -32601);
@@ -435,7 +435,7 @@ test("the MCP endpoint: initialize advertises events, tools say they need no acc
   assert.equal((await rpc(`/mcp/t3/${s.vars.MAIL_T3_TOKEN}`, "ping", {})).status, 401, "only the dot authenticates by URL");
   assert.equal((await rpc("/mcp", "ping", {}, "mail_t3")).status, 200);
   assert.equal((await rpc("/mcp", "ping", {}, "ingest")).status, 403);
-  assert.equal((await fetch(`${s.base}/.well-known/oauth-protected-resource`)).status, 404);
+  assert.equal((await freshFetch(`${s.base}/.well-known/oauth-protected-resource`)).status, 404);
 
   for (const secret of ["whsec_dG9vc2hvcnQ=", "not-a-whsec"]) {
     const r = await rpc(mcpPath(), "events/subscribe", { name: "task_available", arguments: {}, delivery: { mode: "webhook", url: `${FIXTURE}/hook/dot`, secret } });
@@ -466,8 +466,8 @@ test("the cron retries a failed wake at most 3 times, then leaves it dead", asyn
 
 test("the room shows the transcript only with its token, every agent's text escaped", async () => {
   await sent("sam", { to: "t3", body: `<script>alert("x")</script> & <img src=x onerror=1>` });
-  assert.equal((await fetch(`${s.base}/room/${s.vars.MAIL_ROOM_TOKEN}x`)).status, 404);
-  const res = await fetch(`${s.base}/room/${s.vars.MAIL_ROOM_TOKEN}`);
+  assert.equal((await freshFetch(`${s.base}/room/${s.vars.MAIL_ROOM_TOKEN}x`)).status, 404);
+  const res = await freshFetch(`${s.base}/room/${s.vars.MAIL_ROOM_TOKEN}`);
   assert.equal(res.status, 200);
   assert.equal(res.headers.get("cache-control"), "no-store");
   const html = await res.text();

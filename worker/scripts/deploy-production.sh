@@ -1,13 +1,18 @@
 #!/usr/bin/env bash
 # Deploys discovery-watcher to the Cloudflare account wrangler is logged in to.
 #
-# Creates exactly one cloud resource (the D1 database "discovery-watcher"),
-# applies migrations remotely, deploys the Worker with its one cron and the
-# Workers AI binding, sets the secrets and registers the production watchers.
+# Creates two cloud resources if they are missing (the D1 database
+# "discovery-watcher" and the R2 bucket "discovery-voice"), applies migrations
+# remotely, deploys the Worker with its one cron, the Workers AI binding, the
+# R2 binding and the bridge Durable Object, sets the secrets and registers the
+# production watchers.
 # Watcher matches become candidates; nothing here POSTs to T3.
 #
 # Secrets are read from ~/.agent-secrets and piped to wrangler; none is
-# printed. The five tokens are generated on the first run.
+# printed. The five tokens and BRIDGE_TOKEN are generated on the first run.
+# APNS_KEY_P8, APNS_KEY_ID, APNS_TEAM_ID, APNS_TOPIC, GITHUB_PR_TOKEN and
+# GEMINI_API_KEY are set only from files that exist (see worker/README.md,
+# "Turn on device approvals"); each one missing is named.
 # T3_APPROVALS_WEBHOOK_URL is set only if
 # ~/.agent-secrets/discovery-t3-approvals-webhook-url exists; without it,
 # proposals wait unnotified.
@@ -23,7 +28,7 @@ export CI=1 WRANGLER_SEND_METRICS=false
 "$W" whoami | grep -E 'logged in|Account' | head -3
 
 umask 077
-for name in discovery-admin-token discovery-websub-secret discovery-ingest-token discovery-runner-token discovery-inbox-token; do
+for name in discovery-admin-token discovery-websub-secret discovery-ingest-token discovery-runner-token discovery-inbox-token discovery-bridge-token; do
   [ -s "$S/$name" ] || openssl rand -hex 32 > "$S/$name"
   chmod 600 "$S/$name"
 done
@@ -36,6 +41,9 @@ if grep -q '00000000-0000-0000-0000-000000000000' wrangler.jsonc; then
   sed -i '' "s/00000000-0000-0000-0000-000000000000/$id/" wrangler.jsonc
   echo "D1 database discovery-watcher: $id"
 fi
+
+# The R2 binding must exist before the deploy.
+"$W" r2 bucket list | grep -q 'discovery-voice' || "$W" r2 bucket create discovery-voice
 
 "$W" d1 migrations apply DB --remote
 # The apply above has exited after printing only its banner, leaving a
@@ -51,6 +59,14 @@ url=$(grep -oE 'https://discovery-watcher\.[a-z0-9-]+\.workers\.dev' .wrangler/d
 "$W" secret put INGEST_TOKEN < "$S/discovery-ingest-token"
 "$W" secret put RUNNER_TOKEN < "$S/discovery-runner-token"
 "$W" secret put INBOX_TOKEN < "$S/discovery-inbox-token"
+"$W" secret put BRIDGE_TOKEN < "$S/discovery-bridge-token"
+for pair in APNS_KEY_P8:discovery-apns-key-p8 APNS_KEY_ID:discovery-apns-key-id APNS_TEAM_ID:discovery-apns-team-id             APNS_TOPIC:discovery-apns-topic GITHUB_PR_TOKEN:discovery-github-pr-token GEMINI_API_KEY:discovery-gemini-api-key; do
+  if [ -s "$S/${pair#*:}" ]; then
+    "$W" secret put "${pair%%:*}" < "$S/${pair#*:}"
+  else
+    echo "${pair%%:*} not set: no $S/${pair#*:}"
+  fi
+done
 if [ -s "$S/discovery-t3-approvals-webhook-url" ]; then
   "$W" secret put T3_APPROVALS_WEBHOOK_URL < "$S/discovery-t3-approvals-webhook-url"
 else

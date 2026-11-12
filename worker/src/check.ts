@@ -28,6 +28,28 @@ export interface Env {
   MAIL_GROK_WAKE_KEY?: string;
   // Comma-separated origins MCP Events callbacks may use. Unset: none.
   MAIL_CALLBACK_ORIGINS?: string;
+  // Device-signed approvals (docs/APPROVALS.md). APNs token auth: the .p8
+  // key's PEM text, its key id, the team id and the app's bundle id. Any
+  // unset means approval pushes are recorded as no_apns.
+  APNS_KEY_P8?: string;
+  APNS_KEY_ID?: string;
+  APNS_TEAM_ID?: string;
+  APNS_TOPIC?: string;
+  // The first executor (src/executor.ts): a fine-grained token for
+  // SamGu-NRX with contents and pull requests write.
+  GITHUB_PR_TOKEN?: string;
+  // Voice notes: the audio bucket and the transcription key.
+  VOICE: R2Bucket;
+  GEMINI_API_KEY?: string;
+  // The OpenAI-compatible bridge's bearer, and the Durable Object it waits on.
+  BRIDGE_TOKEN?: string;
+  BRIDGE_WAIT: DurableObjectNamespace<import("./bridge").BridgeWaitDO>;
+  // Local tests only: send APNs, GitHub and Gemini requests to the fixture
+  // server instead of Apple's, GitHub's and Google's hosts. Unset in
+  // production.
+  APNS_ORIGIN?: string;
+  GITHUB_API_ORIGIN?: string;
+  GEMINI_API_ORIGIN?: string;
 }
 
 export interface WatcherRow {

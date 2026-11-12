@@ -96,6 +96,12 @@ export function timeParam(url: URL, name: string): number | null {
   return n;
 }
 
+// The iPhone app's wire format (docs/APPROVALS.md, "Wire details"): ISO 8601
+// UTC with whole seconds, such as 2026-11-12T09:30:00Z. Swift's
+// ISO8601DateFormatter rejects fractional seconds unless told to expect them.
+export const isoUtc = (ms: number) => new Date(Math.floor(ms / 1000) * 1000).toISOString().replace(".000Z", "Z");
+export const isoUtcOrNull = (ms: number | null) => (ms === null ? null : isoUtc(ms));
+
 export const utcDay = (ms: number) => new Date(ms).toISOString().slice(0, 10);
 export const utcDayStart = (ms: number) => Date.parse(utcDay(ms) + "T00:00:00Z");
 

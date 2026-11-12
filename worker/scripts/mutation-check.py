@@ -51,9 +51,10 @@ muts = [
  ("M45 reclaim keeps the old lease_token", "src/candidates.ts", "lease_token = lower(hex(randomblob(16)))", "lease_token = coalesce(lease_token, lower(hex(randomblob(16))))"),
  ("M46 card omits inputs", "src/proposals.ts", 'inputValue(JSON.parse(p.inputs_json), 0)}', '""}'),
  ("M47 decision body limit not enforced", "src/proposals.ts", "export const DECISION_MAX_BYTES = 4 * 1024;", "export const DECISION_MAX_BYTES = 64 * 1024 * 1024;"),
+ # The token lookup and the device check that needs its row move together.
  ("M48 decision body read before the token", "src/proposals.ts",
-  ['  const p = await byToken(env, token);\n  if (!p) return reply(404, "Link not found.", "This approval link is not valid.");\n\n  let decisionRaw', '  const decision = decisionRaw as Decision;\n  const now = Date.now();'],
-  ['  let decisionRaw', '  const decision = decisionRaw as Decision;\n  const p = await byToken(env, token);\n  if (!p) return reply(404, "Link not found.", "This approval link is not valid.");\n  const now = Date.now();']),
+  ['  const p = await byToken(env, token);\n  if (!p) return reply(404, "Link not found.", "This approval link is not valid.");\n  // Every proposal with a link has an irreversible final step. Once a device\n  // has been enrolled (even one later revoked), only its signature decides.\n  if (await anyDeviceEver(env)) {\n    return reply(403, "Device signature required.", "Approve or deny this on your iPhone.", p.title, { error: "device signature required" });\n  }\n\n  let decisionRaw', '  const decision = decisionRaw as Decision;\n  const now = Date.now();'],
+  ['  let decisionRaw', '  const decision = decisionRaw as Decision;\n  const p = await byToken(env, token);\n  if (!p) return reply(404, "Link not found.", "This approval link is not valid.");\n  // Every proposal with a link has an irreversible final step. Once a device\n  // has been enrolled (even one later revoked), only its signature decides.\n  if (await anyDeviceEver(env)) {\n    return reply(403, "Device signature required.", "Approve or deny this on your iPhone.", p.title, { error: "device signature required" });\n  }\n  const now = Date.now();']),
  ("M49 ingest cap back at 256 KB", "src/x.ts", "export const INGEST_MAX_BYTES = 128 * 1024;", "export const INGEST_MAX_BYTES = 256 * 1024;"),
  ("M50 body limit counts characters", "src/http.ts", "    total += value.byteLength;", "    total += new TextDecoder().decode(value).length;"),
  ("M51 rotate ignores a sent notification", "src/proposals.ts", 'if (!force && (p.notify_state === "sent" || p.notify_state === "pending"))', "if (false)"),
@@ -90,29 +91,108 @@ muts = [
  ("M77 error text stringifies nested values", "src/inbox.ts", '  if (Array.isArray(v)) return `an array of ${v.length}`;\n  if (typeof v === "object" && v !== null) return', '  if (typeof v === "object" && v !== null) return JSON.stringify(v).slice(0, 80) ||'),
  ("M74 sightings pages overlap", "src/inbox.ts", "AND s.id > ?3 AND", "AND s.id >= ?3 AND"),
  ("M37 malformed prepared URL breaks the card", "src/proposals.ts", "  } catch {\n    return null;\n  }\n}\n\nfunction preparedItem", "  } finally {\n  }\n}\n\nfunction preparedItem"),
+ # device-signed approvals, the executor, inbox, brief, voice and the bridge (migration 0009)
+ ("M78 a revoked device still decides", "src/approvals.ts", '  if (device.revoked_at !== null) return refuse(403, "device_revoked"', '  if (false) return refuse(403, "device_revoked"'),
+ ("M111 a device token revokes another device", "src/devices.ts", '  if (caller.scope === "device" && caller.deviceId !== id) throw', '  if (false) throw'),
+ ("M96 another device changes this device's push token", "src/devices.ts", '  if (callerDevice !== id) throw new HttpError(403, `this device token belongs to another device than ${id}`);\n  const b = await readJson<Record<string, unknown>>(req, 4096);\n  onlyFields(b, ["apns_token", "apns_env"]);', '  const b = await readJson<Record<string, unknown>>(req, 4096);\n  onlyFields(b, ["apns_token", "apns_env"]);'),
+ ("M112 another device stores this device's push-to-start token", "src/devices.ts", '  if (callerDevice !== id) throw new HttpError(403, `this device token belongs to another device than ${id}`);\n  const b = await readJson<Record<string, unknown>>(req, 4096);\n  onlyFields(b, ["push_to_start_token", "apns_env"]);', '  const b = await readJson<Record<string, unknown>>(req, 4096);\n  onlyFields(b, ["push_to_start_token", "apns_env"]);'),
+ ("M113 times keep fractional seconds", "src/http.ts", '.toISOString().replace(".000Z", "Z");', '.toISOString();'),
+ ("M114 a decided proposal still takes a signature", "src/approvals.ts", '  if (!p || p.state !== "awaiting_approval") return refuse(409,', '  if (!p) return refuse(409,'),
+ ("M79 signed_at not checked", "src/approvals.ts", "export const SIGNATURE_SKEW_S = 300;", "export const SIGNATURE_SKEW_S = 1e12;"),
+ ("M80 signature not verified", "src/approvals.ts", "if (!key || !(await verifyDer(key, der, message)))", "if (!key)"),
+ ("M81 the signed message leaves out the nonce", "src/approvals.ts", '["discovery-approval-v1", requestId, inputsHashHex, decision, nonce, String(signedAt)]', '["discovery-approval-v1", requestId, inputsHashHex, decision, String(signedAt)]'),
+ ("M82 a decided request decides again", "src/approvals.ts", "       WHERE id = ?1 AND state = 'pending' AND expires_at > ?3 AND nonce = ?7 AND inputs_hash = ?8", "       WHERE id = ?1 AND expires_at > ?3 AND nonce = ?7 AND inputs_hash = ?8"),
+ ("M83 non-minimal DER accepted", "src/p256.ts", "      if (len === 1 || !(v[1] & 0x80)) return null;", "      if (len === 1) return null;"),
+ # Both guards: the check before reading the body and the UPDATE's own clause.
+ ("M84 the bearer link still decides after enrollment", "src/proposals.ts",
+  ["  if (await anyDeviceEver(env)) {\n    return reply(403", "       AND NOT EXISTS (SELECT 1 FROM devices)\n"],
+  ["  if (false) {\n    return reply(403", ""]),
+ ("M85 head_branch need not start with agent/", "src/executor.ts", '  if (!head.startsWith("agent/") || head.length === "agent/".length) fail(', '  if (false) fail('),
+ ("M86 allowlist not checked at execution", "src/executor.ts", "  if (!allowed(await repoAllowlist(env), spec.repo)) throw new ExecError(false,", "  if (false) throw new ExecError(false,"),
+ ("M87 files under .github/ allowed", "src/executor.ts", '  if (segs[0].toLowerCase() === ".github") return', '  if (false) return'),
+ ("M88 a moved head_sha still opens the PR", "src/executor.ts", "    if (at !== spec.head_sha) throw new ExecError(false,", "    if (false) throw new ExecError(false,"),
+ ("M89 changed stored inputs still execute", "src/approvals.ts", " || (await inputsHash(p.final_step_kind, p.final_step, JSON.parse(p.inputs_json))) !== r.inputs_hash) {", ") {"),
+ ("M90 an enrollment code works twice", "src/devices.ts", "       WHERE code_hash = ?1 AND used_at IS NULL AND expires_at > ?2 RETURNING code_hash`,", "       WHERE code_hash = ?1 AND expires_at > ?2 RETURNING code_hash`,"),
+ ("M91 an expired enrollment code works", "src/devices.ts", "       WHERE code_hash = ?1 AND used_at IS NULL AND expires_at > ?2 RETURNING code_hash`,", "       WHERE code_hash = ?1 AND used_at IS NULL RETURNING code_hash`,"),
+ ("M92 a revoked device's token still works", "src/auth.ts", '"SELECT id FROM devices WHERE device_token_hash = ? AND revoked_at IS NULL"', '"SELECT id FROM devices WHERE device_token_hash = ?"'),
+ ("M93 a non-P-256 key enrolls", "src/p256.ts", "  if (!der || der.length !== 91 || SPKI_P256_PREFIX.some((b, i) => der[i] !== b)) return null;", "  if (!der) return null;"),
+ ("M94 APNs host ignores apns_env", "src/apns.ts", 'const HOSTS = { development: "api.sandbox.push.apple.com", production: "api.push.apple.com" } as const;', 'const HOSTS = { development: "api.push.apple.com", production: "api.push.apple.com" } as const;'),
+ ("M95 a dead push token is pushed to again", "src/approvals.ts", '"SELECT id, apns_token, apns_env FROM devices WHERE revoked_at IS NULL AND apns_invalid_at IS NULL ORDER BY apns_token_updated_at DESC, id LIMIT ?"', '"SELECT id, apns_token, apns_env FROM devices WHERE revoked_at IS NULL ORDER BY apns_token_updated_at DESC, id LIMIT ?"'),
+ ("M138 the push fan-out is unbounded", "src/approvals.ts", "const MAX_PUSH_DEVICES = 10;", "const MAX_PUSH_DEVICES = 1000;"),
+ ("M139 a correction may name an unlisted project", "src/routing.ts", "  if (b.project !== null && !table.projects.some((p) => p.name === b.project)) fail(", "  if (false) fail("),
+ ("M140 bridge bodies up to 4 MB", "src/bridge.ts", "const REQUEST_MAX_BYTES = 512 * 1024;", "const REQUEST_MAX_BYTES = 4 * 1024 * 1024;"),
+ ("M97 the inbox takes the source from the body", "src/hub.ts", "  return insertInbox(env, { kind, text: b.text, source, claimedSource:", "  return insertInbox(env, { kind, text: b.text, source: (b.source as string | undefined) ?? source, claimedSource:"),
+ ("M98 an agent posts a direction", "src/hub.ts", 'const AGENT_KINDS: readonly Kind[] = ["reply", "agent_push"];', 'const AGENT_KINDS: readonly Kind[] = KINDS;'),
+ ("M99 the brief lists every ask", "src/hub.ts", "const MAX_ASKS = 3;", "const MAX_ASKS = 50;"),
+ ("M100 an answered thought is still the question", "src/hub.ts", "           AND NOT EXISTS (SELECT 1 FROM inbox_items r WHERE r.reply_to = t.id)\n         ORDER BY t.created_at LIMIT 1`,", "         ORDER BY t.created_at LIMIT 1`,"),
+ ("M101 voice size not capped", "src/voice.ts", "export const VOICE_MAX_BYTES = 25 * 1024 * 1024;", "export const VOICE_MAX_BYTES = 64 * 1024 * 1024;"),
+ ("M102 voice retried forever", "src/voice.ts", "const MAX_ATTEMPTS = 3;", "const MAX_ATTEMPTS = 30;"),
+ ("M103 the bridge forwards the system prompt", "src/bridge.ts", '    if (m?.role !== "user") continue;', '    if (m?.role === "assistant") continue;'),
+ ("M104 system-reminder blocks reach the agent", "src/bridge.ts", '  return s.replace(HARNESS_BLOCKS, "")', '  return s.replace(/(?!)/g, "")'),
+ ("M105 a re-send files a new task", "src/bridge.ts", "idempotency_key: `bridge-${await sha256Hex(`${model}\\n${brief}`)}`", "idempotency_key: `bridge-${Date.now()}`"),
+ ("M106 side calls wake the agent", "src/bridge.ts", "  if (tools.length > 0) return false;\n", "  return false;\n"),
+ ("M107 the result ignores the hand-back tool", "src/bridge.ts", '  if (toolChoice === "none") return null;', '  return null;'),
+ ("M108 no keepalive while waiting", "src/bridge.ts", "const KEEPALIVE_MS = 10_000;", "const KEEPALIVE_MS = 60_000;"),
+ ("M109 mailbox_complete doesn't wake the waiter", "src/mailbox.ts", '    if (row.from_agent === "bridge") ctx.waitUntil(notifyBridge(env, id));', ""),
+ ("M110 the dot's tell posts as another source", "src/mailbox.ts", 'structured = await postInbox(env, "dot", { kind: "agent_push", ...args });', 'structured = await postInbox(env, "admin", { kind: "agent_push", ...args });'),
+ ('M116 a second dispatch also succeeds', 'src/routing.ts', 'WHERE id = ?1 AND dispatched_at IS NULL RETURNING dispatched_at', 'WHERE id = ?1 RETURNING dispatched_at'),
+ ('M117 a correction may pair any agent with any model', 'src/routing.ts', '  const model = agent.models.find((x) => x.id === b.model);', '  const model = table.agents.flatMap((a) => a.models).find((x) => x.id === b.model);'),
+ ('M118 a dispatched item can be corrected', 'src/routing.ts', '  if (row.dispatched_at !== null) throw refuse(409,', '  if (false) throw refuse(409,'),
+ ("M119 an agent's post can be routed", 'src/routing.ts', '  if (!row.source.startsWith("device:")) throw refuse(409,', '  if (false) throw refuse(409,'),
+ ('M120 a numeric amount reaches the stake', 'src/approvals.ts', 'if (finalStepKind === "pay" && typeof i.amount === "string" && /^\\d{1,12}(\\.\\d{1,2})?$/.test(i.amount)) stake.amount = i.amount;', 'if (finalStepKind === "pay" && i.amount !== undefined) stake.amount = i.amount as string;'),
+ ('M121 the push leaves out the stake', 'src/approvals.ts', '    ...(r.stake_json ? { stake: JSON.parse(r.stake_json) as Stake } : {}),\n  });', '  });'),
+ ('M122 a finished voice note has no routing', 'src/voice.ts', '{ inbox_id: v.inbox_id, ...(routing ? { routing, classification: presentClassification(v.classification_json) } : {}) }', '{ inbox_id: v.inbox_id }'),
+ ('M123 app routes answer sentence errors', 'src/index.ts', 'if (e instanceof HttpError && app) return', 'if (e instanceof HttpError && false) return'),
+ ('M125 a model name inside a word counts', 'src/routing.ts', "/[A-Za-z0-9]+(?:['’][sS]\\b)?/g", "/sol|[A-Za-z0-9]+(?:['’][sS]\\b)?/g"),
+ ('M126 a possessive names a model', 'src/routing.ts', '    if (!hit || t[i].possessive) continue;', '    if (!hit) continue;'),
+ ('M127 ordinary-word models need no context', 'src/routing.ts', '    if (hit.model.common_word && !directed && !effortAt(t, i + 1) && t[i + 1]?.w !== "model") continue;', ''),
+ ("M128 a pointed-at model doesn't beat the first one", 'src/routing.ts', '  const chosen = mentions.find((x) => x.directed) ?? mentions[0];', '  const chosen = mentions[0];'),
+ ('M129 an effort word anywhere counts', 'src/routing.ts', '    if (t[i].w === "xhigh" || EFFORT_KEYWORDS.has(t[i + e.len]?.w ?? "") || EFFORT_KEYWORDS.has(t[i - 1]?.w ?? "")) out.effort = e.effort;', '    out.effort = e.effort;'),
+ ('M130 "low priority" is an effort', 'src/routing.ts', '  if (!e || NOT_EFFORT_BEFORE.has(t[i + 1]?.w ?? "")) return null;', '  if (!e) return null;'),
+ ("M131 the classifier's target routes", 'src/routing.ts', '  if (ex.model) {\n    const mm = ex.model.model;', '  if (!ex.model && c?.target?.model) ex.model = table.agents.flatMap((a) => a.models.map((model) => ({ agent: a.id, model }))).find((x) => x.model.id === c.target!.model);\n  if (ex.model) {\n    const mm = ex.model.model;'),
+ ("M132 the classifier's project beats the words", 'src/routing.ts', '  const project = ex.project ?? c?.project ?? null;', '  const project = c?.project ?? ex.project ?? null;'),
+ ('M133 the policy ignores the work type', 'src/routing.ts', '  const base = table.policy[work_type];', '  const base = table.policy.general_engineering;'),
+ ('M134 a project outside the list is kept', 'src/routing.ts', '    project: table.projects.some((p) => p.name === x.project) ? (x.project as string) : null,', '    project: typeof x.project === "string" ? x.project : null,'),
+ ("M135 the title isn't cut to 8 words", 'src/routing.ts', '.split(" ").slice(0, 8).join(" ")', '.split(" ").join(" ")'),
+ ("M136 t3's task has no model line", 'src/routing.ts', '  const header = routing.agent === "t3" ?', '  const header = false ?'),
+ ('M137 a voice note is filed as a thought whatever the classifier said', 'src/voice.ts', '{ kind: c.kind ?? "thought",', '{ kind: "thought",'),
 ]
+# MUTATION_TESTS narrows the run to the suites that own the mutated code,
+# such as "test/hub.test.mjs test/bridge.test.mjs".
+tests = os.environ.get("MUTATION_TESTS", "test/").split()
 for name, path, old, new in muts:
     if only and name.split()[0] not in only:
         continue
     # old and new may be lists, for a break that needs several edits at once.
     pairs = list(zip(old, new)) if isinstance(old, list) else [(old, new)]
-    src = open(path).read()
+    # Compared with LF line endings whatever the checkout uses (Windows
+    # checkouts have CRLF); the original bytes are written back afterwards.
+    raw = open(path, "rb").read()
+    src = raw.decode("utf-8").replace("\r\n", "\n")
     mutated = src
     for o, n in pairs:
         assert o in mutated, name
         mutated = mutated.replace(o, n)
-    open(path, "w").write(mutated)
+    open(path, "w", encoding="utf-8", newline="").write(mutated)
     try:
+        # The spec reporter prints the ✖ lines read below; piped, node
+        # otherwise picks TAP on some versions.
+        proc = subprocess.Popen(["node", "--test", "--test-reporter=spec", *tests], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8")
         try:
-            r = subprocess.run(["node", "--test", "test/"], capture_output=True, text=True, timeout=240)
+            stdout, _ = proc.communicate(timeout=240)
         except subprocess.TimeoutExpired:
             # A break that hangs the Worker (M77 overflows its stack) is caught too: the suite never passes.
-            # Only this checkout's wrangler: other worktrees run their own test stacks on the same ports.
-            subprocess.run(["pkill", "-f", os.path.join(os.getcwd(), "node_modules", ".bin", "wrangler") + " dev"])
+            # Only the processes this run started: other worktrees run their own test stacks.
+            if os.name == "nt":
+                subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True)
+            else:
+                subprocess.run(["pkill", "-f", os.path.join(os.getcwd(), "node_modules", ".bin", "wrangler") + " dev"])
+                proc.kill()
+            proc.communicate()
             print(f"caught  {name}: the suite hung past 240 s", flush=True)
             continue
         # node --test lists each failure twice (inline and in the summary).
-        failed = sorted({re.sub(r" \([\d.]+ms\)$", "", l.strip()[2:]) for l in r.stdout.splitlines() if l.startswith("✖") and "failing tests:" not in l})
-        print(f"{'caught' if failed else 'MISSED'}  {name}: exit={r.returncode} failing={failed}", flush=True)
+        failed = sorted({re.sub(r" \([\d.]+ms\)$", "", l.strip()[2:]) for l in stdout.splitlines() if l.startswith("✖") and "failing tests:" not in l})
+        print(f"{'caught' if failed else 'MISSED'}  {name}: exit={proc.returncode} failing={failed}", flush=True)
     finally:
-        open(path, "w").write(src)
+        open(path, "wb").write(raw)
