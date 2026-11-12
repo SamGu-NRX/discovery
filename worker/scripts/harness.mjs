@@ -10,7 +10,10 @@ import { fileURLToPath } from "node:url";
 import { createFixture } from "../fixtures/server.mjs";
 
 export const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const WRANGLER = join(ROOT, "node_modules/.bin/wrangler");
+// Run wrangler's JS entry with this node, so the harness works where
+// node_modules/.bin/wrangler is a shell script node can't spawn (Windows).
+const WRANGLER_JS = join(ROOT, "node_modules/wrangler/bin/wrangler.js");
+const wrangler = (args) => [process.execPath, [WRANGLER_JS, ...args]];
 const ENV = { ...process.env, CI: "1", WRANGLER_SEND_METRICS: "false" };
 
 const LOCAL_SECRETS = [
@@ -52,11 +55,11 @@ export async function startStack({ port, fixturePort, inspectorPort, logFile, pe
   const { server, state } = createFixture();
   await new Promise((r) => server.listen(fixturePort, "127.0.0.1", r));
 
-  execFileSync(WRANGLER, ["d1", "migrations", "apply", "DB", "--local", "--persist-to", stateDir], { cwd: ROOT, env: ENV, stdio: "pipe" });
+  execFileSync(...wrangler(["d1", "migrations", "apply", "DB", "--local", "--persist-to", stateDir]), { cwd: ROOT, env: ENV, stdio: "pipe" });
 
   const proc = spawn(
-    WRANGLER,
-    ["dev", "--port", String(port), "--ip", "127.0.0.1", "--inspector-port", String(inspectorPort), "--persist-to", stateDir, "--test-scheduled", "--show-interactive-dev-session=false",
+    process.execPath,
+    [WRANGLER_JS, "dev", "--port", String(port), "--ip", "127.0.0.1", "--inspector-port", String(inspectorPort), "--persist-to", stateDir, "--test-scheduled", "--show-interactive-dev-session=false",
       ...(webhook === false ? [] : ["--var", `T3_APPROVALS_WEBHOOK_URL:http://127.0.0.1:${fixturePort}/t3-webhook`]),
       // Mailbox wakes for t3 and grok land on the fixture's /hook/<name>.
       "--var", `MAIL_T3_WAKE_URL:http://127.0.0.1:${fixturePort}/hook/t3`,
@@ -122,13 +125,17 @@ export async function startStack({ port, fixturePort, inspectorPort, logFile, pe
   // Runs SQL against the same local D1 the Worker uses, for setting up states
   // that would otherwise need waiting (an overdue watcher).
   function d1(sql) {
-    const out = execFileSync(WRANGLER, ["d1", "execute", "DB", "--local", "--persist-to", stateDir, "--json", "--command", sql], { cwd: ROOT, env: ENV, stdio: "pipe" });
+    const out = execFileSync(...wrangler(["d1", "execute", "DB", "--local", "--persist-to", stateDir, "--json", "--command", sql]), { cwd: ROOT, env: ENV, stdio: "pipe" });
     return JSON.parse(out.toString())[0].results;
   }
 
   async function stop() {
-    proc.kill("SIGTERM");
-    await new Promise((r) => (proc.exitCode !== null ? r() : proc.once("exit", r)));
+    const exited = new Promise((r) => (proc.exitCode !== null ? r() : proc.once("exit", r)));
+    // On Windows a signal reaches only node, and the workerd it started would
+    // keep the port; taskkill /T ends the tree this harness started.
+    if (process.platform === "win32") execFileSync("taskkill", ["/pid", String(proc.pid), "/T", "/F"], { stdio: "ignore" });
+    else proc.kill("SIGTERM");
+    await exited;
     // A fixture response that never ends (hook-mode "flood") must not hold this up.
     server.closeAllConnections();
     await new Promise((r) => server.close(r));
