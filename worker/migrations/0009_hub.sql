@@ -18,7 +18,11 @@ CREATE TABLE devices (
   -- Set when APNs said the token is dead (410, or 400 BadDeviceToken);
   -- cleared by the next POST /devices/:id/apns-token.
   apns_invalid_at INTEGER,
-  apns_invalid_reason TEXT
+  apns_invalid_reason TEXT,
+  -- For v1.1 remote Live Activity starts; stored, not used yet.
+  push_to_start_token TEXT,
+  push_to_start_env TEXT CHECK (push_to_start_env IN ('development', 'production')),
+  push_to_start_updated_at INTEGER
 );
 
 -- One-time enrollment codes, stored as SHA-256 hashes.

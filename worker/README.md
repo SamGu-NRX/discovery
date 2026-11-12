@@ -106,10 +106,12 @@ No secret is printed. Then `node scripts/verify-production.mjs <base-url> ~/.age
 | --- | --- |
 | `POST /devices/enroll-codes` | Admin. `{code, expires_at}`: 12 Crockford base32 characters shown as `XXXX-XXXX-XXXX`, 10 minutes, single use, stored as the SHA-256 of the code without dashes. The app may send it in any case, with or without dashes and spaces. |
 | `POST /devices/enroll` | No bearer; the code is the credential. `{code, name, public_key_spki_b64, apns_token, apns_env}`. The key must be the base64 DER SPKI of an uncompressed P-256 key (91 bytes) whose point imports. The code is spent and the device written in one transaction. Returns `{device_id, device_token}` once. Any proposal already waiting gets its approval request now. |
-| `POST /devices/:id/apns-token` | That device's own token only. `{apns_token, apns_env?}`; clears a dead-token mark. |
-| `POST /devices/:id/revoke`, `GET /devices` | Admin. A revoked device's token gets 401 and its signatures are refused. |
+| `POST /devices/:id/apns-token` | That device's own token only. `{apns_token, apns_env}`, both required; clears a dead-token mark. |
+| `POST /devices/:id/live-activity-token` | That device's own token only. `{push_to_start_token, apns_env}`, stored for v1.1; nothing sends Live Activity pushes yet. |
+| `POST /devices/:id/revoke` | Admin for any device, or a device token for its own device only. A revoked device's token gets 401 and its signatures are refused. |
+| `GET /devices` | Admin. |
 | `GET /approvals?state=pending\|approved\|denied\|expired`, `GET /approvals/:id` | Device token or admin. A pending request past its expiry is left out even before the cron marks it. |
-| `POST /approvals/:id/decide` | No bearer; the signature is the credential. Checks, in order: the device, the request, `signed_at` within 300 s, the signature over the exact message, that the proposal still hashes to the request's `inputs_hash`; then one D1 batch decides the request (`WHERE state = 'pending'`) and the proposal (only if that UPDATE won). An approved `open_pr` then runs the executor once. |
+| `POST /approvals/:id/decide` | No bearer; the signature is the credential. Checks, in order: the device, the request, `signed_at` within 300 s, the signature over the exact message, that the proposal is still waiting and still hashes to the request's `inputs_hash`; then one D1 batch decides the request (`WHERE state = 'pending'`) and the proposal (only if that UPDATE won). An approved `open_pr` then runs the executor once. Answers and error codes are in APPROVALS.md, "Wire details". |
 | `GET`, `POST /admin/pr-allowlist` | Admin. `{repos: ["owner/name"]}`, the repositories the executor may open PRs in. Empty until set. |
 
 - A proposal with an irreversible final step gets its approval request in the same transaction as the proposal, while any device has ever been enrolled. Its notification goes over APNs to every unrevoked device whose push token APNs hasn't called dead, under the same 3-a-day cap and pause as before (`notify_channel` is `apns`, `notify_state` ends `sent`, `failed`, `capped`, `paused` or `no_apns`). APNs 410, or 400 `BadDeviceToken`, marks that device's token dead until the app sends a new one.
@@ -117,15 +119,14 @@ No secret is printed. Then `node scripts/verify-production.mjs <base-url> ~/.age
 - The executor (`open_pr`): `inputs` is `{repo, base, head_branch, title, body}` plus exactly one of `files: [{path, content_b64}]` (1 to 30) or `head_sha`. With files it reads base's head, writes the blobs, a tree on base's tree and a commit whose parent is base's head, creates `refs/heads/<head_branch>` (a branch that exists is refused, never updated), and opens a draft PR. With `head_sha` it opens the PR only if the branch is still at that commit. `head_branch` starts with `agent/`, differs from `base` and from the repository's default branch, and follows git's ref rules; no path is under `.github/` or `.git`. The rules are checked when the proposal is filed (400 or 403 naming the field) and again before anything is written. The 30-file cap keeps a decision under the free plan's 50 subrequests (7 GitHub calls plus one per file, plus about 5 D1 calls).
 - Outcomes: `executed` (the PR URL is the result), `failed` (nothing visible was written), `outcome_unknown` (the branch was created, or a write got no answer). The proposal moves to `executed`, `failed` or `outcome_unknown` too.
 
-**How the Worker reads the open points in APPROVALS.md.** Each is a question for the lead; none changes a field the app sends.
+**How the Worker reads what APPROVALS.md leaves open.** Its "Wire details" section settles times, error bodies and the decide answer. These remain, each a question for the lead; none changes a field the app sends.
 
-- Times the Worker returns (`expires_at`, `created_at`) are ISO 8601 strings, in the push payload too. `signed_at` is Unix seconds, accepted as an integer or a string of digits.
-- A decide refusal is `{error, check}`, `check` one of `body` (400), `device` (403), `request` (404, 409, 410), `signed_at` (401), `signature` (401), `inputs_hash` (409), `state` (409). A 409 carries the request's current `state` and `result_url`, so an app whose first answer was lost learns the outcome.
-- `state` in the decide answer is `executed` (with `result_url`), `approved` (no executor for this step yet), `denied`, `failed` or `outcome_unknown`.
+- The ISO 8601 times apply to the routes the app calls (`/devices*`, `/approvals*`, `/inbox`, `/brief`, `/voice*`) and the push payload. The runner's and admin routes keep epoch milliseconds, because the runner reads them.
+- `signed_at` is accepted as an integer or a string of digits; the message uses its decimal form.
 - "At least one device is enrolled" counts devices ever enrolled, revoked ones included, so revoking every device never brings the bearer link back. The link refuses skip and later too.
 - `POST /inbox`: the body's `source` is kept as `claimed_source`; the stored `source` is `device:<id>`, `admin`, `dot`, `t3` or `grok`. Agents may post `reply` and `agent_push`, a device `thought`, `direction`, `task` and `reply`, the admin any kind. An optional `reply_to` (an inbox item id) goes with `reply`; the brief uses it to find a return on something Sam said.
 - A quiet brief is `{text: "", asks: [], returns: [], counts}`.
-- Voice states are `queued`, `transcribing`, `done` and `failed`.
+- Errors on routes other than decide are still `{error: "<sentence>"}`.
 
 **Inbox, brief and voice** (`src/hub.ts`, `src/voice.ts`).
 
@@ -133,8 +134,8 @@ No secret is printed. Then `node scripts/verify-production.mjs <base-url> ~/.age
 | --- | --- |
 | `POST /inbox` | Device token, a mailbox agent's token, or admin. Text is stored exactly as sent (at most 8 KB of UTF-8). Unknown fields are refused. An agent's text or refs carrying a capability path or a 64-hex string is refused (`capability_leak`), as in the mailbox, because the brief reaches the dot. `audio_id` only from the device that recorded it. |
 | `GET /brief` | Device token, the dot, or admin. Built from D1 with no model call. Asks: pending requests, soonest expiry first, at most 3, each `<action> in <project>: <title>`. The return: the newest agent `reply` in 48 h to something a device posted. The question: the oldest device `thought` of the last 7 days that no reply names. Counts: everything else. `text` is empty when there is no ask, return or question, and at most 90 words otherwise. |
-| `POST /voice` | Device token. `content-type: audio/mp4`, a `content-length` (411 without), at most 25 MB (413 from the declared length), `x-recorded-at` as ISO 8601 with a zone or Unix seconds. The body streams to R2 at `voice/<audio_id>.m4a`; the answer is `{audio_id}` (201). |
-| `GET /voice/:audio_id` | The recording device or admin. `{audio_id, state, transcript?, inbox_id?, error?}`. |
+| `POST /voice` | Device token. `content-type: audio/mp4`, a `content-length` (411 without), at most 25 MB (413 from the declared length), `x-recorded-at` as ISO 8601 with seconds and a zone. The body streams to R2 at `voice/<audio_id>.m4a`; the answer is `{audio_id}` (201). |
+| `GET /voice/:audio_id` | The recording device or admin. `{state, transcript?, error?}`. |
 
 - Transcription follows Google's docs as read on 2026-11-12: a resumable Files API upload streamed from R2 (labelled `audio/m4a`, because the docs list that and not `audio/mp4`), then `POST /v1beta/interactions` with `model: "models/gemini-3.5-transcribe"` and `input: [{type: "file", file_uri}]`. The transcript is read from `output_text`, or from the text of the `model_output` step. Neither shape has been checked against the live API. The uploaded file is deleted afterwards.
 - `waitUntil` ends 30 s after the response, so a transcription it didn't finish is picked up by the cron, 2 a run, at most 3 attempts, then `failed`.
@@ -147,7 +148,7 @@ No secret is printed. Then `node scripts/verify-production.mjs <base-url> ~/.age
 
 **Turn on device approvals.**
 
-1. Write each value to its file in `~/.agent-secrets/` (mode 600): `discovery-apns-key-p8` (the `.p8` file's text), `discovery-apns-key-id`, `discovery-apns-team-id`, `discovery-apns-topic` (the app's bundle id), `discovery-github-pr-token` (fine-grained, owner SamGu-NRX, contents and pull requests write, no workflows permission), `discovery-gemini-api-key`. Run `scripts/deploy-production.sh`, which sets each one it finds.
+1. Write each value to its file in `~/.agent-secrets/` (mode 600): `discovery-apns-key-p8` (the `.p8` file's text), `discovery-apns-key-id`, `discovery-apns-team-id` (`DWGXWVUR2B`), `discovery-apns-topic` (the app's bundle id, `com.samgu.nod`), `discovery-github-pr-token` (fine-grained, owner SamGu-NRX, contents and pull requests write, no workflows permission), `discovery-gemini-api-key`. Run `scripts/deploy-production.sh`, which sets each one it finds.
 2. `adm -X POST "$BASE/admin/pr-allowlist" -d '{"repos":["SamGu-NRX/discovery"]}'`.
 3. `adm -X POST "$BASE/devices/enroll-codes"` and type the code into the app within 10 minutes. From then on, approval links answer 403 and every waiting proposal is in the app's queue.
 

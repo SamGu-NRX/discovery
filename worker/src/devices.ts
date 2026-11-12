@@ -4,7 +4,7 @@
 
 import { sha256Hex } from "./adapters";
 import type { Env } from "./check";
-import { fail, HttpError, oneOf, randomHex, readJson } from "./http";
+import { fail, HttpError, isoUtc, isoUtcOrNull, oneOf, randomHex, readJson } from "./http";
 import { importDeviceKey } from "./p256";
 import { backfillApprovalRequests } from "./approvals";
 
@@ -31,7 +31,7 @@ export async function mintEnrollCode(env: Env) {
     .bind(await sha256Hex(code), now, now + CODE_TTL_MS)
     .run();
   const shown = code.match(/.{4}/g)!.join("-");
-  return { code: shown, expires_at: new Date(now + CODE_TTL_MS).toISOString() };
+  return { code: shown, expires_at: isoUtc(now + CODE_TTL_MS) };
 }
 
 function apnsToken(v: unknown, field: string): string {
@@ -81,9 +81,9 @@ export async function updateApnsToken(env: Env, callerDevice: string | undefined
   const b = await readJson<Record<string, unknown>>(req, 4096);
   onlyFields(b, ["apns_token", "apns_env"]);
   const token = apnsToken(b.apns_token, "apns_token");
-  const apnsEnv = b.apns_env === undefined ? null : oneOf(b.apns_env, APNS_ENVS, "apns_env");
+  const apnsEnv = oneOf(b.apns_env, APNS_ENVS, "apns_env");
   const row = await env.DB.prepare(
-    `UPDATE devices SET apns_token = ?2, apns_env = coalesce(?3, apns_env), apns_token_updated_at = ?4, apns_invalid_at = NULL, apns_invalid_reason = NULL
+    `UPDATE devices SET apns_token = ?2, apns_env = ?3, apns_token_updated_at = ?4, apns_invalid_at = NULL, apns_invalid_reason = NULL
      WHERE id = ?1 AND revoked_at IS NULL RETURNING id, apns_env`,
   )
     .bind(id, token, apnsEnv, Date.now())
@@ -92,18 +92,42 @@ export async function updateApnsToken(env: Env, callerDevice: string | undefined
   return { device_id: row.id, apns_env: row.apns_env };
 }
 
-export async function revoke(env: Env, id: string) {
+// For v1.1: a Live Activity started remotely needs the app's push-to-start
+// token. It is stored now; nothing sends Live Activity pushes yet.
+export async function updateLiveActivityToken(env: Env, callerDevice: string | undefined, id: string, req: Request) {
+  if (callerDevice !== id) throw new HttpError(403, `this device token belongs to another device than ${id}`);
+  const b = await readJson<Record<string, unknown>>(req, 4096);
+  onlyFields(b, ["push_to_start_token", "apns_env"]);
+  if (typeof b.push_to_start_token !== "string" || !/^[0-9a-fA-F]{16,512}$/.test(b.push_to_start_token)) fail("push_to_start_token must be the token as hex (16 to 512 hex digits)");
+  const apnsEnv = oneOf(b.apns_env, APNS_ENVS, "apns_env");
+  const now = Date.now();
+  const row = await env.DB.prepare(
+    `UPDATE devices SET push_to_start_token = ?2, push_to_start_env = ?3, push_to_start_updated_at = ?4
+     WHERE id = ?1 AND revoked_at IS NULL RETURNING id`,
+  )
+    .bind(id, b.push_to_start_token.toLowerCase(), apnsEnv, now)
+    .first<{ id: string }>();
+  if (!row) throw new HttpError(404, `device ${id} is not enrolled`);
+  return { device_id: row.id, apns_env: apnsEnv, updated_at: isoUtc(now) };
+}
+
+// The admin token revokes any device; a device token only its own device
+// (a phone signing out of itself).
+export async function revoke(env: Env, caller: { scope: string; deviceId?: string }, id: string) {
+  if (caller.scope === "device" && caller.deviceId !== id) throw new HttpError(403, `a device token may revoke only its own device, not ${id}`);
   const row = await env.DB.prepare("UPDATE devices SET revoked_at = coalesce(revoked_at, ?2) WHERE id = ?1 RETURNING id, revoked_at")
     .bind(id, Date.now())
     .first<{ id: string; revoked_at: number }>();
   if (!row) throw new HttpError(404, `device ${id} not found`);
   console.log(`[devices] revoked ${id}`);
-  return { device_id: row.id, revoked_at: new Date(row.revoked_at).toISOString() };
+  return { device_id: row.id, revoked_at: isoUtc(row.revoked_at) };
 }
 
 export async function listDevices(env: Env) {
   const rows = await env.DB.prepare(
-    `SELECT id, name, apns_env, enrolled_at, revoked_at, apns_token_updated_at, apns_invalid_at, apns_invalid_reason FROM devices ORDER BY enrolled_at`,
-  ).all();
-  return { devices: rows.results };
+    `SELECT id, name, apns_env, enrolled_at, revoked_at, apns_token_updated_at, apns_invalid_at, apns_invalid_reason, push_to_start_updated_at
+     FROM devices ORDER BY enrolled_at`,
+  ).all<Record<string, unknown>>();
+  const times = ["enrolled_at", "revoked_at", "apns_token_updated_at", "apns_invalid_at", "push_to_start_updated_at"];
+  return { devices: rows.results.map((d) => ({ ...d, ...Object.fromEntries(times.map((k) => [k, isoUtcOrNull(d[k] as number | null)])) })) };
 }

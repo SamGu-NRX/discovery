@@ -7,9 +7,8 @@
 
 import { apnsConfigured, push } from "./apns";
 import type { Env } from "./check";
-import { onlyFields } from "./devices";
 import { ExecError, openPr, validatePrSpec } from "./executor";
-import { HttpError, intParam, json, oneOf, randomHex, readJson } from "./http";
+import { HttpError, intParam, isoUtc, isoUtcOrNull, json, oneOf, randomHex, readText } from "./http";
 import { inputsHash } from "./inputs";
 import { fromBase64, importDeviceKey, verifyDer } from "./p256";
 
@@ -135,7 +134,7 @@ export async function pushRequest(env: Env, r: RequestRow): Promise<"sent" | "fa
     request_id: r.id,
     inputs_hash: r.inputs_hash,
     nonce: r.nonce,
-    expires_at: new Date(r.expires_at).toISOString(),
+    expires_at: isoUtc(r.expires_at),
   };
   const results = await Promise.all(devices.results.map((d) => push(env, d, payload, { expiresAtMs: r.expires_at, collapseId: r.id })));
   const now = Date.now();
@@ -157,7 +156,6 @@ export async function pushRequest(env: Env, r: RequestRow): Promise<"sent" | "fa
   return ok ? "sent" : "failed";
 }
 
-const iso = (ms: number | null) => (ms === null ? null : new Date(ms).toISOString());
 
 export function presentRequest(r: RequestRow) {
   return {
@@ -170,9 +168,9 @@ export function presentRequest(r: RequestRow) {
     project: r.project,
     nonce: r.nonce,
     state: r.state,
-    created_at: iso(r.created_at),
-    expires_at: iso(r.expires_at),
-    decided_at: iso(r.decided_at),
+    created_at: isoUtc(r.created_at),
+    expires_at: isoUtc(r.expires_at),
+    decided_at: isoUtcOrNull(r.decided_at),
     outcome: r.outcome,
     result_url: r.result_url,
     error: r.error,
@@ -205,8 +203,16 @@ export async function getApproval(env: Env, id: string) {
 export const signedMessage = (requestId: string, inputsHashHex: string, decision: string, nonce: string, signedAt: number) =>
   ["discovery-approval-v1", requestId, inputsHashHex, decision, nonce, String(signedAt)].join("\n");
 
-// A refused decision names the check that failed, in the contract's order.
-const refuse = (status: number, check: string, error: string, extra: Record<string, unknown> = {}) => json({ error, check, ...extra }, status);
+// A refused decision is { error, message } (docs/APPROVALS.md, "Wire
+// details"): error is a machine code naming the failed check, message one
+// sentence. Codes, in the order the checks run: bad_request, device_unknown,
+// device_revoked, request_not_found, already_decided, request_expired,
+// clock_skew, bad_signature, request_not_pending, inputs_changed, then
+// already_decided again for a race lost in the final UPDATE.
+const refuse = (status: number, error: string, message: string, extra: Record<string, unknown> = {}) => json({ error, message, ...extra }, status);
+
+// What an app whose first answer was lost needs to show the outcome.
+const decidedExtra = (r: RequestRow) => ({ state: r.state, outcome: r.outcome, ...(r.result_url ? { result_url: r.result_url } : {}) });
 
 function signedAtOf(v: unknown): number | null {
   if (typeof v === "number" && Number.isSafeInteger(v) && v > 0) return v;
@@ -215,14 +221,33 @@ function signedAtOf(v: unknown): number | null {
 }
 
 export async function decideApproval(env: Env, requestId: string, req: Request): Promise<Response> {
-  const b = await readJson<Record<string, unknown>>(req, 4096);
-  onlyFields(b, ["device_id", "decision", "signed_at", "signature_der_b64"]);
-  if (typeof b.device_id !== "string" || !/^d_[0-9a-f]{16}$/.test(b.device_id)) return refuse(400, "body", "device_id must be the device_id enrollment returned");
-  if (b.decision !== "approve" && b.decision !== "deny") return refuse(400, "body", 'decision must be "approve" or "deny"');
+  try {
+    return await decideChecked(env, requestId, req);
+  } catch (e) {
+    if (e instanceof HttpError) return refuse(e.status, e.status === 413 ? "body_too_large" : "bad_request", e.message);
+    const requestRef = randomHex(8);
+    console.error(`[error] ${requestRef} POST /approvals/<id>/decide`, e);
+    return refuse(500, "internal_error", `The Worker failed while deciding; quote ${requestRef} when reporting it.`, { request_id: requestRef });
+  }
+}
+
+async function decideChecked(env: Env, requestId: string, req: Request): Promise<Response> {
+  const text = await readText(req, 4096);
+  let b: Record<string, unknown>;
+  try {
+    b = JSON.parse(text);
+  } catch {
+    return refuse(400, "bad_request", "The body must be a JSON object.");
+  }
+  if (typeof b !== "object" || b === null || Array.isArray(b)) return refuse(400, "bad_request", "The body must be a JSON object.");
+  const extra = Object.keys(b).find((k) => !["device_id", "decision", "signed_at", "signature_der_b64"].includes(k));
+  if (extra) return refuse(400, "bad_request", `${extra} is not a field of a decision (allowed: device_id, decision, signed_at, signature_der_b64).`);
+  if (typeof b.device_id !== "string" || !/^d_[0-9a-f]{16}$/.test(b.device_id)) return refuse(400, "bad_request", "device_id must be the device_id enrollment returned.");
+  if (b.decision !== "approve" && b.decision !== "deny") return refuse(400, "bad_request", 'decision must be "approve" or "deny".');
   const signedAt = signedAtOf(b.signed_at);
-  if (signedAt === null) return refuse(400, "body", "signed_at must be Unix seconds, as an integer");
+  if (signedAt === null) return refuse(400, "bad_request", "signed_at must be Unix seconds, as an integer.");
   const der = typeof b.signature_der_b64 === "string" ? fromBase64(b.signature_der_b64) : null;
-  if (!der) return refuse(400, "body", "signature_der_b64 must be the DER signature in standard base64");
+  if (!der) return refuse(400, "bad_request", "signature_der_b64 must be the DER signature in standard base64.");
   const decision = b.decision;
 
   const [devQ, reqQ] = await env.DB.batch<Record<string, unknown>>([
@@ -234,24 +259,25 @@ export async function decideApproval(env: Env, requestId: string, req: Request):
   const now = Date.now();
 
   // 1. The device exists and is not revoked.
-  if (!device) return refuse(403, "device", `device ${b.device_id} is not enrolled`);
-  if (device.revoked_at !== null) return refuse(403, "device", `device ${b.device_id} was revoked`);
+  if (!device) return refuse(403, "device_unknown", `Device ${b.device_id} is not enrolled.`);
+  if (device.revoked_at !== null) return refuse(403, "device_revoked", `Device ${b.device_id} was revoked.`);
   // 2. The request exists, is pending and has not expired.
-  if (!r) return refuse(404, "request", `approval request ${requestId} not found`);
-  if (r.state !== "pending") return refuse(409, "request", `approval request ${requestId} is already ${r.state}`, { state: outcomeState(r), result_url: r.result_url ?? undefined });
-  if (r.expires_at <= now) return refuse(410, "request", `approval request ${requestId} expired at ${iso(r.expires_at)}`);
+  if (!r) return refuse(404, "request_not_found", `Approval request ${requestId} does not exist.`);
+  if (r.state === "approved" || r.state === "denied") return refuse(409, "already_decided", `Approval request ${requestId} was already ${r.state}.`, decidedExtra(r));
+  if (r.state === "expired" || r.expires_at <= now) return refuse(410, "request_expired", `Approval request ${requestId} expired at ${isoUtc(r.expires_at)}.`);
   // 3. The signature is fresh.
   const skew = Math.abs(Math.floor(now / 1000) - signedAt);
-  if (skew > SIGNATURE_SKEW_S) return refuse(401, "signed_at", `signed_at is ${skew} s from the Worker's clock; the limit is ${SIGNATURE_SKEW_S} s`);
+  if (skew > SIGNATURE_SKEW_S) return refuse(401, "clock_skew", `signed_at is ${skew} s from the Worker's clock; the limit is ${SIGNATURE_SKEW_S} s.`);
   // 4. The signature is valid over the exact message with the stored key.
   const key = await importDeviceKey(device.public_key_spki_b64);
   const message = signedMessage(r.id, r.inputs_hash, decision, r.nonce, signedAt);
-  if (!key || !(await verifyDer(key, der, message))) return refuse(401, "signature", "signature does not verify over this request, decision, nonce and signed_at with the device's key");
+  if (!key || !(await verifyDer(key, der, message))) return refuse(401, "bad_signature", "The signature does not verify over this request, decision, nonce and signed_at with the device's key.");
 
-  // The proposal must still hold exactly the inputs the request binds.
+  // The proposal must still be waiting, with exactly the inputs the request binds.
   const p = await env.DB.prepare("SELECT * FROM proposals WHERE id = ?").bind(r.proposal_id).first<ProposalForRequest & { state: string }>();
-  if (!p || p.inputs_hash !== r.inputs_hash || (await inputsHash(p.final_step_kind, p.final_step, JSON.parse(p.inputs_json))) !== r.inputs_hash) {
-    return refuse(409, "inputs_hash", "the proposal's inputs no longer match the request's inputs_hash; nothing was recorded");
+  if (!p || p.state !== "awaiting_approval") return refuse(409, "request_not_pending", `The proposal behind ${requestId} is ${p?.state ?? "gone"}, so nothing can be decided.`);
+  if (p.inputs_hash !== r.inputs_hash || (await inputsHash(p.final_step_kind, p.final_step, JSON.parse(p.inputs_json))) !== r.inputs_hash) {
+    return refuse(409, "inputs_changed", "The proposal's inputs no longer match the request's inputs_hash; nothing was recorded.");
   }
 
   // 5. One transaction: the request is decided and its nonce spent only if it
@@ -283,18 +309,17 @@ export async function decideApproval(env: Env, requestId: string, req: Request):
   ]);
   if (won.results.length === 0) {
     const current = await env.DB.prepare("SELECT * FROM approval_requests WHERE id = ?").bind(r.id).first<RequestRow>();
-    return refuse(409, "state", `approval request ${r.id} was decided by another call`, current ? { state: outcomeState(current), result_url: current.result_url ?? undefined } : {});
+    return refuse(409, "already_decided", `Approval request ${r.id} was decided by another call.`, current ? decidedExtra(current) : {});
   }
   console.log(`[approvals] ${r.id} ${state} by ${device.id}`);
   if (state === "denied") return json({ state: "denied" });
   if (followed.results.length === 0) {
+    // The proposal changed between the check above and the UPDATE.
     await finish(env, r.id, r.proposal_id, "failed", null, "the proposal was no longer awaiting approval", false);
-    return json({ state: "failed", error: "the proposal was no longer awaiting approval" });
+    return json({ state: "approved", outcome: "failed", outcome_error: "the proposal was no longer awaiting approval" });
   }
   return json(await execute(env, r, p));
 }
-
-const outcomeState = (r: RequestRow) => (r.state === "approved" && r.outcome && r.outcome !== "no_executor" && r.outcome !== "running" ? r.outcome : r.state);
 
 async function finish(env: Env, requestId: string, proposalId: string, outcome: string, url: string | null, error: string | null, touchProposal = true) {
   const now = Date.now();
@@ -314,22 +339,25 @@ async function finish(env: Env, requestId: string, proposalId: string, outcome: 
 
 // Runs the proposal's executor once, after the UPDATE that decided the
 // request. Only open_pr has one; any other approved step waits, as before.
-async function execute(env: Env, r: RequestRow, p: ProposalForRequest): Promise<{ state: string; result_url?: string; error?: string }> {
+// The answer's state is the decision, "approved"; outcome says what the
+// executor did: executed (with result_url), no_executor, failed (nothing was
+// written) or outcome_unknown (a write may have happened).
+async function execute(env: Env, r: RequestRow, p: ProposalForRequest): Promise<{ state: "approved"; outcome: string; result_url?: string; outcome_error?: string }> {
   if (p.final_step_kind !== "open_pr") {
     await finish(env, r.id, r.proposal_id, "no_executor", null, null, false);
-    return { state: "approved" };
+    return { state: "approved", outcome: "no_executor" };
   }
   try {
     const url = await openPr(env, validatePrSpec(JSON.parse(p.inputs_json)));
     await finish(env, r.id, r.proposal_id, "executed", url, null);
     console.log(`[approvals] ${r.id} executed: ${url}`);
-    return { state: "executed", result_url: url };
+    return { state: "approved", outcome: "executed", result_url: url };
   } catch (e) {
     const wrote = e instanceof ExecError && e.wrote;
     const msg = (e instanceof Error ? e.message : String(e)).slice(0, 500);
     const outcome = wrote ? "outcome_unknown" : "failed";
     await finish(env, r.id, r.proposal_id, outcome, null, msg);
     console.log(`[approvals] ${r.id} ${outcome}: ${msg}`);
-    return { state: outcome, error: msg };
+    return { state: "approved", outcome, outcome_error: msg };
   }
 }

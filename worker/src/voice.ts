@@ -29,10 +29,9 @@ const POLLS = 10;
 const POLL_MS = 3000;
 
 function recordedAt(v: string | null): number {
-  if (v === null) throw new HttpError(400, "x-recorded-at header is required: an ISO 8601 time with a zone, or Unix seconds");
-  if (/^[1-9][0-9]{0,11}$/.test(v)) return Number(v) * 1000;
-  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})$/.test(v) && Number.isFinite(Date.parse(v))) return Date.parse(v);
-  throw new HttpError(400, "x-recorded-at must be an ISO 8601 time with a zone, or Unix seconds");
+  if (v === null) throw new HttpError(400, "x-recorded-at header is required: an ISO 8601 time such as 2026-11-12T09:30:00Z");
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/.test(v) && Number.isFinite(Date.parse(v))) return Date.parse(v);
+  throw new HttpError(400, "x-recorded-at must be an ISO 8601 time with seconds and a zone, such as 2026-11-12T09:30:00Z");
 }
 
 export async function uploadVoice(env: Env, ctx: ExecutionContext, caller: Caller, req: Request) {
@@ -75,11 +74,11 @@ export async function voiceStatus(env: Env, caller: Caller, id: string) {
     inbox_id: string | null;
   }>();
   if (!v || (caller.scope === "device" && v.device_id !== caller.deviceId)) throw new HttpError(404, `voice note ${id} not found`);
+  // docs/APPROVALS.md, "Wire details": { state, transcript?, error? }.
   return {
-    audio_id: v.id,
     state: v.state,
-    ...(v.state === "done" ? { transcript: v.transcript ?? "", inbox_id: v.inbox_id } : {}),
-    ...(v.state === "failed" ? { error: v.error } : {}),
+    ...(v.state === "done" ? { transcript: v.transcript ?? "" } : {}),
+    ...(v.state === "failed" ? { error: v.error ?? "transcription failed" } : {}),
   };
 }
 

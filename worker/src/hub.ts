@@ -5,7 +5,7 @@
 import type { Caller } from "./auth";
 import type { Env } from "./check";
 import { onlyFields } from "./devices";
-import { fail, HttpError, randomHex, readJson } from "./http";
+import { fail, HttpError, isoUtc, randomHex, readJson } from "./http";
 import { MailRefusal } from "./mailbox";
 
 const KINDS = ["thought", "direction", "task", "reply", "agent_push"] as const;
@@ -90,7 +90,7 @@ export async function insertInbox(
     .bind(id, i.kind, i.text, i.source, i.claimedSource ?? null, JSON.stringify(i.refs ?? []), i.audioId ?? null, i.replyTo ?? null, now)
     .run();
   console.log(`[inbox] ${id} ${i.kind} from ${i.source}`);
-  return { id, kind: i.kind, source: i.source, created_at: new Date(now).toISOString() };
+  return { id, kind: i.kind, source: i.source, created_at: isoUtc(now) };
 }
 
 export async function inboxRoute(env: Env, caller: Caller, req: Request) {

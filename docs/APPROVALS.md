@@ -62,3 +62,33 @@ Secret `GITHUB_PR_TOKEN` (fine-grained, owner SamGu-NRX, contents + pull request
 - `POST /voice` (device_token), body = the audio file (`audio/mp4`, AAC, 48 kHz mono, ≤ 25 MB), header `x-recorded-at`. The Worker stores it in R2 (`VOICE` bucket binding) and returns `{ audio_id }` at once, then transcribes in `ctx.waitUntil` with Gemini (`GEMINI_API_KEY`; model per the current Gemini transcription docs) and files the transcript to the inbox as `kind: "thought"` with `audio_id`. `GET /voice/:audio_id` (device_token) returns `{ state, transcript? }`.
 - The app also offers the transcript for SuperWhisper-compatible export later; not in v1.
 
+## Wire details
+
+Amended by the lead on 2026-11-12. The iPhone app is built against these.
+
+1. Times: every timestamp the Worker returns to the app (`expires_at`, `created_at`, `enrolled_at`, `decided_at`, `revoked_at`, …) is an ISO 8601 UTC string with whole seconds, such as `2026-11-12T09:30:00Z`. `signed_at` in the decide body stays Unix seconds, because it is inside the signed message.
+2. `GET /approvals?state=pending` returns `{ "approvals": [ … ] }`, not a bare array.
+3. `POST /devices/:id/apns-token` body: `{ "apns_token": "<hex>", "apns_env": "development"|"production" }`. Both fields are required.
+4. `POST /approvals/:id/decide` success returns `{ "state": "approved"|"denied", "result_url"?: string }`. Every 4xx/5xx body is `{ "error": "<machine_code>", "message": "<one sentence>" }`, where `error` names the failed check. The codes, in the order the checks run:
+
+   | `error` | Status | When |
+   | --- | --- | --- |
+   | `bad_request` | 400 | The body is not JSON, has an unknown field, or a field is malformed; `message` names the field. |
+   | `body_too_large` | 413 | The body is over 4 KB. |
+   | `device_unknown` | 403 | No device has that `device_id`. |
+   | `device_revoked` | 403 | The device was revoked. |
+   | `request_not_found` | 404 | No approval request has that id. |
+   | `already_decided` | 409 | The request was approved or denied already, or another call won the final UPDATE. The body also carries `state`, `outcome` and `result_url` when there is one, so an app whose first answer was lost can show the outcome. |
+   | `request_expired` | 410 | The request expired. |
+   | `clock_skew` | 401 | `signed_at` is more than 300 s from the Worker's clock. |
+   | `bad_signature` | 401 | The signature does not verify over the exact message with the device's key. |
+   | `request_not_pending` | 409 | The proposal behind the request is no longer waiting (it expired, or was decided another way). |
+   | `inputs_changed` | 409 | The proposal's stored inputs no longer hash to the request's `inputs_hash`. |
+   | `internal_error` | 500 | The Worker failed; `request_id` is in the body. |
+
+   An approve's answer also carries `outcome`: `executed` (with `result_url`, the PR), `no_executor` (the step has no executor yet and waits), `failed` (nothing was written; `outcome_error` says why) or `outcome_unknown` (a write may have happened). `GET /approvals/:id` (device_token) returns the request with the same `outcome` and `result_url`.
+5. `GET /voice/:audio_id` returns `{ "state": "queued"|"transcribing"|"done"|"failed", "transcript"?: string, "error"?: string }`.
+6. APNs payload: the custom keys `request_id`, `inputs_hash`, `nonce`, `expires_at` sit at the top level next to `aps`.
+7. The `x-recorded-at` header is ISO 8601 with seconds and a zone (`2026-11-12T09:30:00Z`; fractional seconds and offsets are accepted).
+8. For v1.1 remote Live Activity starts: `POST /devices/:id/live-activity-token` (that device's device_token) with `{ "push_to_start_token": "<hex>", "apns_env": "development"|"production" }`. The Worker stores it and sends no Live Activity pushes yet.
+9. Self-revoke: `POST /devices/:id/revoke` also accepts that device's own `device_token`, which may revoke only itself. ADMIN_TOKEN can revoke any device.

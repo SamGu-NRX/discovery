@@ -68,11 +68,16 @@ function signed(device, r, decision, { at = now(), key = device.key, nonce = r.n
   return { device_id: device.id, decision, signed_at: at, signature_der_b64: der.toString("base64") };
 }
 const decide = (r, body) => req("none", "POST", `/approvals/${r.id}/decide`, body);
-const refusedBy = async (p, status, check) => {
+// Every refusal is { error: <machine code>, message: <one sentence> }.
+const refusedBy = async (p, status, code) => {
   const r = await p;
   assert.equal(r.status, status, JSON.stringify(r.body));
-  assert.equal(r.body.check, check, JSON.stringify(r.body));
+  assert.equal(r.body.error, code, JSON.stringify(r.body));
+  assert.equal(typeof r.body.message, "string");
+  return r.body;
 };
+// ISO 8601 UTC with whole seconds, the app's wire format.
+const ISO_UTC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;
 
 // ---- proposals ----
 
@@ -118,8 +123,12 @@ test("enrollment: a code works once, within 10 minutes, is stored only as a hash
   const d = devices.phone;
   const again = await req("none", "POST", "/devices/enroll", d.body);
   assert.equal(again.status, 403, "a spent code");
-  const { code } = await ok(req("admin", "POST", "/devices/enroll-codes"), 201);
+  const { code, expires_at } = await ok(req("admin", "POST", "/devices/enroll-codes"), 201);
   assert.match(code, /^[0-9A-HJKMNP-TV-Z]{4}-[0-9A-HJKMNP-TV-Z]{4}-[0-9A-HJKMNP-TV-Z]{4}$/);
+  assert.match(expires_at, ISO_UTC);
+  assert.ok(Math.abs(Date.parse(expires_at) - Date.now() - 600_000) < 60_000, "10 minutes");
+  const listed = (await ok(req("admin", "GET", "/devices"))).devices.find((x) => x.id === d.id);
+  assert.match(listed.enrolled_at, ISO_UTC);
   const stored = await s.d1("SELECT code_hash FROM device_enroll_codes");
   const plain = code.replace(/-/g, "");
   assert.ok(stored.some((r) => r.code_hash === createHash("sha256").update(plain).digest("hex")));
@@ -146,14 +155,30 @@ test("enrollment: a code works once, within 10 minutes, is stored only as a hash
   assert.equal((await req(devices.tmp.bearer, "GET", "/approvals")).status, 401, "a revoked device's token");
 });
 
-test("a device updates only its own push token", async () => {
+test("a device updates only its own push and Live Activity tokens, and may revoke only itself", async () => {
   const other = await enrollDevice("ipad", "development");
   const fresh = randomBytes(32).toString("hex");
-  assert.equal((await req(other.bearer, "POST", `/devices/${devices.phone.id}/apns-token`, { apns_token: fresh })).status, 403);
-  await ok(req(other.bearer, "POST", `/devices/${other.id}/apns-token`, { apns_token: fresh.toUpperCase() }));
+  assert.equal((await req(other.bearer, "POST", `/devices/${devices.phone.id}/apns-token`, { apns_token: fresh, apns_env: "development" })).status, 403);
+  await ok(req(other.bearer, "POST", `/devices/${other.id}/apns-token`, { apns_token: fresh.toUpperCase(), apns_env: "development" }));
   assert.deepEqual(await s.d1(`SELECT apns_token FROM devices WHERE id = '${other.id}'`), [{ apns_token: fresh }]);
   other.apns = fresh;
-  assert.match((await req(other.bearer, "POST", `/devices/${other.id}/apns-token`, { apns_token: "xyz" })).body.error, /^apns_token /);
+  assert.match((await req(other.bearer, "POST", `/devices/${other.id}/apns-token`, { apns_token: "xyz", apns_env: "development" })).body.error, /^apns_token /);
+  assert.match((await req(other.bearer, "POST", `/devices/${other.id}/apns-token`, { apns_token: fresh })).body.error, /^apns_env /);
+
+  const start = randomBytes(40).toString("hex");
+  assert.equal((await req(other.bearer, "POST", `/devices/${devices.phone.id}/live-activity-token`, { push_to_start_token: start, apns_env: "development" })).status, 403);
+  const la = await ok(req(other.bearer, "POST", `/devices/${other.id}/live-activity-token`, { push_to_start_token: start, apns_env: "development" }));
+  assert.match(la.updated_at, ISO_UTC);
+  assert.deepEqual(await s.d1(`SELECT push_to_start_token, push_to_start_env FROM devices WHERE id = '${other.id}'`), [{ push_to_start_token: start, push_to_start_env: "development" }]);
+  assert.match((await req(other.bearer, "POST", `/devices/${other.id}/live-activity-token`, { push_to_start_token: "zz", apns_env: "development" })).body.error, /^push_to_start_token /);
+
+  // A device token revokes its own device and nothing else.
+  const spare = await enrollDevice("spare");
+  assert.equal((await req(spare.bearer, "POST", `/devices/${devices.phone.id}/revoke`)).status, 403);
+  assert.equal((await req("mail_dot", "POST", `/devices/${spare.id}/revoke`)).status, 403);
+  assert.match((await ok(req(spare.bearer, "POST", `/devices/${spare.id}/revoke`))).revoked_at, ISO_UTC);
+  assert.equal((await req(spare.bearer, "GET", "/approvals")).status, 401);
+  await ok(req(devices.phone.bearer, "GET", "/approvals"), 200);
 });
 
 test("an irreversible proposal sends every live device a time-sensitive APPROVAL alert over its APNs host, with an ES256 provider token", async () => {
@@ -176,6 +201,9 @@ test("an irreversible proposal sends every live device a time-sensitive APPROVAL
     expires_at: r.expires_at,
   });
   assert.match(r.nonce, /^[0-9a-f]{32}$/);
+  assert.match(r.created_at, ISO_UTC);
+  assert.match(r.expires_at, ISO_UTC);
+  assert.deepEqual(Object.keys(x.body).sort(), ["aps", "expires_at", "inputs_hash", "nonce", "request_id"], "custom keys at the top level, next to aps");
   assert.ok(r.body.split("\n").length <= 3);
   assert.match(r.body, /SamGu-NRX\/discovery: agent\/hub-\d+-\d+ into main/);
   assert.equal(x.headers["apns-topic"], APNS.APNS_TOPIC);
@@ -200,7 +228,7 @@ test("an irreversible proposal sends every live device a time-sensitive APPROVAL
   const pushed = (await s.control("pushes")).filter((x) => x.token === devices.ipad.apns);
   assert.ok(!pushed.some((x) => x.body.request_id !== r.id && x.body.request_id !== r2.id), "no push after the 410");
   // A new push token clears it.
-  await ok(req(devices.ipad.bearer, "POST", `/devices/${devices.ipad.id}/apns-token`, { apns_token: devices.ipad.apns }));
+  await ok(req(devices.ipad.bearer, "POST", `/devices/${devices.ipad.id}/apns-token`, { apns_token: devices.ipad.apns, apns_env: "development" }));
   assert.deepEqual(await s.d1(`SELECT apns_invalid_at IS NULL AS live FROM devices WHERE id = '${devices.ipad.id}'`), [{ live: 1 }]);
 });
 
@@ -210,17 +238,17 @@ test("deciding checks the device, the request, the clock, then the signature, in
   const phone = devices.phone;
   const writesBefore = (await ghWrites()).length;
 
-  await refusedBy(decide(r, { ...signed(phone, r, "approve"), device_id: "d_0000000000000000" }), 403, "device");
+  await refusedBy(decide(r, { ...signed(phone, r, "approve"), device_id: "d_0000000000000000" }), 403, "device_unknown");
   // A revoked device, with a signature its own key made.
-  await refusedBy(decide(r, signed(devices.tmp, r, "approve")), 403, "device");
-  await refusedBy(decide({ ...r, id: "ar_000000000000000000000000" }, signed(phone, r, "approve")), 404, "request");
-  await refusedBy(decide(r, signed(phone, r, "approve", { at: now() - 301 })), 401, "signed_at");
-  await refusedBy(decide(r, signed(phone, r, "approve", { at: now() + 301, key: devices.ipad.key })), 401, "signed_at");
+  await refusedBy(decide(r, signed(devices.tmp, r, "approve")), 403, "device_revoked");
+  await refusedBy(decide({ ...r, id: "ar_000000000000000000000000" }, signed(phone, r, "approve")), 404, "request_not_found");
+  await refusedBy(decide(r, signed(phone, r, "approve", { at: now() - 301 })), 401, "clock_skew");
+  await refusedBy(decide(r, signed(phone, r, "approve", { at: now() + 301, key: devices.ipad.key })), 401, "clock_skew");
   // Valid signatures over anything but this exact message fail.
-  await refusedBy(decide(r, signed(phone, r, "approve", { key: devices.ipad.key })), 401, "signature");
-  await refusedBy(decide(r, signed(phone, r, "deny", { signDecision: "approve" })), 401, "signature");
-  await refusedBy(decide(r, signed(phone, r, "approve", { nonce: "0".repeat(32) })), 401, "signature");
-  await refusedBy(decide(r, signed(phone, r, "approve", { hash: "f".repeat(64) })), 401, "signature");
+  await refusedBy(decide(r, signed(phone, r, "approve", { key: devices.ipad.key })), 401, "bad_signature");
+  await refusedBy(decide(r, signed(phone, r, "deny", { signDecision: "approve" })), 401, "bad_signature");
+  await refusedBy(decide(r, signed(phone, r, "approve", { nonce: "0".repeat(32) })), 401, "bad_signature");
+  await refusedBy(decide(r, signed(phone, r, "approve", { hash: "f".repeat(64) })), 401, "bad_signature");
   // The same r and s, encoded with a leading zero DER forbids. ECDSA is
   // randomized, so sign until r needs no zero of its own.
   let good;
@@ -228,11 +256,10 @@ test("deciding checks the device, the request, the clock, then the signature, in
   while (Buffer.from(good.signature_der_b64, "base64")[4] >= 0x80);
   const der = Buffer.from(good.signature_der_b64, "base64");
   const padded = Buffer.concat([Buffer.from([0x30, der[1] + 1, 0x02, der[3] + 1, 0x00]), der.subarray(4)]);
-  await refusedBy(decide(r, { ...good, signature_der_b64: padded.toString("base64") }), 401, "signature");
+  await refusedBy(decide(r, { ...good, signature_der_b64: padded.toString("base64") }), 401, "bad_signature");
   for (const [field, value] of [["decision", "yes"], ["signed_at", 1.5], ["signature_der_b64", "not base64!"], ["device_id", 7]]) {
-    const bad = await decide(r, { ...good, [field]: value });
-    assert.equal(bad.status, 400);
-    assert.match(bad.body.error, new RegExp(`^${field} `));
+    const bad = await refusedBy(decide(r, { ...good, [field]: value }), 400, "bad_request");
+    assert.match(bad.message, new RegExp(`^${field} `));
   }
 
   assert.equal((await ok(req(phone.bearer, "GET", `/approvals/${r.id}`))).state, "pending", "no refusal recorded anything");
@@ -242,7 +269,7 @@ test("deciding checks the device, the request, the clock, then the signature, in
   const late = await ok(proposal(prInputs()), 201);
   const lr = await requestFor(late.id);
   await s.d1(`UPDATE approval_requests SET expires_at = ${Date.now() - 1} WHERE id = '${lr.id}'`);
-  await refusedBy(decide(lr, signed(phone, lr, "approve")), 410, "request");
+  await refusedBy(decide(lr, signed(phone, lr, "approve")), 410, "request_expired");
 });
 
 test("an approve opens a draft PR from a new agent/ branch off base, once; a replay or a second device gets 409", async () => {
@@ -252,7 +279,8 @@ test("an approve opens a draft PR from a new agent/ branch off base, once; a rep
   const mark = (await s.control("github")).requests.length;
   const body = signed(devices.phone, r, "approve");
   const res = await ok(decide(r, body));
-  assert.equal(res.state, "executed");
+  assert.equal(res.state, "approved");
+  assert.equal(res.outcome, "executed");
   assert.match(res.result_url, /^https:\/\/github\.com\/SamGu-NRX\/discovery\/pull\/\d+$/);
 
   const calls = (await s.control("github")).requests.slice(mark);
@@ -269,11 +297,10 @@ test("an approve opens a draft PR from a new agent/ branch off base, once; a rep
   assert.deepEqual(writes.find((c) => c.path === "/pulls").body, { title: inputs.title, body: inputs.body, head: inputs.head_branch, base: "main", draft: true });
   assert.equal((await s.control("github")).repos["SamGu-NRX/discovery"].refs.main, baseSha, "base untouched");
 
-  const replay = await decide(r, body);
-  assert.equal(replay.status, 409);
-  assert.equal(replay.body.state, "executed");
-  assert.equal(replay.body.result_url, res.result_url);
-  await refusedBy(decide(r, signed(devices.ipad, r, "approve")), 409, "request");
+  const replay = await refusedBy(decide(r, body), 409, "already_decided");
+  assert.equal(replay.state, "approved");
+  assert.equal(replay.result_url, res.result_url, "a lost answer can be recovered from the 409");
+  await refusedBy(decide(r, signed(devices.ipad, r, "approve")), 409, "already_decided");
   assert.equal((await s.control("github")).requests.slice(mark).filter((c) => c.path === "/pulls").length, 1);
   const [stored] = await s.d1(`SELECT state, result_json FROM proposals WHERE id = '${p.id}'`);
   assert.equal(stored.state, "executed");
@@ -288,6 +315,7 @@ test("two devices deciding at once: exactly one wins", async () => {
   const r = await requestFor(p.id);
   const [a, b] = await Promise.all([decide(r, signed(devices.phone, r, "deny")), decide(r, signed(devices.ipad, r, "deny"))]);
   assert.deepEqual([a.status, b.status].sort(), [200, 409]);
+  assert.equal((a.status === 409 ? a : b).body.error, "already_decided");
 });
 
 test("a deny records the decision and runs nothing", async () => {
@@ -328,8 +356,9 @@ test("at execution: a repository taken off the allowlist, an existing branch, a 
   let mark = (await s.control("github")).requests.length;
   try {
     const res = await ok(decide(offR, signed(devices.phone, offR, "approve")));
-    assert.equal(res.state, "failed");
-    assert.match(res.error, /allowlist/);
+    assert.equal(res.state, "approved");
+    assert.equal(res.outcome, "failed");
+    assert.match(res.outcome_error, /allowlist/);
   } finally {
     await s.call("POST", "/admin/pr-allowlist", { repos: ["SamGu-NRX/discovery"] });
   }
@@ -341,7 +370,7 @@ test("at execution: a repository taken off the allowlist, an existing branch, a 
   const exR = await requestFor(existing.id);
   const before = (await s.control("github")).repos["SamGu-NRX/discovery"].refs["agent/pushed"];
   const exRes = await ok(decide(exR, signed(devices.phone, exR, "approve")));
-  assert.equal(exRes.state, "failed");
+  assert.equal(exRes.outcome, "failed");
   assert.equal((await s.control("github")).repos["SamGu-NRX/discovery"].refs["agent/pushed"], before);
   assert.ok(!(await ghWrites()).some((c) => c.method === "PATCH" || c.path === "/pulls" && c.body.head === "agent/pushed"));
 
@@ -351,14 +380,14 @@ test("at execution: a repository taken off the allowlist, an existing branch, a 
   const wsR = await requestFor(wrongSha.id);
   mark = (await s.control("github")).requests.length;
   const ws = await ok(decide(wsR, signed(devices.phone, wsR, "approve")));
-  assert.equal(ws.state, "failed");
-  assert.match(ws.error, /not the approved head_sha/);
+  assert.equal(ws.outcome, "failed");
+  assert.match(ws.outcome_error, /not the approved head_sha/);
   assert.deepEqual((await s.control("github")).requests.slice(mark).filter((c) => c.method !== "GET"), []);
   const rightSha = await ok(proposal(prInputs({ files: undefined, head_branch: "agent/pushed", head_sha: pushedSha })), 201);
   const rsR = await requestFor(rightSha.id);
   mark = (await s.control("github")).requests.length;
   const rs = await ok(decide(rsR, signed(devices.phone, rsR, "approve")));
-  assert.equal(rs.state, "executed");
+  assert.equal(rs.outcome, "executed");
   assert.deepEqual((await s.control("github")).requests.slice(mark).filter((c) => c.method !== "GET").map((c) => c.path), ["/pulls"]);
 
   // The branch was created and then the PR call failed: the outcome is unknown, not failed.
@@ -367,7 +396,7 @@ test("at execution: a repository taken off the allowlist, an existing branch, a 
     const p = await ok(proposal(prInputs()), 201);
     const r = await requestFor(p.id);
     const res = await ok(decide(r, signed(devices.phone, r, "approve")));
-    assert.equal(res.state, "outcome_unknown");
+    assert.equal(res.outcome, "outcome_unknown");
     assert.deepEqual(await s.d1(`SELECT state FROM proposals WHERE id = '${p.id}'`), [{ state: "outcome_unknown" }]);
   } finally {
     await s.control("github-fail", { key: "POST /pulls", status: 0 });
@@ -379,8 +408,16 @@ test("a decision only for the proposal's current inputs: changed stored inputs r
   const r = await requestFor(p.id);
   await s.d1(`UPDATE proposals SET inputs_json = json_set(inputs_json, '$.base', 'release') WHERE id = '${p.id}'`);
   const mark = (await s.control("github")).requests.length;
-  await refusedBy(decide(r, signed(devices.phone, r, "approve")), 409, "inputs_hash");
+  await refusedBy(decide(r, signed(devices.phone, r, "approve")), 409, "inputs_changed");
   assert.equal((await s.control("github")).requests.length, mark);
+  assert.equal((await ok(req("admin", "GET", `/approvals/${r.id}`))).state, "pending");
+});
+
+test("a request whose proposal stopped waiting is refused as request_not_pending and decides nothing", async () => {
+  const p = await ok(proposal(prInputs()), 201);
+  const r = await requestFor(p.id);
+  await s.d1(`UPDATE proposals SET state = 'expired' WHERE id = '${p.id}'`);
+  await refusedBy(decide(r, signed(devices.phone, r, "approve")), 409, "request_not_pending");
   assert.equal((await ok(req("admin", "GET", `/approvals/${r.id}`))).state, "pending");
 });
 
@@ -390,6 +427,7 @@ test("POST /inbox stores the text verbatim with the token's source; kinds follow
   const text = "  Ship the hub.\nThen rest.  ";
   const mine = await ok(req(devices.phone.bearer, "POST", "/inbox", { kind: "thought", text, source: "agent:dot" }), 201);
   assert.equal(mine.source, `device:${devices.phone.id}`);
+  assert.match(mine.created_at, ISO_UTC);
   assert.deepEqual(await s.d1(`SELECT text, source, claimed_source FROM inbox_items WHERE id = '${mine.id}'`), [{ text, source: `device:${devices.phone.id}`, claimed_source: "agent:dot" }]);
   assert.equal((await ok(req("mail_dot", "POST", "/inbox", { kind: "reply", text: "On it.", reply_to: mine.id, source: "sam" }), 201)).source, "dot");
   assert.equal((await ok(req("admin", "POST", "/inbox", { kind: "direction", text: "x" }), 201)).source, "admin");
@@ -479,7 +517,7 @@ test("the dot's MCP surface adds get_brief and tell; no other agent sees them", 
 // hit on the next call.
 const voice = (token, bytes, headers = {}) =>
   new Promise((resolve, reject) => {
-    const h = { authorization: `Bearer ${token.bearer}`, "content-type": "audio/mp4", "x-recorded-at": "2026-11-12T08:00:00-06:00", "content-length": String(bytes.length), ...headers };
+    const h = { authorization: `Bearer ${token.bearer}`, "content-type": "audio/mp4", "x-recorded-at": "2026-11-12T14:00:00Z", "content-length": String(bytes.length), ...headers };
     const r = request(`${s.base}/voice`, { method: "POST", agent: false, headers: h }, (res) => {
       const chunks = [];
       res.on("data", (c) => chunks.push(c));
@@ -500,8 +538,8 @@ test("a voice note is stored and answered at once, then transcribed with Gemini 
     const v = await ok(req(devices.phone.bearer, "GET", `/voice/${audio_id}`));
     return v.state === "done" && v;
   }, "the transcription");
-  assert.equal(done.transcript, "Remember to ship the hub branch.");
-  assert.deepEqual(await s.d1(`SELECT kind, source, audio_id, text FROM inbox_items WHERE id = '${done.inbox_id}'`), [
+  assert.deepEqual(done, { state: "done", transcript: "Remember to ship the hub branch." });
+  assert.deepEqual(await s.d1(`SELECT kind, source, audio_id, text FROM inbox_items WHERE audio_id = '${audio_id}'`), [
     { kind: "thought", source: `device:${devices.phone.id}`, audio_id, text: "Remember to ship the hub branch." },
   ]);
   const g = await s.control("gemini");
@@ -521,6 +559,8 @@ test("a voice note is stored and answered at once, then transcribed with Gemini 
 test("voice refuses a wrong type, a missing x-recorded-at, an oversized body and a non-device token; a failing transcription is retried by the cron, then failed", async () => {
   assert.equal((await voice(devices.phone.bearer, randomBytes(10), { "content-type": "audio/wav" })).status, 415);
   assert.equal((await voice(devices.phone.bearer, randomBytes(10), { "x-recorded-at": "yesterday" })).status, 400);
+  assert.equal((await voice(devices.phone.bearer, randomBytes(10), { "x-recorded-at": "1762956000" })).status, 400, "ISO 8601 only");
+  assert.equal((await voice(devices.phone.bearer, randomBytes(10), { "x-recorded-at": "2026-11-12T08:00:00.250-06:00" })).status, 201, "fractional seconds and an offset are ISO 8601 too");
   assert.equal((await voice({ bearer: s.vars.ADMIN_TOKEN }, randomBytes(10))).status, 403);
   assert.equal((await voice({ bearer: s.vars.MAIL_DOT_TOKEN }, randomBytes(10))).status, 403);
   assert.equal((await voice(devices.phone.bearer, Buffer.alloc(0))).status, 400);
@@ -535,6 +575,7 @@ test("voice refuses a wrong type, a missing x-recorded-at, an oversized body and
       assert.equal((await s.d1(`SELECT attempts FROM voice_notes WHERE id = '${audio_id}'`))[0].attempts, n);
     }
     const v = await ok(req(devices.phone.bearer, "GET", `/voice/${audio_id}`));
+    assert.deepEqual(Object.keys(v).sort(), ["error", "state"]);
     assert.equal(v.state, "failed");
     assert.match(v.error, /503/);
     await s.d1(`UPDATE voice_notes SET updated_at = 0 WHERE id = '${audio_id}'`);

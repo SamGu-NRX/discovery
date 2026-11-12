@@ -2,7 +2,7 @@ import type { Kind } from "./adapters";
 import { callerScope, type Caller, type Scope } from "./auth";
 import { backfillApprovalRequests, decideApproval, expireApprovalRequests, getApproval, listApprovals } from "./approvals";
 import { chatCompletions, listModels } from "./bridge";
-import { enroll, listDevices, mintEnrollCode, revoke, updateApnsToken } from "./devices";
+import { enroll, listDevices, mintEnrollCode, revoke, updateApnsToken, updateLiveActivityToken } from "./devices";
 import { repoAllowlist, setRepoAllowlist } from "./executor";
 import { brief, inboxRoute } from "./hub";
 import { uploadVoice, voiceCron, voiceStatus } from "./voice";
@@ -205,7 +205,9 @@ const ROUTES: Route[] = [
   { method: "POST", path: /^\/devices\/enroll-codes$/, scopes: [], handler: (_r, env) => ok(mintEnrollCode(env), 201) },
   { method: "GET", path: /^\/devices$/, scopes: [], handler: (_r, env) => ok(listDevices(env)) },
   { method: "POST", path: /^\/devices\/([^/]+)\/apns-token$/, scopes: DEVICE, handler: (req, env, _u, [id], _c, caller) => ok(updateApnsToken(env, caller.deviceId, id, req)) },
-  { method: "POST", path: /^\/devices\/([^/]+)\/revoke$/, scopes: [], handler: (_r, env, _u, [id]) => ok(revoke(env, id)) },
+  { method: "POST", path: /^\/devices\/([^/]+)\/live-activity-token$/, scopes: DEVICE, handler: (req, env, _u, [id], _c, caller) => ok(updateLiveActivityToken(env, caller.deviceId, id, req)) },
+  // A device token may revoke only its own device (checked in revoke).
+  { method: "POST", path: /^\/devices\/([^/]+)\/revoke$/, scopes: DEVICE, handler: (_r, env, _u, [id], _c, caller) => ok(revoke(env, caller, id)) },
   { method: "GET", path: /^\/approvals$/, scopes: DEVICE, handler: (_r, env, url) => ok(listApprovals(env, url)) },
   { method: "GET", path: /^\/approvals\/([^/]+)$/, scopes: DEVICE, handler: (_r, env, _u, [id]) => ok(getApproval(env, id)) },
   { method: "POST", path: /^\/inbox$/, scopes: [...DEVICE, ...MAIL_AGENTS], handler: (req, env, _u, _p, _c, caller) => ok(inboxRoute(env, caller, req), 201) },
