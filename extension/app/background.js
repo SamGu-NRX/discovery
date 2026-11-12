@@ -2,6 +2,7 @@
 // into contract batches, sends them to the Worker, and runs scheduled sessions.
 
 import { captureToBatch } from "./lib/capture.js";
+import { acquireFetchRun, beatFetchRun, releaseFetchRun } from "./lib/fetchlock.js";
 import { focalTweetIdFromUrl, operationFromUrl } from "./lib/ops.js";
 import { dropStoredSince, enqueue, flush } from "./lib/outbox.js";
 import { ParseError } from "./lib/parse.js";
@@ -113,6 +114,27 @@ async function handle(message, sender) {
       if (!fromExtensionPage) return { error: "only the popup stops sessions" };
       requestStop("stopped_by_user", "stopped from the popup");
       return { stopping: true };
+    case "fetch-acquire":
+      // sessionInfo() is set synchronously when a session starts, so this
+      // check and the claim inside acquireFetchRun happen in one step.
+      if (!fromExtensionPage) return { error: "only the fetch page runs fetch mode" };
+      return { refused: await acquireFetchRun(String(message.owner), sessionInfo() !== null) };
+    case "fetch-heartbeat":
+      if (!fromExtensionPage) return { error: "only the fetch page runs fetch mode" };
+      return { held: await beatFetchRun(String(message.owner), { tabId: message.tabId ?? null, windowId: message.windowId ?? null }) };
+    case "fetch-release":
+      if (!fromExtensionPage) return { error: "only the fetch page runs fetch mode" };
+      await releaseFetchRun(String(message.owner));
+      return { ok: true };
+    case "fetch-batch":
+      if (!fromExtensionPage) return { error: "only the fetch page sends fetch batches" };
+      return queueFetchBatch(message);
+    case "fetch-signal":
+      // X told a fetch run to back off: the same pause and report as a 429
+      // seen in any tab.
+      if (!fromExtensionPage) return { error: "only the fetch page sends fetch signals" };
+      await onBackOff(-1, ["rate_limited", "login_wall", "challenge"].includes(message.reason) ? message.reason : "error", `fetch mode: ${String(message.detail).slice(0, 200)}`);
+      return { ok: true };
     default:
       return { error: `unknown message ${message?.type}` };
   }
@@ -145,6 +167,9 @@ async function handleCapture(message, tabId) {
   }
   const config = await loadConfig();
   if (config.mode === "off") return { ignored: true };
+  // A fetch run records every response it requests itself; what X's page
+  // loads in its tab would only repeat part of that as passive captures.
+  if (tabId === (await chrome.storage.session.get("fetchRun")).fetchRun?.tabId) return { ignored: true };
 
   const focalId = operation === "TweetDetail" ? focalTweetIdFromUrl(url) : null;
   const key = [pageLoadId, operation, focalId ?? ""].join("|");
@@ -183,6 +208,18 @@ async function handleCapture(message, tabId) {
   if (session) noteSessionCapture(session.id, { operation, postIds });
   scheduleFlush();
   return { posts: postIds.length };
+}
+
+// One batch from the fetch page (app/fetch/fetch.js), queued like a capture
+// but under the run's own session id and mode "fetch". The outbox is
+// written only here, in the service worker, so its lock covers every writer.
+async function queueFetchBatch({ account, session_id, batch }) {
+  if (typeof account !== "string" || !/^[A-Za-z0-9_]{1,15}$/.test(account)) return { error: "fetch batch without a valid account" };
+  if (typeof session_id !== "string" || !/^[0-9a-f-]{36}$/.test(session_id)) return { error: "fetch batch without a session id" };
+  if (!batch || typeof batch.op !== "string" || !Array.isArray(batch.posts)) return { error: "malformed fetch batch" };
+  const queued = await enqueue({ account, session_id, mode: "fetch", batch });
+  if (queued) scheduleFlush();
+  return queued ? { queued: true } : { error: "capture is off" };
 }
 
 function handleSignal(message, tabId) {

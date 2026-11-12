@@ -203,6 +203,11 @@ button.primary {
   font-weight: 600;
 }
 
+button.secondary.wide {
+  width: 100%;
+  margin-top: 8px;
+}
+
 button.secondary {
   padding: 5px 12px;
   border: 1px solid var(--line);

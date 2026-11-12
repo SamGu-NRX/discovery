@@ -5,6 +5,7 @@
 // Everything it learns arrives through the same capture path as passive
 // browsing.
 
+import { fetchRunHeld, fetchRunHeldAnywhere } from "./fetchlock.js";
 import { flush } from "./outbox.js";
 import { scheduleNext } from "./schedule.js";
 import { extendPause, getLocal, getPauseUntil, loadConfig, pausedOrPausing, recordProblem, setLocal } from "./store.js";
@@ -128,6 +129,8 @@ export function noteSessionCapture(sessionId, { operation, postIds }) {
 
 export async function startSession(trigger) {
   if (current) return { started: false, reason: "A session is already running." };
+  // A fetch run and a session never share the account (lib/fetchlock.js).
+  if (fetchRunHeld()) return { started: false, reason: "A fetch run is going." };
   // Reserve before the first await, so a second start (an alarm and the
   // popup at once) sees this one and refuses.
   const s = {
@@ -172,6 +175,8 @@ export async function startSession(trigger) {
       await recoverInterruptedSession();
       if (await hasRecordOtherThan(s.id)) return refuse("The last session is not reported yet; is the Worker reachable?");
     }
+    // One a previous service worker admitted.
+    if (await fetchRunHeldAnywhere()) return refuse("A fetch run is going.");
     s.config = await loadConfig();
     if (!s.config.workerUrl || !s.config.ingestToken) return refuse("Add the Worker URL and token first.");
     if (s.config.mode === "off") return refuse("Capture is off.");

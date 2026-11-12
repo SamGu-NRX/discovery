@@ -310,6 +310,21 @@ test("a browser restart mid-session gets no new reservation until the open one r
   assert.equal((await start("acct-restart-ok", "two")).status, 200);
 });
 
+test("fetch mode: its reservation shares the account's guard with active sessions, records its mode, and its batches ingest", async () => {
+  const start = (body) => s.call("POST", "/x/sessions/start", body, { raw: true, token: "ingest" });
+  assert.equal((await start({ account: "acct-fetch", session_id: "f-1", mode: "fetch" })).status, 200);
+  // An open fetch run holds off an active session, and the reverse.
+  assert.equal((await start({ account: "acct-fetch", session_id: "a-1" })).status, 423);
+  assert.equal((await start({ account: "acct-fetch", session_id: "f-2", mode: "passive" })).status, 400, "only active and fetch reserve");
+  const body = { account: "acct-fetch", session_id: "f-1", mode: "fetch", captured_at: new Date().toISOString(), batches: [batch("bookmarks", [post("f-post-1")])] };
+  const res = await s.call("POST", "/ingest/x", body, { token: "ingest" });
+  assert.equal(res.sightings, 1);
+  assert.deepEqual(await s.d1("SELECT mode FROM x_sessions WHERE session_id = 'f-1'"), [{ mode: "fetch" }]);
+  assert.deepEqual(await s.d1("SELECT mode FROM x_sightings WHERE post_id = 'f-post-1'"), [{ mode: "fetch" }]);
+  await s.call("POST", "/ingest/x/status", { account: "acct-fetch", session_id: "f-1", status: "rate_limited" }, { token: "ingest" });
+  assert.equal((await start({ account: "acct-fetch", session_id: "a-2" })).status, 423, "a fetch run's rate limit pauses active sessions too");
+});
+
 test("a reply is covered only by a capture of its own permalink, not by the root's capture listing it among replies", async () => {
   const root = post("t-root", { author_handle: "bob" });
   const self = post("t-self", { author_handle: "bob", conversation_id: "t-root", in_reply_to_id: "t-root" });

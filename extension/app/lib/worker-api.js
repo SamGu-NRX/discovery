@@ -54,14 +54,16 @@ export function pauseFrom(answer) {
 // that is still open answers 200 again, so a request whose answer was lost
 // is sent once more under the same session id. 409 means the id is closed or
 // another account's; sessions always use a fresh id, so it is a refusal.
-export async function reserveSession(config, { account, session_id }) {
+// `mode` is "active" for a scheduled or manual session and "fetch" for a
+// fetch-mode run; a Worker from before fetch mode ignores it.
+export async function reserveSession(config, { account, session_id, mode = "active" }) {
   let res;
   for (let attempt = 1; ; attempt += 1) {
     try {
       res = await fetch(new URL("/x/sessions/start", config.workerUrl), {
         method: "POST",
         headers: { authorization: `Bearer ${config.ingestToken}`, "content-type": "application/json" },
-        body: JSON.stringify({ account, session_id }),
+        body: JSON.stringify(mode === "active" ? { account, session_id } : { account, session_id, mode }),
         signal: AbortSignal.timeout(30_000),
       });
       break;
