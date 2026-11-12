@@ -486,7 +486,10 @@ async function deliverEvent(env: Env, w: { id: string; task_id: string; agent: s
       .bind(w.agent, EVENT_NAME, Date.now(), w.id),
     db.prepare("SELECT count(*) AS n FROM mail_wake_terminal WHERE wake_id = ?").bind(w.id),
   ]);
-  const live = subs.results as unknown as Subscription[];
+  // An origin dropped from MAIL_CALLBACK_ORIGINS gets nothing more, even on
+  // a subscription made while it was listed.
+  const allowed = callbackOrigins(env);
+  const live = (subs.results as unknown as Subscription[]).filter((x) => allowed.has(new URL(x.url).origin));
   if (live.length === 0) {
     const n = (terminal.results[0] as { n: number }).n;
     if (n > 0) return { ok: false, status: null, error: `every subscription refused this event for good (${n})`, final: true };

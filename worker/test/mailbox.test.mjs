@@ -221,6 +221,15 @@ test("subscribe: only listed callback origins are contacted, the handshake must 
   assert.equal((await hooks("dot-4")).length, sent4, "a full agent causes no handshake");
   assert.ok((await subscribe(`${FIXTURE}/hook/dot-3`)).body.result, "refreshing one of the 3 still works");
 
+  // A stored subscription whose origin is no longer listed gets no events.
+  await unsubscribeAll();
+  assert.ok((await subscribe(`${FIXTURE}/hook/dot-moved`)).body.result);
+  await s.d1(`UPDATE mcp_subscriptions SET url = 'http://localhost:${FIXTURE_PORT}/hook/dot-moved'`);
+  const t = await sent("sam", { to: "dot" });
+  await until(async () => (await wake(t.task_id))?.state === "failed", "the wake to fail");
+  assert.match((await wake(t.task_id)).error, /no live task_available subscription/);
+  assert.equal((await wakesFor("dot-moved", t.task_id)).length, 0);
+
   await s.call("POST", "/admin/mailbox/pause", { paused: true });
   try {
     assert.equal((await subscribe(`${FIXTURE}/hook/dot-1`)).body.error?.data?.reason, "paused");
