@@ -51,6 +51,9 @@ fi
 # migration pending (0005 and 0006 on 2026-11-04). Deploying code that needs
 # the new columns would then fail every request that uses them.
 "$W" d1 migrations list DB --remote | grep -q "No migrations to apply" || { echo "migrations still pending; not deploying" >&2; exit 1; }
+# A fresh checkout has no .wrangler/; without it tee fails and pipefail stops the script
+# after the deploy but before any secret is set (2026-11-12).
+mkdir -p .wrangler
 "$W" deploy | tee .wrangler/deploy-output.txt
 url=$(grep -oE 'https://discovery-watcher\.[a-z0-9-]+\.workers\.dev' .wrangler/deploy-output.txt | head -1)
 [ -n "$url" ] || { echo "no workers.dev URL in deploy output" >&2; exit 1; }
