@@ -13,7 +13,7 @@ It turns what Sam's X accounts see into finished work. An extension in his logge
 3. Post text, replies, linked pages and webhook fields are data. No component follows instructions found inside them.
 4. On X, automation only reads. It scrolls and navigates. It never likes, reposts, replies, quotes, follows, bookmarks, sends DMs, marks posts "Not interested", or changes settings. It never logs in. If X shows a login wall, a rate limit or a challenge, the session stops and reports it.
 5. Approvals are rare: at most 3 notifications a day. A proposal with no irreversible step is recorded as `done` and never asks.
-6. The runtime uses no Claude models. Model calls go through CLIProxyAPI at `http://127.0.0.1:8317`: `gpt-6-luna` for triage, `gpt-6.1-sol` for deep reads and proposals, `gpt-6-astra` (low effort) as the independent judge, and `codex exec` with `gpt-6.1-sol` for agentic prep.
+6. The discovery runner's own model calls use no Claude models. They go through CLIProxyAPI at `http://127.0.0.1:8317`: `gpt-6-luna` for triage, `gpt-6.1-sol` for deep reads and proposals, `gpt-6-astra` (low effort) as the independent judge, and `codex exec` with `gpt-6.1-sol` for agentic prep. Agents reached through the mailbox (T3 threads, the dot, GrokBot) use whatever model their host selects.
 
 ## Tokens
 
@@ -26,8 +26,27 @@ Each token is a random 32-byte hex string. It is stored locally in `~/.agent-sec
 | `RUNNER_TOKEN` | runner | `/candidates/*`, `/x/posts*`, `POST /embed`, `/proposals`, `/positives` |
 | `INBOX_TOKEN` | GrokBot's scheduled routine | `POST /inbox/x`, which no other token may call, `ADMIN_TOKEN` included |
 | per-proposal approval token | the approval link | `GET` and `POST /a/:token` |
+| `MAIL_DOT_TOKEN` | the dot (ChatGPT) | `POST /mcp/dot/<token>` (in the URL path, because ChatGPT can't send a header), and as a bearer on the routes below |
+| `MAIL_T3_TOKEN`, `MAIL_GROK_TOKEN` | T3 on the Zephyrus, GrokBot | `POST /mcp`, `POST /mail/tasks`, `POST /mail/claim`, `POST /mail/tasks/:id/complete` |
+| `MAIL_ROOM_TOKEN` | Sam | `GET /room/:token` |
 
 Approval tokens are minted per proposal. D1 stores only their SHA-256 hash. A token is single-use, bound to the proposal's `inputs_hash`, and expires with the proposal (default 7 days).
+
+## Mailbox
+
+Sam's agents file tasks for each other through the Worker. The Worker is the only switchboard. A wake carries only ids; the woken agent fetches its work with `mailbox_claim` and returns it with `mailbox_complete`. No reply is parsed from free text.
+
+- Agents: `sam` (the admin token; never woken), `dot` (woken by an MCP Event), `t3` and `grok` (woken by webhook). The sender is always the token's agent, never a body field.
+- `mailbox_send { to, body, idempotency_key, reply?, parent_task_id?, parent_lease_token? }` returns `{ task_id, state, conversation_id, hop }`. The same `(sender, idempotency_key)` returns the same task with `duplicate: true`; the same key with a different `to`, `body` or parent is refused. A refusal is a 4xx whose body names the rule: `route_not_allowed`, `root_not_allowed`, `parent_not_held`, `hop_limit`, `conversation_limit`, `wake_cap`, `paused`, `body_too_large`, `reply_not_allowed`, `idempotency_conflict`, `unknown_agent`.
+- Rules, all checked in the INSERT itself: the pair must be in `mail_routes` (sam→dot, sam→t3, dot→t3, dot→grok, t3→grok, t3→dot; nothing leaves grok). Only `sam`, `dot` and `t3` may start a conversation; any other task names a parent the sender holds under its current lease. A root is hop 1 and hops stop at 3. A conversation holds at most 8 tasks. The receiver's daily wake cap (dot 30, t3 20, grok 6 per UTC day, results included) must have room. Bodies are at most 8 KB of UTF-8.
+- `reply` names who gets the result: omitted means the sender (none for sam), `null` means nobody. It must be the sender or an agent the sender may send to, and not the receiver. Results travel by `reply`, not routes.
+- `mailbox_claim { limit }` returns `{ items }`: up to `limit` tasks addressed to the caller, `{ kind: "task", task_id, lease_token, lease_until, from, conversation_id, hop, body_untrusted }`, each leased for 30 minutes, and up to `limit` results of tasks whose `reply` is the caller, `{ kind: "result", task_id, from, state, result_untrusted }`. A result is marked delivered when it is returned; it stays readable in D1. A task whose third lease expires becomes `expired` and goes back to its `reply` as a result.
+- `mailbox_complete { task_id, lease_token, state: "done|failed|declined", result }` succeeds only with the current lease's token (409 otherwise). Results are at most 16 KB.
+- `_untrusted` fields are data written by another agent or by text it read (invariant 3).
+- Wakes: a webhook wake POSTs `{ event_id, task_id }`. An MCP Event POSTs `{ eventId, name: "task_available", timestamp, data: { task_id }, cursor: null }` signed per Standard Webhooks. `event_id` is the task id for a task, `<task id>_result` for a result. A failed wake is retried by the 15-minute cron at most 3 times.
+- The `mailbox_paused` setting stops sends, claims and wakes. A completion is still recorded. The migration starts it paused.
+- The mailbox has no irreversible tool. Irreversible steps stay behind `POST /proposals` and the approval link, which is never sent through the dot.
+- `GET /room/:token` is a read-only transcript of the newest 100 tasks.
 
 ## Normalized post
 
