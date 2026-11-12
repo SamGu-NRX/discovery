@@ -374,10 +374,16 @@ export async function decide(env: Env, token: string, req: Request): Promise<Res
   const row = await env.DB.prepare(
     `UPDATE proposals SET state = ?2, decided_at = ?3, result_json = ?4
      WHERE id = ?1 AND state = 'awaiting_approval' AND expires_at > ?3 AND inputs_hash = ?5
+       AND NOT EXISTS (SELECT 1 FROM devices)
      RETURNING *`,
   )
     .bind(p.id, state, now, JSON.stringify({ decision, inputs_hash: p.inputs_hash, via: fromForm ? "card" : "api" }), p.inputs_hash)
     .first<ProposalRow>();
+  // The check above ran before this UPDATE; a device enrolled in between
+  // makes the UPDATE match nothing, and the link refuses as it would now.
+  if (!row && (await anyDeviceEver(env))) {
+    return reply(403, "Device signature required.", "Approve or deny this on your iPhone.", p.title, { error: "device signature required" });
+  }
   if (!row) return refuse((await byToken(env, token)) ?? p);
   console.log(`[approvals] ${p.id} decided ${state} via ${fromForm ? "card" : "api"}`);
   return reply(200, decidedHeadline(state), decidedDetail(row), row.title, { id: row.id, state: row.state, inputs_hash: row.inputs_hash });

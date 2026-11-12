@@ -283,23 +283,28 @@ async function decideChecked(env: Env, requestId: string, req: Request): Promise
   // 5. One transaction: the request is decided and its nonce spent only if it
   // is still pending, so a replay or a second device gets 409; the proposal
   // follows only if this UPDATE won.
+  // The device must still be unrevoked and the request unexpired when the
+  // write happens, not only when the checks above ran: a revoke or an expiry
+  // that lands during verification wins.
   const state = decision === "approve" ? "approved" : "denied";
+  const at = Date.now();
   const [won, followed] = await env.DB.batch<Record<string, unknown>>([
     env.DB.prepare(
       `UPDATE approval_requests SET state = ?2, decided_at = ?3, device_id = ?4, signed_at = ?5, signature_der_b64 = ?6, nonce_used_at = ?3,
          outcome = CASE WHEN ?2 = 'approved' THEN 'running' END
        WHERE id = ?1 AND state = 'pending' AND expires_at > ?3 AND nonce = ?7 AND inputs_hash = ?8
+         AND EXISTS (SELECT 1 FROM devices WHERE id = ?4 AND revoked_at IS NULL)
        RETURNING id`,
-    ).bind(r.id, state, now, device.id, signedAt, b.signature_der_b64, r.nonce, r.inputs_hash),
+    ).bind(r.id, state, at, device.id, signedAt, b.signature_der_b64, r.nonce, r.inputs_hash),
     env.DB.prepare(
       `UPDATE proposals SET state = ?2, decided_at = ?3, result_json = ?4
-       WHERE id = ?1 AND state = 'awaiting_approval' AND inputs_hash = ?5
+       WHERE id = ?1 AND state = 'awaiting_approval' AND inputs_hash = ?5 AND expires_at > ?3
          AND EXISTS (SELECT 1 FROM approval_requests WHERE id = ?6 AND decided_at = ?3 AND device_id = ?7 AND signature_der_b64 = ?8)
        RETURNING id`,
     ).bind(
       r.proposal_id,
       state === "approved" ? "approved" : "skipped",
-      now,
+      at,
       JSON.stringify({ decision, inputs_hash: r.inputs_hash, via: "device", device_id: device.id, request_id: r.id }),
       r.inputs_hash,
       r.id,
@@ -308,7 +313,13 @@ async function decideChecked(env: Env, requestId: string, req: Request): Promise
     ),
   ]);
   if (won.results.length === 0) {
-    const current = await env.DB.prepare("SELECT * FROM approval_requests WHERE id = ?").bind(r.id).first<RequestRow>();
+    const [cur, dev] = await env.DB.batch<Record<string, unknown>>([
+      env.DB.prepare("SELECT * FROM approval_requests WHERE id = ?").bind(r.id),
+      env.DB.prepare("SELECT revoked_at FROM devices WHERE id = ?").bind(device.id),
+    ]);
+    const current = cur.results[0] as unknown as RequestRow | undefined;
+    if ((dev.results[0] as { revoked_at: number | null } | undefined)?.revoked_at != null) return refuse(403, "device_revoked", `Device ${device.id} was revoked while deciding.`);
+    if (current && current.state === "pending") return refuse(410, "request_expired", `Approval request ${r.id} expired while deciding.`);
     return refuse(409, "already_decided", `Approval request ${r.id} was decided by another call.`, current ? decidedExtra(current) : {});
   }
   console.log(`[approvals] ${r.id} ${state} by ${device.id}`);

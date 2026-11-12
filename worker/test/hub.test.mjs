@@ -390,6 +390,17 @@ test("at execution: a repository taken off the allowlist, an existing branch, a 
   assert.equal(rs.outcome, "executed");
   assert.deepEqual((await s.control("github")).requests.slice(mark).filter((c) => c.method !== "GET").map((c) => c.path), ["/pulls"]);
 
+  // Someone pushes to the branch just before the PR opens: the PR shows a
+  // commit nobody approved, so it is closed and the outcome is unknown.
+  const raced = await ok(proposal(prInputs({ files: undefined, head_branch: "agent/pushed", head_sha: pushedSha, title: "raced" })), 201);
+  const raR = await requestFor(raced.id);
+  await s.control("github-race", { branch: "agent/pushed", sha: "c".repeat(40) });
+  mark = (await s.control("github")).requests.length;
+  const ra = await ok(decide(raR, signed(devices.phone, raR, "approve")));
+  assert.equal(ra.outcome, "outcome_unknown");
+  assert.match(ra.outcome_error, /not the approved .* it was closed/);
+  assert.deepEqual((await s.control("github")).requests.slice(mark).filter((c) => c.method !== "GET").map((c) => `${c.method} ${c.path}`), ["POST /pulls", "PATCH /pulls/" + ((await s.control("github")).repos["SamGu-NRX/discovery"].pulls)]);
+
   // The branch was created and then the PR call failed: the outcome is unknown, not failed.
   await s.control("github-fail", { key: "POST /pulls", status: 500 });
   try {

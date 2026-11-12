@@ -175,7 +175,12 @@ export async function openPr(env: Env, spec: PrSpec): Promise<string> {
   if (!defaultBranch) throw new ExecError(false, `${spec.repo} has no default_branch in GitHub's answer`);
   if (spec.head_branch === defaultBranch || spec.head_branch === spec.base) throw new ExecError(false, `head_branch ${spec.head_branch} is the default branch or base`);
 
+  // The commit the PR must show: the approved head_sha, or the commit made
+  // here. Someone with push access could move the branch before POST /pulls,
+  // so the PR's own head sha is checked after it opens.
+  let expected: string;
   if (spec.head_sha) {
+    expected = spec.head_sha;
     const ref = need(await gh("GET", `/git/ref/heads/${seg(spec.head_branch)}`), 200, `read branch ${spec.head_branch}`);
     const at = (ref.object as { sha?: string } | undefined)?.sha;
     if (at !== spec.head_sha) throw new ExecError(false, `branch ${spec.head_branch} is at ${at}, not the approved head_sha ${spec.head_sha}`);
@@ -196,6 +201,7 @@ export async function openPr(env: Env, spec: PrSpec): Promise<string> {
       "write the tree",
     );
     const commit = need(await gh("POST", "/git/commits", { message: spec.title, tree: tree.sha, parents: [baseSha] }), 201, "write the commit");
+    expected = String(commit.sha);
     // Creating a ref that exists fails with 422; nothing here updates one.
     const created = await gh("POST", "/git/refs", { ref: `refs/heads/${spec.head_branch}`, sha: commit.sha }, true);
     if (created.status === 201) wrote = true;
@@ -204,5 +210,10 @@ export async function openPr(env: Env, spec: PrSpec): Promise<string> {
   const pr = need(await gh("POST", "/pulls", { title: spec.title, body: spec.body, head: spec.head_branch, base: spec.base, draft: true }, true), 201, "open the pull request");
   const url = pr.html_url;
   if (typeof url !== "string" || !url.startsWith("https://")) throw new ExecError(true, "GitHub's pull request answer has no html_url");
+  const opened = (pr.head as { sha?: string } | undefined)?.sha;
+  if (opened !== expected) {
+    const closed = await gh("PATCH", `/pulls/${Number(pr.number)}`, { state: "closed" }, true);
+    throw new ExecError(true, `PR ${url} opened at ${opened}, not the approved ${expected}; ${closed.status === 200 ? "it was closed" : `closing it failed (${closed.status})`}`);
+  }
   return url;
 }

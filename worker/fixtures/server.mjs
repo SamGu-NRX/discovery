@@ -52,6 +52,7 @@ export function createFixture() {
       requests: [],
       // "<METHOD> <path prefix>" -> status, to make one kind of call fail.
       fail: {},
+      race: {},
       seq: 0,
     },
     apns: {},
@@ -107,6 +108,9 @@ export function createFixture() {
             return send(200, "{}");
           case "/control/github":
             return send(200, JSON.stringify(state.github));
+          case "/control/github-race":
+            state.github.race[b.branch] = b.sha;
+            return send(200, "{}");
           case "/control/github-fail":
             state.github.fail[b.key] = b.status;
             return send(200, "{}");
@@ -269,9 +273,12 @@ export function createFixture() {
       }
       if (req.method === "POST" && path === "/pulls") {
         if (!repo.refs[body.head]) return out(422, { message: "Validation Failed: head does not exist" });
+        // g.race[branch]: someone pushes to the branch just before the PR opens.
+        if (g.race[body.head]) repo.refs[body.head] = g.race[body.head];
         const n = ++repo.pulls;
-        return out(201, { number: n, draft: body.draft, html_url: `https://github.com/${m[1]}/pull/${n}` });
+        return out(201, { number: n, draft: body.draft, html_url: `https://github.com/${m[1]}/pull/${n}`, head: { ref: body.head, sha: repo.refs[body.head] } });
       }
+      if (req.method === "PATCH" && /^\/pulls\/\d+$/.test(path)) return out(200, { state: body.state });
       out(404, { message: "Not Found" });
     });
   }
