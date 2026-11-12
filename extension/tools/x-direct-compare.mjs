@@ -88,7 +88,8 @@ async function readPilot(dir) {
       const aside = new Set([...(v.recommendation_ids ?? []), ...(v.upstream_ids ?? [])].map(String));
       // A conversation view also saw Discover more and other page furniture;
       // where the pilot separated its replies (reply_ids_seen), those count.
-      const seen = bucket !== "other" && v.reply_ids_seen ? v.reply_ids_seen : v.distinct_ids_seen;
+      const conversation = ["relevance", "recency", "branches"].includes(bucket);
+      const seen = conversation && v.reply_ids_seen?.length ? v.reply_ids_seen : v.distinct_ids_seen;
       add(bucket, (seen ?? []).filter((x) => !aside.has(String(x))));
       add("discover", v.recommendation_ids);
       add("upstream", v.upstream_ids);
@@ -99,16 +100,31 @@ async function readPilot(dir) {
   return saves;
 }
 
-function fetchBuckets(record) {
+function fetchBuckets(record, posts) {
   const ids = (xs) => new Set(xs ?? []);
   const union = (...sets) => new Set(sets.flatMap((s) => [...s]));
   const focal = record.id;
-  const threadIds = (t) => (t ? [...t.op_self_thread_ids, ...t.reply_ids].filter((x) => x !== focal) : []);
+  // Below the thread's root only: the self-thread posts above it are upstream.
+  const threadIds = (t) => (t ? [...t.op_self_thread_ids.slice(t.op_self_thread_ids.indexOf(t.root_id) + 1), ...t.reply_ids].filter((x) => x !== focal) : []);
   const searchIds = (group) => Object.values(group ?? {}).flatMap((byProduct) => Object.values(byProduct).flatMap((r) => r.ids));
   const relevance = ids(threadIds(record.orders?.Relevance?.thread));
   const recency = ids(threadIds(record.orders?.Recency?.thread));
   const branches = ids((record.branches ?? []).flatMap((b) => threadIds(b.thread).filter((x) => x !== b.id)));
-  const conversation = ids(searchIds(record.conversation));
+  // conversation_id: search returns the whole conversation; a result counts
+  // as a reply only if its reply chain reaches the saved post.
+  const replies = union(relevance, recency, branches);
+  const reachable = new Set([focal, ...replies]);
+  const candidates = searchIds(record.conversation);
+  for (let grew = true; grew; ) {
+    grew = false;
+    for (const x of candidates) {
+      if (!reachable.has(x) && reachable.has(posts?.[x]?.in_reply_to_id)) {
+        reachable.add(x);
+        grew = true;
+      }
+    }
+  }
+  const conversation = new Set(candidates.filter((x) => reachable.has(x) && x !== focal));
   return {
     relevance,
     recency,
@@ -126,7 +142,7 @@ async function compareContext(bundle, dir) {
   for (const [id, record] of Object.entries(bundle.context ?? {})) {
     const p = pilot[id];
     if (!p) continue; // a save the pilot never reached
-    const f = fetchBuckets(record);
+    const f = fetchBuckets(record, bundle.posts);
     const focal = bundle.posts?.[id];
     const pilotSet = (...names) => new Set(names.flatMap((n) => [...(p?.buckets[n] ?? [])]).filter((x) => x !== id));
     const compare = (fetchSet, pilotIds) => {
