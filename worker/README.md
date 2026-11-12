@@ -4,7 +4,8 @@ This Worker is the stored half of the discovery system in `../docs/CONTRACT.md`.
 
 - **Watchers.** Each watcher fetches its source cheaply and compares the result with stored state. Only a real change writes an event. Every check sets the watcher's Durable Object alarm for the next check, so the interval can shorten when something hot appears. One 15-minute cron picks up watchers whose alarm was lost and expires stale proposals.
 - **X ingest.** The extension posts the X posts Sam's browser receives. The Worker stores them, records where each was seen, and queues every newly bookmarked post as a candidate.
-- **Candidates, proposals and approvals.** The runner leases candidates, reads their context, and records proposals. A proposal whose last step is irreversible gets a single-use approval link, and at most 3 of those reach Sam a day.
+- **Candidates, proposals and approvals.** The runner leases candidates, reads their context, and records proposals. A proposal whose last step is irreversible gets a single-use approval link, and at most 3 of those reach Sam a day. Once Sam's iPhone is enrolled, the link stops deciding anything: the approval is a Face ID tap that signs the request with the phone's Secure Enclave key ([../docs/APPROVALS.md](../docs/APPROVALS.md)), and an approved `open_pr` opens a draft PR.
+- **Sam's inbox, brief and voice notes**, and the **agent bridge** that lets a T3 lead call the dot or GrokBot as if each were a model.
 
 A watcher rule match no longer POSTs to T3. It becomes a `watcher_event` candidate in the same transaction as its event, and the runner decides what to do with it.
 
@@ -14,12 +15,14 @@ Results and raw logs are in [EVIDENCE.md](EVIDENCE.md).
 
 ```sh
 npm install
-npm test                         # 46 tests against real wrangler dev stacks and the fixture server
+npm test                         # 68 tests against real wrangler dev stacks and the fixture server
 python3 scripts/mutation-check.py # breaks the code many ways, one at a time; every break must fail a test
 npm run evidence                 # live sources plus the fixture phases, about 2 min; writes evidence/<timestamp>/
 ```
 
-If `.dev.vars` lacks any token or secret the harness needs (`ADMIN_TOKEN`, `WEBSUB_SECRET`, `INGEST_TOKEN`, `RUNNER_TOKEN`, `INBOX_TOKEN` and the `MAIL_*` ones below), the harness adds it with a random local value. The harness points `T3_APPROVALS_WEBHOOK_URL` and the mailbox wake URLs at the fixture server, so no test reaches T3 or GrokBot. No test calls `/embed`, because the `AI` binding always reaches the real Workers AI service, even in `wrangler dev`.
+If `.dev.vars` lacks any token or secret the harness needs (`ADMIN_TOKEN`, `WEBSUB_SECRET`, `INGEST_TOKEN`, `RUNNER_TOKEN`, `INBOX_TOKEN`, `BRIDGE_TOKEN`, `GITHUB_PR_TOKEN`, `GEMINI_API_KEY` and the `MAIL_*` ones below), the harness adds it with a random local value. The harness points `T3_APPROVALS_WEBHOOK_URL`, the mailbox wake URLs, APNs, the GitHub API and the Gemini API at the fixture server, so no test reaches T3, GrokBot, Apple, GitHub or Google. The hub test makes its own APNs key and device keys. No test calls `/embed`, because the `AI` binding always reaches the real Workers AI service, even in `wrangler dev`.
+
+The harness runs on macOS and on Windows: it starts wrangler through node, ends the process tree it started, opens a fresh connection per call, and retries a local d1 command whose runtime failed to start (six suites starting at once on Windows sometimes hit that).
 
 `node scripts/rehearse-production.mjs` runs the production watcher list (`scripts/production-watchers.json`) against the real sources in local wrangler dev. It makes about two requests per source.
 
@@ -30,11 +33,12 @@ If `.dev.vars` lacks any token or secret the harness needs (`ADMIN_TOKEN`, `WEBS
 `scripts/deploy-production.sh` performs the whole deploy, and it is safe to re-run:
 
 1. Creates the D1 database `discovery-watcher` if it doesn't exist and writes its id into `wrangler.jsonc`.
-2. Applies the migrations remotely. `0003_discovery_v2.sql` only adds tables and backfills candidates from existing rule-match events.
-3. Deploys the Worker with its cron and the `AI` binding.
-4. Generates `ADMIN_TOKEN`, `WEBSUB_SECRET`, `INGEST_TOKEN`, `RUNNER_TOKEN` and `INBOX_TOKEN` into `~/.agent-secrets/discovery-*` (mode 600) if they don't exist, and sets them as secrets.
-5. Sets `T3_APPROVALS_WEBHOOK_URL` only if `~/.agent-secrets/discovery-t3-approvals-webhook-url` exists.
-6. Registers the production watchers.
+2. Creates the R2 bucket `discovery-voice` if it doesn't exist.
+3. Applies the migrations remotely. `0003_discovery_v2.sql` only adds tables and backfills candidates from existing rule-match events. `0009_hub.sql` only adds tables, a `proposals.notify_channel` column and the mailbox agent `bridge`.
+4. Deploys the Worker with its cron, the `AI` and `VOICE` bindings and the `BridgeWaitDO` Durable Object (migration tag `v2`).
+5. Generates `ADMIN_TOKEN`, `WEBSUB_SECRET`, `INGEST_TOKEN`, `RUNNER_TOKEN`, `INBOX_TOKEN` and `BRIDGE_TOKEN` into `~/.agent-secrets/discovery-*` (mode 600) if they don't exist, and sets them as secrets.
+6. Sets `T3_APPROVALS_WEBHOOK_URL`, `APNS_KEY_P8`, `APNS_KEY_ID`, `APNS_TEAM_ID`, `APNS_TOPIC`, `GITHUB_PR_TOKEN` and `GEMINI_API_KEY` only from files that exist (below), and names each one it skipped.
+7. Registers the production watchers.
 
 No secret is printed. Then `node scripts/verify-production.mjs <base-url> ~/.agent-secrets/discovery-admin-token` prints `/health`, each watcher's fetch log and events, and the watcher candidates. With `--recheck` it forces one check of every watcher first, which shows that a second run adds no duplicate candidate.
 
@@ -57,6 +61,9 @@ No secret is printed. Then `node scripts/verify-production.mjs <base-url> ~/.age
 | `discovery-mail-t3-token` | `MAIL_T3_TOKEN` | T3 on the Zephyrus | `POST /mcp`, `POST /mail/tasks`, `POST /mail/claim`, `POST /mail/ack`, `POST /mail/tasks/:id/complete` |
 | `discovery-mail-grok-token` | `MAIL_GROK_TOKEN` | GrokBot | the same routes; it can claim and complete but has no route to send on |
 | `discovery-mail-room-token` | `MAIL_ROOM_TOKEN` | Sam | `GET /room/:token` |
+| none; D1 keeps its SHA-256 | a device token, one per enrolled iPhone | the app | `GET /approvals*`, `POST /inbox`, `GET /brief`, `POST /voice`, `GET /voice/:id`, its own `POST /devices/:id/apns-token` |
+| none; minted per enrollment | a 12-character code, 10 minutes, single use | Sam types it into the app | `POST /devices/enroll` |
+| `discovery-bridge-token` | `BRIDGE_TOKEN` | CLIProxyAPI's `openai-compatibility` entry | `GET /v1/models`, `POST /v1/chat/completions` |
 
 **Routes.** All bodies are JSON. Times the Worker sets are epoch milliseconds; `since` parameters take ISO or milliseconds.
 
@@ -92,6 +99,57 @@ No secret is printed. Then `node scripts/verify-production.mjs <base-url> ~/.age
 - `POST /a/:token` resolves the token before reading any of the body, then reads at most 4 KB (413 over that). It takes a form or JSON body.
 - A link is single-use: the first decision wins and later ones get 409. After `expires_at` (7 days by default, or `expires_in_s`), the link returns 410, and the next cron sets the proposal to `expired`.
 - `notify_state` records what happened to the notification, checked in this order: `paused`, `no_webhook` (secret unset), `capped` (3 already went out that UTC day), else a POST to `T3_APPROVALS_WEBHOOK_URL` with `{event_id, title, why, final_step, approve_url}`, ending `sent` or `failed`. A failed POST counts toward the cap and is not retried, because a resend would need the token the Worker no longer has. The proposal still waits, and its link came back in the `POST /proposals` response.
+
+**Devices, signed approvals and the PR executor** (`src/devices.ts`, `src/approvals.ts`, `src/p256.ts`, `src/apns.ts`, `src/executor.ts`). The wire format is [../docs/APPROVALS.md](../docs/APPROVALS.md).
+
+| Route | Notes |
+| --- | --- |
+| `POST /devices/enroll-codes` | Admin. `{code, expires_at}`: 12 Crockford base32 characters shown as `XXXX-XXXX-XXXX`, 10 minutes, single use, stored as the SHA-256 of the code without dashes. The app may send it in any case, with or without dashes and spaces. |
+| `POST /devices/enroll` | No bearer; the code is the credential. `{code, name, public_key_spki_b64, apns_token, apns_env}`. The key must be the base64 DER SPKI of an uncompressed P-256 key (91 bytes) whose point imports. The code is spent and the device written in one transaction. Returns `{device_id, device_token}` once. Any proposal already waiting gets its approval request now. |
+| `POST /devices/:id/apns-token` | That device's own token only. `{apns_token, apns_env?}`; clears a dead-token mark. |
+| `POST /devices/:id/revoke`, `GET /devices` | Admin. A revoked device's token gets 401 and its signatures are refused. |
+| `GET /approvals?state=pending\|approved\|denied\|expired`, `GET /approvals/:id` | Device token or admin. A pending request past its expiry is left out even before the cron marks it. |
+| `POST /approvals/:id/decide` | No bearer; the signature is the credential. Checks, in order: the device, the request, `signed_at` within 300 s, the signature over the exact message, that the proposal still hashes to the request's `inputs_hash`; then one D1 batch decides the request (`WHERE state = 'pending'`) and the proposal (only if that UPDATE won). An approved `open_pr` then runs the executor once. |
+| `GET`, `POST /admin/pr-allowlist` | Admin. `{repos: ["owner/name"]}`, the repositories the executor may open PRs in. Empty until set. |
+
+- A proposal with an irreversible final step gets its approval request in the same transaction as the proposal, while any device has ever been enrolled. Its notification goes over APNs to every unrevoked device whose push token APNs hasn't called dead, under the same 3-a-day cap and pause as before (`notify_channel` is `apns`, `notify_state` ends `sent`, `failed`, `capped`, `paused` or `no_apns`). APNs 410, or 400 `BadDeviceToken`, marks that device's token dead until the app sends a new one.
+- The provider token is an ES256 JWT (`kid` = `APNS_KEY_ID`, `iss` = `APNS_TEAM_ID`, `iat`), reused for 50 minutes per isolate, because Apple asks for a refresh no more than once every 20 minutes and no less than once an hour. APNs needs HTTP/2; a deployed Worker's fetch gets it from Cloudflare's proxy, local workerd does not (cloudflare/workerd#4841), so only the fixture has received these pushes.
+- The executor (`open_pr`): `inputs` is `{repo, base, head_branch, title, body}` plus exactly one of `files: [{path, content_b64}]` (1 to 30) or `head_sha`. With files it reads base's head, writes the blobs, a tree on base's tree and a commit whose parent is base's head, creates `refs/heads/<head_branch>` (a branch that exists is refused, never updated), and opens a draft PR. With `head_sha` it opens the PR only if the branch is still at that commit. `head_branch` starts with `agent/`, differs from `base` and from the repository's default branch, and follows git's ref rules; no path is under `.github/` or `.git`. The rules are checked when the proposal is filed (400 or 403 naming the field) and again before anything is written. The 30-file cap keeps a decision under the free plan's 50 subrequests (7 GitHub calls plus one per file, plus about 5 D1 calls).
+- Outcomes: `executed` (the PR URL is the result), `failed` (nothing visible was written), `outcome_unknown` (the branch was created, or a write got no answer). The proposal moves to `executed`, `failed` or `outcome_unknown` too.
+
+**How the Worker reads the open points in APPROVALS.md.** Each is a question for the lead; none changes a field the app sends.
+
+- Times the Worker returns (`expires_at`, `created_at`) are ISO 8601 strings, in the push payload too. `signed_at` is Unix seconds, accepted as an integer or a string of digits.
+- A decide refusal is `{error, check}`, `check` one of `body` (400), `device` (403), `request` (404, 409, 410), `signed_at` (401), `signature` (401), `inputs_hash` (409), `state` (409). A 409 carries the request's current `state` and `result_url`, so an app whose first answer was lost learns the outcome.
+- `state` in the decide answer is `executed` (with `result_url`), `approved` (no executor for this step yet), `denied`, `failed` or `outcome_unknown`.
+- "At least one device is enrolled" counts devices ever enrolled, revoked ones included, so revoking every device never brings the bearer link back. The link refuses skip and later too.
+- `POST /inbox`: the body's `source` is kept as `claimed_source`; the stored `source` is `device:<id>`, `admin`, `dot`, `t3` or `grok`. Agents may post `reply` and `agent_push`, a device `thought`, `direction`, `task` and `reply`, the admin any kind. An optional `reply_to` (an inbox item id) goes with `reply`; the brief uses it to find a return on something Sam said.
+- A quiet brief is `{text: "", asks: [], returns: [], counts}`.
+- Voice states are `queued`, `transcribing`, `done` and `failed`.
+
+**Inbox, brief and voice** (`src/hub.ts`, `src/voice.ts`).
+
+| Route | Notes |
+| --- | --- |
+| `POST /inbox` | Device token, a mailbox agent's token, or admin. Text is stored exactly as sent (at most 8 KB of UTF-8). Unknown fields are refused. An agent's text or refs carrying a capability path or a 64-hex string is refused (`capability_leak`), as in the mailbox, because the brief reaches the dot. `audio_id` only from the device that recorded it. |
+| `GET /brief` | Device token, the dot, or admin. Built from D1 with no model call. Asks: pending requests, soonest expiry first, at most 3, each `<action> in <project>: <title>`. The return: the newest agent `reply` in 48 h to something a device posted. The question: the oldest device `thought` of the last 7 days that no reply names. Counts: everything else. `text` is empty when there is no ask, return or question, and at most 90 words otherwise. |
+| `POST /voice` | Device token. `content-type: audio/mp4`, a `content-length` (411 without), at most 25 MB (413 from the declared length), `x-recorded-at` as ISO 8601 with a zone or Unix seconds. The body streams to R2 at `voice/<audio_id>.m4a`; the answer is `{audio_id}` (201). |
+| `GET /voice/:audio_id` | The recording device or admin. `{audio_id, state, transcript?, inbox_id?, error?}`. |
+
+- Transcription follows Google's docs as read on 2026-11-12: a resumable Files API upload streamed from R2 (labelled `audio/m4a`, because the docs list that and not `audio/mp4`), then `POST /v1beta/interactions` with `model: "models/gemini-3.5-transcribe"` and `input: [{type: "file", file_uri}]`. The transcript is read from `output_text`, or from the text of the `model_output` step. Neither shape has been checked against the live API. The uploaded file is deleted afterwards.
+- `waitUntil` ends 30 s after the response, so a transcription it didn't finish is picked up by the cron, 2 a run, at most 3 attempts, then `failed`.
+
+**Agents as models** (`src/bridge.ts`). The contract's "Agents as models" section has the behaviour. To turn it on, add an `openai-compatibility` entry to CLIProxyAPI whose base URL is `$BASE/v1`, whose API key is the contents of `~/.agent-secrets/discovery-bridge-token`, and whose models are `agent-dot` and `agent-grokbot`. The entry's exact YAML was not checked against CLIProxyAPI's docs here. The mailbox must be unpaused for tasks to be filed.
+
+- Each task is from agent `bridge`, a root (at most 20 a UTC day), with no `reply`, so its result wakes nobody; the Durable Object `BridgeWaitDO`, one per task id, is told by `mailbox_complete` (and by the expiry paths) and the waiting request reads the result from D1.
+- Side calls: no tools, under 8000 characters, and the word title or summary. The answer is the first six words of the last user message, as `{"title": ...}` when the prompt mentions JSON. Claude Code's exact side-call prompts were not captured by the probe, so this is a guess.
+- CPU: a Claude Code request is hundreds of KB of JSON, parsed once (requests are capped at 4 MB). Not measured.
+
+**Turn on device approvals.**
+
+1. Write each value to its file in `~/.agent-secrets/` (mode 600): `discovery-apns-key-p8` (the `.p8` file's text), `discovery-apns-key-id`, `discovery-apns-team-id`, `discovery-apns-topic` (the app's bundle id), `discovery-github-pr-token` (fine-grained, owner SamGu-NRX, contents and pull requests write, no workflows permission), `discovery-gemini-api-key`. Run `scripts/deploy-production.sh`, which sets each one it finds.
+2. `adm -X POST "$BASE/admin/pr-allowlist" -d '{"repos":["SamGu-NRX/discovery"]}'`.
+3. `adm -X POST "$BASE/devices/enroll-codes"` and type the code into the app within 10 minutes. From then on, approval links answer 403 and every waiting proposal is in the app's queue.
 
 **Pause approvals.** `POST /admin/notifications/pause` with `{"paused":true}` or `{"paused":false}`. Production is paused. `GET /admin/notifications` shows today's count against the cap, recent approval notifications, and the watcher notifications from before v2.
 
@@ -223,6 +281,12 @@ npx wrangler d1 execute DB --remote --command "DELETE FROM proposals WHERE title
 | `src/candidates.ts` | Candidate create, claim, complete, list |
 | `src/proposals.ts` | Proposals, approval notifications, and the approval card |
 | `src/mailbox.ts` | The agent mailbox: send, claim and complete, wakes and their retries, the MCP endpoint and MCP Events, `/room` |
+| `src/devices.ts`, `src/approvals.ts`, `src/p256.ts`, `src/apns.ts` | Enrollment, approval requests and signed decisions, P-256 and ES256 on WebCrypto, APNs pushes |
+| `src/executor.ts` | The `open_pr` rules and the Git Data API calls |
+| `src/hub.ts`, `src/voice.ts` | `POST /inbox`, `GET /brief`, voice upload and transcription |
+| `src/bridge.ts` | `/v1/models`, `/v1/chat/completions`, `BridgeWaitDO` |
+| `src/inputs.ts` | `inputs_hash` |
+| `migrations/0009_hub.sql` | `devices`, `device_enroll_codes`, `approval_requests`, `approval_pushes`, `inbox_items`, `voice_notes`, `proposals.notify_channel`, the `bridge` mailbox agent |
 | `migrations/0008_mailbox.sql` | `mail_agents`, `mail_routes`, `mail_tasks`, `mail_wakes`, `mcp_subscriptions`, the wake triggers, seeded agents and routes, `mailbox_paused` |
 | `src/index.ts` | The route table with each route's tokens, admin and job routes, `/health`, `/admin/log`, the cron |
 | `fixtures/server.mjs` | A local feed, board, page, a 404 feed, and a stand-in webhook |
@@ -261,6 +325,10 @@ The watcher layer was observed locally and then in production on 2026-11-04; v2 
 - **No real approval notification yet.** `T3_APPROVALS_WEBHOOK_URL` is not set and notifications are paused, so no T3 thread has received an approval.
 - **Ingest CPU at the cap.** The cap is 128 KB because a 245 KB ingest used 15 to 17 ms of CPU on a cold request in production, over the Workers Free limit of 10 ms. 128 KB used 8 ms cold and 3 to 5 ms warm, measured before `batch_id` added a lookup per statement; see EVIDENCE.md for the current numbers.
 - **No real WebSub delivery.** HMAC verification is proven only with locally signed bodies. Lease renewal by cron isn't built.
+- **Device approvals not proven live.** No real iPhone has enrolled or signed. The tests sign with P-256 keys in DER, the form `SecKeyCreateSignature` returns, and check the APNs request against Apple's documented shape at the fixture; no push has reached Apple.
+- **Gemini and GitHub not called.** The executor and the transcription ran only against the fixture's stand-ins of those APIs.
+- **The bridge not run behind CLIProxyAPI.** The tests send requests shaped like the probe's; the 15-minute wait and its "still working" answer have no test, because a test would have to wait 15 minutes.
+- **Contract-level gap: an admin token holder can enroll a device.** `POST /devices/enroll-codes` takes `ADMIN_TOKEN`, so an agent holding it could enroll a key of its own and sign. The contract says no agent can produce the signature; that holds only while the admin token stays with Sam. Raised with the lead.
 - **Mailbox not proven live.** H1 to H3 above are untested against ChatGPT, T3 and GrokBot. The tests run the signed challenge handshake against a local loopback callback, not a real HTTPS receiver.
 - **Not built:** a watcher update route, a candidate lease renewal, and retries for a failed approval notification. `x_ingest_batches` grows by one row per batch and is never pruned.
 - **Known edge cases, left alone:**
