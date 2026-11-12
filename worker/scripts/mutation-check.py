@@ -86,7 +86,7 @@ muts = [
  ("M72 a JSON number post id is accepted", "src/inbox.ts", '  if (typeof v === "number") bad(', '  if (false) bad('),
  ("M73 sightings export reads the post's latest metrics", "src/inbox.ts", "s.seen_at, s.metrics_json, s.batch_id,", "s.seen_at, p.metrics_json, s.batch_id,"),
  ("M75 the admin token writes to the inbox", "src/index.ts", '(scope === "admin" && !found.route.exclusive)', '(scope === "admin")'),
- ("M76 a reject body is cut mid-character", "src/inbox.ts", "  if (end < bytes.length) while (end > 0 && (bytes[end] & 0xc0) === 0x80) end--;\n", ""),
+ ("M76 a reject body is cut mid-character", "src/inbox.ts", "    if (end - lead < need) end = lead;\n", ""),
  ("M77 error text stringifies nested values", "src/inbox.ts", '  if (Array.isArray(v)) return `an array of ${v.length}`;\n  if (typeof v === "object" && v !== null) return', '  if (typeof v === "object" && v !== null) return JSON.stringify(v).slice(0, 80) ||'),
  ("M74 sightings pages overlap", "src/inbox.ts", "AND s.id > ?3 AND", "AND s.id >= ?3 AND"),
  ("M37 malformed prepared URL breaks the card", "src/proposals.ts", "  } catch {\n    return null;\n  }\n}\n\nfunction preparedItem", "  } finally {\n  }\n}\n\nfunction preparedItem"),

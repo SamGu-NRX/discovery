@@ -7,7 +7,7 @@ import { startStack } from "../scripts/harness.mjs";
 
 let s;
 before(async () => {
-  s = await startStack({ port: 8851, fixturePort: 8852, inspectorPort: 9351 });
+  s = await startStack({ port: 8881, fixturePort: 8882, inspectorPort: 9381 });
 });
 after(async () => {
   await s?.stop();
@@ -170,6 +170,20 @@ test("a recorded reject body is cut at a UTF-8 character boundary and stays with
   assert.ok(!r.body.includes("\uFFFD"), "no replacement character from a split character");
   assert.equal(r.body_truncated, 1);
   assert.equal(r.body_bytes, 2 + 3 * 30_000);
+});
+
+test("an oversized body is recorded without a split character even when reading stopped at exactly 64 KB", async () => {
+  // A declared Content-Length over the cap stops the read at 64 KB. "x" then 4-byte characters puts the
+  // 64 KB mark three bytes into a character.
+  const body = "x" + "😀".repeat(70_000);
+  const res = await fetch(`${s.base}/inbox/x`, { method: "POST", body, headers: { authorization: `Bearer ${s.vars.INBOX_TOKEN}` } });
+  assert.equal(res.status, 413);
+  const r = (await exportInbox()).rejects.find((x) => x.status === 413 && x.body.startsWith("x😀"));
+  assert.ok(r);
+  const bytes = new TextEncoder().encode(r.body).length;
+  assert.equal(bytes, 1 + 4 * Math.floor((64 * 1024 - 1) / 4), `stored ${bytes} bytes`);
+  assert.ok(!r.body.includes("\uFFFD"), "no replacement character from a split character");
+  assert.ok(r.body.endsWith("😀"));
 });
 
 test("the sightings export joins each sighting to its post with that sighting's metrics, windows by seen_at, pages without gaps, and leaves out account test", async () => {

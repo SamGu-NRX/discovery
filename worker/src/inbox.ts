@@ -197,29 +197,29 @@ function validate(body: unknown): Part {
   return { run_id: runId, account, part, parts, collected_at: collectedAt, items };
 }
 
-// Reads the body counting bytes, and keeps up to INBOX_MAX_BYTES. Past the
-// cap, or with a declared Content-Length over it, it stops reading once it has
-// the first REJECT_BODY_BYTES for the reject record.
+// Past this, an oversized body is cut off instead of read to its end.
+const DRAIN_MAX_BYTES = 1024 * 1024;
+
+// Reads the body counting bytes, and keeps up to INBOX_MAX_BYTES. An oversized body is still read to its end
+// (dropping what is past the cap) up to DRAIN_MAX_BYTES, so the client gets its 413 on a healthy connection:
+// in local workerd a cancelled read left a keep-alive fetch hanging and gave curl a 503 instead of the 413.
 async function readCapped(req: Request): Promise<{ bytes: Uint8Array; total: number; over: boolean }> {
   const declared = Number(req.headers.get("content-length") ?? 0);
-  const keep = declared > INBOX_MAX_BYTES ? REJECT_BODY_BYTES : INBOX_MAX_BYTES;
   const chunks: Uint8Array[] = [];
   let total = 0;
   let kept = 0;
-  let over = declared > INBOX_MAX_BYTES;
   if (req.body) {
     const reader = req.body.getReader();
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
       total += value.byteLength;
-      if (kept < keep) {
-        const take = value.subarray(0, keep - kept);
+      if (kept < INBOX_MAX_BYTES) {
+        const take = value.subarray(0, INBOX_MAX_BYTES - kept);
         chunks.push(take);
         kept += take.byteLength;
       }
-      if (total > INBOX_MAX_BYTES) over = true;
-      if (over && kept >= Math.min(keep, REJECT_BODY_BYTES)) {
+      if (total > DRAIN_MAX_BYTES || (declared > DRAIN_MAX_BYTES && kept >= REJECT_BODY_BYTES)) {
         await reader.cancel();
         break;
       }
@@ -231,7 +231,8 @@ async function readCapped(req: Request): Promise<{ bytes: Uint8Array; total: num
     bytes.set(c, o);
     o += c.byteLength;
   }
-  return { bytes, total: Math.max(total, declared), over };
+  const size = Math.max(total, declared);
+  return { bytes, total: size, over: size > INBOX_MAX_BYTES };
 }
 
 async function sha256Hex(bytes: Uint8Array): Promise<string> {
@@ -243,8 +244,15 @@ async function sha256Hex(bytes: Uint8Array): Promise<string> {
 // text holds no replacement character from a split one and re-encodes within the limit.
 function rejectText(bytes: Uint8Array): string {
   let end = Math.min(bytes.length, REJECT_BODY_BYTES);
-  // 0b10xxxxxx is a continuation byte; back up to the lead byte of a character the cut would split.
-  if (end < bytes.length) while (end > 0 && (bytes[end] & 0xc0) === 0x80) end--;
+  // Drop a last character the cut (or the end of what was read) left incomplete. Find its lead byte
+  // (continuation bytes are 0b10xxxxxx) and keep it only if all the bytes its lead announces are there.
+  let lead = end - 1;
+  while (lead >= 0 && (bytes[lead] & 0xc0) === 0x80) lead--;
+  if (lead >= 0) {
+    const b = bytes[lead];
+    const need = b >= 0xf0 ? 4 : b >= 0xe0 ? 3 : b >= 0xc0 ? 2 : 1;
+    if (end - lead < need) end = lead;
+  }
   let text = new TextDecoder().decode(bytes.subarray(0, end));
   // Invalid bytes already in the body decode to U+FFFD, 3 bytes each, which can push the text back over.
   const again = new TextEncoder().encode(text);
