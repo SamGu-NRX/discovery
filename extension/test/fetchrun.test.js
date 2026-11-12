@@ -369,6 +369,70 @@ test("a branch walk never replaces a saved post's merged thread: the batches kee
   assert.deepEqual(last.reply_ids, ["7203", "8203"]);
 });
 
+// Emil's save on Nov 12: the save 401 is the author's reply to their own
+// post 400, and the replies worth having are under 400.
+//   permalink 401: 400 above it, 401, one reply 411
+//   permalink 400: 400, the self-reply 401, replies 402 and 403; Bottom -> 404
+function parentAnswer(log = []) {
+  const p = (id, handle, inReplyTo) => post(id, handle, { conversationId: "400", inReplyTo });
+  return (operation, v) => {
+    assert.equal(operation, "TweetDetail");
+    log.push(`${v.focalTweetId}:${v.rankingMode}:${v.cursor ?? "-"}`);
+    if (v.focalTweetId === "401") {
+      return detail([{ type: "TimelineAddEntries", entries: [itemEntry(p("400", "op"), "9000"), itemEntry(p("401", "op", "400"), "8990"), moduleEntry("conversationthread-411", "8980", [p("411", "r", "401")])] }]);
+    }
+    if (v.focalTweetId === "400" && !v.cursor) {
+      return detail([{ type: "TimelineAddEntries", entries: [
+        itemEntry(p("400", "op"), "9000"),
+        moduleEntry("conversationthread-401", "8990", [p("401", "op", "400")]),
+        moduleEntry("conversationthread-402", "8980", [p("402", "x", "400")]),
+        moduleEntry("conversationthread-403", "8970", [p("403", "y", "400")]),
+        cursorItem("Bottom", "pb1"),
+      ] }]);
+    }
+    if (v.focalTweetId === "400" && v.cursor === "pb1") return detail([{ type: "TimelineAddEntries", entries: [moduleEntry("conversationthread-404", "8960", [p("404", "z", "400")])] }]);
+    throw new Error(`no fixture for ${JSON.stringify(v)}`);
+  };
+}
+const DETAIL_ONLY = { branches: false, quotes: false, mentions: false, links: false, conversation: false };
+
+test("a saved reply also reads the conversation of the post it answers, in Relevance order, within the save's cap", async () => {
+  const log = [];
+  const h = harness(parentAnswer(log));
+  const record = (await run({ jobs: [{ type: "context", ids: ["401"], ...DETAIL_ONLY }] }, h)).context["401"];
+  assert.deepEqual(log, ["401:Relevance:-", "401:Recency:-", "400:Relevance:-", "400:Relevance:pb1"]);
+  assert.equal(record.parent.id, "400");
+  assert.deepEqual(record.parent.thread.reply_ids, ["402", "403", "404"]);
+  assert.equal(record.parent.exhausted, true);
+  assert.equal(record.detailRequests, 4, "the parent's walk counts against the save's cap");
+  assert.deepEqual(record.upstream.fetched, [], "the parent is not fetched again as upstream");
+
+  const off = harness(parentAnswer());
+  assert.equal((await run({ jobs: [{ type: "context", ids: ["401"], parent: false, ...DETAIL_ONLY }] }, off)).context["401"].parent, null);
+  assert.equal(off.sends.length, 2);
+
+  const capped = await run({ limits: { detailCapPerPost: 2 }, jobs: [{ type: "context", ids: ["401"], ...DETAIL_ONLY }] }, harness(parentAnswer()));
+  assert.deepEqual(capped.context["401"].parent, { id: "400", skipped: "per-post cap" });
+
+  // A parent that is saved too gets its own walks, not a second one under the reply.
+  const bothLog = [];
+  const both = await run({ jobs: [{ type: "context", ids: ["401", "400"], ...DETAIL_ONLY }] }, harness(parentAnswer(bothLog)));
+  assert.deepEqual(both.context["401"].parent, { id: "400", skipped: "saved in this run" });
+  assert.deepEqual(bothLog.filter((x) => x.startsWith("400:")), ["400:Relevance:-", "400:Relevance:pb1", "400:Recency:-", "400:Recency:pb1"], "only 400's own two walks");
+});
+
+test("by default a post's conversation is followed past 40 requests, up to 80", async () => {
+  // A conversation with one reply per page and a Bottom cursor on every page
+  // up to page 100. Run 2's limits stopped Mollick's essay short on Nov 12.
+  const focal = post("500", "op", { conversationId: "500" });
+  const page = (n) => [moduleEntry(`conversationthread-5${n}`, String(8990 - n), [post(String(5000 + n), "r", { conversationId: "500", inReplyTo: "500" })]), ...(n < 100 ? [cursorItem("Bottom", `p${n + 1}`)] : [])];
+  const h = harness((_, v) => detail([{ type: "TimelineAddEntries", entries: v.cursor ? page(Number(v.cursor.slice(1))) : [itemEntry(focal, "9000"), ...page(0)] }]));
+  const record = (await run({ jobs: [{ type: "context", ids: ["500"], rankings: ["Relevance"], upstream: false, ...DETAIL_ONLY }] }, h)).context["500"];
+  assert.equal(record.detailRequests, 80);
+  assert.equal(record.thread.reply_ids.length, 80);
+  assert.equal(record.detailCapped, true);
+});
+
 test("a fresh Top cursor on every page is not followed past the first page, and an empty page ends its cursors", async () => {
   // Live X on Nov 12: each page offered a new Top cursor, and each Top
   // page was empty apart from yet another one.
