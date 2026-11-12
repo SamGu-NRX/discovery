@@ -142,7 +142,13 @@ test("enrollment: a code works once, within 10 minutes, is stored only as a hash
 
   const rsa = generateKeyPairSync("rsa", { modulusLength: 2048 }).publicKey.export({ type: "spki", format: "der" }).toString("base64");
   const p384 = generateKeyPairSync("ec", { namedCurve: "P-384" }).publicKey.export({ type: "spki", format: "der" }).toString("base64");
-  for (const key of [rsa, p384, "bm90IGEga2V5"]) {
+  const full = generateKeyPairSync("ec", { namedCurve: "P-256" }).publicKey.export({ type: "spki", format: "der" });
+  const compressed = Buffer.concat([
+    Buffer.from("3039301306072a8648ce3d020106082a8648ce3d030107032200", "hex"),
+    Buffer.from([full[90] & 1 ? 0x03 : 0x02]),
+    full.subarray(27, 59),
+  ]).toString("base64");
+  for (const key of [rsa, p384, compressed, "bm90IGEga2V5"]) {
     badField(await req("none", "POST", "/devices/enroll", { ...d.body, code, public_key_spki_b64: key }), /^public_key_spki_b64 /);
   }
   badField(await req("none", "POST", "/devices/enroll", { ...d.body, code, admin: true }), /^body\.admin is not a field/);
@@ -278,8 +284,12 @@ test("deciding checks the device, the request, the clock, then the signature, in
   // The same r and s, encoded with a leading zero DER forbids. ECDSA is
   // randomized, so sign until r needs no zero of its own.
   let good;
+  const unpadded = (sig) => {
+    const d = Buffer.from(sig.signature_der_b64, "base64");
+    return d[3] === 32 && d[4] > 0 && d[4] < 0x80;
+  };
   do good = signed(phone, r, "approve");
-  while (Buffer.from(good.signature_der_b64, "base64")[4] >= 0x80);
+  while (!unpadded(good));
   const der = Buffer.from(good.signature_der_b64, "base64");
   const padded = Buffer.concat([Buffer.from([0x30, der[1] + 1, 0x02, der[3] + 1, 0x00]), der.subarray(4)]);
   await refusedBy(decide(r, { ...good, signature_der_b64: padded.toString("base64") }), 401, "bad_signature");
@@ -336,12 +346,14 @@ test("an approve opens a draft PR from a new agent/ branch off base, once; a rep
   assert.equal(got.outcome, "executed");
 });
 
-test("two devices deciding at once: exactly one wins", async () => {
+test("devices deciding at once: exactly one wins", async () => {
+  // Eight decisions in flight together, four per device, each freshly
+  // signed, so some pass the pending check before any has written.
   const p = await ok(proposal(prInputs()), 201);
   const r = await requestFor(p.id);
-  const [a, b] = await Promise.all([decide(r, signed(devices.phone, r, "deny")), decide(r, signed(devices.ipad, r, "deny"))]);
-  assert.deepEqual([a.status, b.status].sort(), [200, 409]);
-  assert.equal((a.status === 409 ? a : b).body.error, "already_decided");
+  const all = await Promise.all(Array.from({ length: 8 }, (_, i) => decide(r, signed(i % 2 ? devices.phone : devices.ipad, r, "deny"))));
+  assert.deepEqual(all.map((x) => x.status).sort(), [200, 409, 409, 409, 409, 409, 409, 409]);
+  assert.ok(all.filter((x) => x.status === 409).every((x) => x.body.error === "already_decided"));
 });
 
 test("a deny records the decision and runs nothing", async () => {
