@@ -58,18 +58,34 @@ const ingest = (account, posts, { lens_id, session = `s-${account}`, surface = "
     { token: "ingest" },
   );
 
+// Every lens scores against its account's background (src/lens.ts). The
+// tests take one from a mixed set of posts another account saw.
+const BG_TEXTS = ["a recipe for soup", "football tonight", "agent notes", "claude says hi", "weather and coffee"];
+let bgSeq = 0;
+async function background(account, texts = BG_TEXTS) {
+  bgSeq += 1;
+  const src = `bgsrc-${account}-${bgSeq}`;
+  await ingest(src, Array.from({ length: 60 }, (_, i) => post(String(9_950_000 + bgSeq * 100 + i), texts[i % texts.length])));
+  return s.call("POST", "/lenses/backgrounds/refresh", { account, source_account: src }, { token: "runner" });
+}
+
 const ON_TOPIC = ["MCP servers for agent harnesses", "Claude Code harness with MCP and memory", "Codex agent harness notes", "agent memory in the harness, MCP tools"];
 const exemplarIds = Array.from({ length: 12 }, (_, i) => String(9_100_000 + i));
 
 async function makeLens(id = "harness", account = "lensacct") {
   await ingest("seed", exemplarIds.map((x, i) => post(x, ON_TOPIC[i % ON_TOPIC.length])));
+  await background(account);
   return s.call("POST", "/lenses", { id, account, charter: "Agent harnesses: Claude Code, Codex, T3 Code, MCP, agent memory.", exemplar_ids: exemplarIds, project_terms: ["T3 Code", "MCP"] });
 }
 
 test("a lens's thresholds come from its exemplars, and a lens needs at least 10 stored exemplars", async () => {
   const lens = await makeLens();
   assert.equal(lens.exemplars, 12);
-  assert.ok(lens.open_at > lens.glance_at && lens.glance_at > 0.5, JSON.stringify(lens));
+  assert.ok(lens.open_at > lens.glance_at, JSON.stringify(lens));
+  assert.equal(lens.thresholds_source, "exemplars", "no baseline yet");
+  const bare = await s.call("POST", "/lenses", { id: "nobg", account: "never-seen", charter: "c", exemplar_ids: exemplarIds }, { raw: true });
+  assert.equal(bare.status, 400);
+  assert.match((await bare.json()).error, /has no background yet/);
   const few = await s.call("POST", "/lenses", { id: "tiny", account: "x", charter: "c", exemplar_ids: exemplarIds.slice(0, 3).concat(["9999999"]) }, { raw: true });
   assert.equal(few.status, 400);
   assert.match((await few.json()).error, /needs at least 10/);
@@ -175,8 +191,8 @@ test("ingest records the lens and whether the account follows the author, and re
 });
 
 test("the scorecard reports purity per session beside the baseline, lead ratio, lead hours and flag precision", async () => {
+  await background("scoreacct");
   await s.call("POST", "/lenses", { id: "score", account: "scoreacct", charter: "c", exemplar_ids: exemplarIds });
-  const lensRow = (await s.d1("SELECT glance_at FROM lenses WHERE id = 'score'"))[0];
 
   // Baseline: two of four posts are on topic.
   const base = await s.call(
@@ -186,6 +202,7 @@ test("the scorecard reports purity per session beside the baseline, lead ratio, 
     { token: "ingest" },
   );
   assert.equal(base.purity, 0.5);
+  const lensRow = (await s.d1("SELECT glance_at FROM lenses WHERE id = 'score'"))[0];
 
   // A session: three of four skimmed posts near the centroid.
   const at = new Date().toISOString();
@@ -260,4 +277,72 @@ test("the signal table scores each post against every lens, with who opened it, 
   assert.equal((await s.call("GET", "/lenses/signals?account=nobody", undefined, { raw: true, token: "runner" })).status, 404);
   assert.equal((await s.call("GET", "/lenses/signals?account=sigacct", undefined, { raw: true, token: "ingest" })).status, 403, "runner token only");
   assert.equal((await s.call("GET", "/lenses/signals?limit=0", undefined, { raw: true, token: "runner" })).status, 400);
+});
+
+test("tastes subtract the account's background: a post raw cosine counts as near is skipped, and an on-topic one is opened", async () => {
+  // Every post here leans on one shared word, as real posts share most of
+  // their embedding (raw bge cosines sat between 0.67 and 0.84 on Nov 12).
+  // With the fixture embedding, raw cosine puts the recipe post at 0.954,
+  // above these exemplars' glance_at of 0.941; subtracting the background
+  // puts it at -0.73. The on-topic post is 0.968 raw (below open_at, 0.977)
+  // and 0.815 centered (above open_at, 0.671).
+  const F = "football football football football ";
+  const ex = ["agent", "mcp", "harness", "agent mcp harness memory codex", "claude"].map((t) => F + t);
+  const ids = Array.from({ length: 10 }, (_, i) => String(9_900_000 + i));
+  await ingest("seed", ids.map((x, i) => post(x, ex[i % ex.length])));
+  await background("centeracct", ["recipe", "agent", "recipe recipe", "football", "claude"].map((t) => F + t));
+  const lens = await s.call("POST", "/lenses", { id: "centered", account: "centeracct", charter: "Agent harnesses.", exemplar_ids: ids });
+
+  await s.control("label-reply", { mode: "garbage" }); // centroid labels
+  const { labels } = await s.call(
+    "POST",
+    "/lenses/centered/label",
+    { posts: [{ id: "9910001", text: F + "agent mcp harness", author_handle: "a" }, { id: "9910002", text: F + "recipe", author_handle: "b" }] },
+    { token: "ingest" },
+  );
+  await s.control("label-reply", { mode: "echo" });
+  assert.equal(labels[0].action, "open", JSON.stringify({ lens, labels }));
+  assert.equal(labels[1].action, "skip", JSON.stringify({ lens, labels }));
+  assert.ok(labels[1].taste < 0, `recipe taste ${labels[1].taste}`);
+});
+
+test("the first baseline sets open_at and glance_at at its 90th and 70th percentiles; later baselines leave them", async () => {
+  await makeLens("based", "baseacct");
+  const texts = ["MCP agent harness", "Codex agent harness notes", "Claude Code harness with MCP and memory", "agent memory", "agent tips", "claude", "recipe", "football", "a recipe for soup", "weather"];
+  const posts = texts.map((text, i) => ({ id: String(9_920_000 + i), text, author_handle: "a" }));
+  const first = await s.call("POST", "/lenses/based/baseline", { session_id: "b1", posts }, { token: "ingest" });
+  assert.equal(first.thresholds_set, true);
+  const tastes = JSON.parse((await s.d1("SELECT tastes_json FROM lens_baselines WHERE session_id = 'b1'"))[0].tastes_json).sort((a, b) => a - b);
+  const row = (await s.d1("SELECT open_at, glance_at, thresholds_source FROM lenses WHERE id = 'based'"))[0];
+  assert.equal(row.thresholds_source, "baseline");
+  assert.equal(row.open_at, tastes[8], "the 90th percentile of ten (lower nearest rank)");
+  assert.equal(row.glance_at, tastes[6], "the 70th percentile");
+  assert.equal(first.purity, 0.4, "tastes at or above the 70th percentile: 4 of 10");
+
+  const second = await s.call("POST", "/lenses/based/baseline", { session_id: "b2", posts: posts.slice(5) }, { token: "ingest" });
+  assert.equal(second.thresholds_set, false);
+  assert.deepEqual((await s.d1("SELECT open_at, glance_at FROM lenses WHERE id = 'based'"))[0], { open_at: row.open_at, glance_at: row.glance_at });
+});
+
+test("the cron retakes a lens account's background from its own posts once a day and refits its lenses", async () => {
+  await makeLens("daily", "cronacct");
+  const before = (await s.d1("SELECT background_version FROM lenses WHERE id = 'daily'"))[0].background_version;
+  const tooFew = await s.call("POST", "/lenses/backgrounds/refresh", { account: "cronacct" }, { raw: true, token: "runner" });
+  assert.equal(tooFew.status, 400, "cronacct has seen nothing itself yet");
+  assert.match((await tooFew.json()).error, /needs at least 50/);
+
+  // A day of the account's own feed, and a background more than a day old.
+  await ingest("cronacct", Array.from({ length: 60 }, (_, i) => post(String(9_930_000 + i), BG_TEXTS[i % BG_TEXTS.length])));
+  await s.d1("UPDATE lens_backgrounds SET created_at = created_at - 25 * 3600000 WHERE account = 'cronacct'");
+  const res = await fetch(`${s.base}/__scheduled?cron=*/15+*+*+*+*`);
+  assert.equal(res.status, 200);
+  const latest = (await s.d1("SELECT version, source_account, posts FROM lens_backgrounds WHERE account = 'cronacct' ORDER BY version DESC LIMIT 1"))[0];
+  assert.equal(latest.version, before + 1);
+  assert.equal(latest.source_account, "cronacct");
+  assert.equal(latest.posts, 60);
+  assert.equal((await s.d1("SELECT background_version FROM lenses WHERE id = 'daily'"))[0].background_version, before + 1);
+
+  // A background taken under a day ago is not retaken.
+  await fetch(`${s.base}/__scheduled?cron=*/15+*+*+*+*`);
+  assert.equal((await s.d1("SELECT max(version) AS v FROM lens_backgrounds WHERE account = 'cronacct'"))[0].v, before + 1);
 });

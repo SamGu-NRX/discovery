@@ -22,6 +22,9 @@ export interface Env {
   LENS_LABEL_URL?: string;
   LENS_LABEL_MODEL?: string;
   LENS_LABEL_KEY?: string;
+  // The knowledge store's bucket (docs/KNOWLEDGE.md, on the knowledge
+  // branch). Lenses read a thin post's linked page from it when it is bound.
+  KNOWLEDGE?: R2Bucket;
 }
 
 export interface WatcherRow {

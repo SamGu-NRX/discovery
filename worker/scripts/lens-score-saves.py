@@ -48,6 +48,59 @@ def post_text(path):
     return "\n".join(out).strip()
 
 
+# The thin-post rule of src/lens-text.ts: under 15 words, not counting links
+# and @mentions, or links making up more than half the post. Such a post is
+# embedded with its first linked page's title and first prose paragraph. The
+# Worker takes those from the knowledge store's bundle; here they come from
+# the same archive's raw file ("## LINKED <url> [kind] <title>" sections).
+URL = re.compile(r"https?://\S+")
+THIN_WORDS = 15
+
+
+def is_thin(text):
+    words = [w for w in re.sub(r"@\w+", " ", URL.sub(" ", text)).split() if re.search(r"[^\W_]", w)]
+    return len(words) < THIN_WORDS or len("".join(URL.findall(text))) * 2 > len(text.strip())
+
+
+def first_paragraph(text):
+    for block in re.split(r"\n\s*\n", text or ""):
+        clean = re.sub(r"\s+", " ", re.sub(r"!\[[^\]]*\]\([^)]*\)", " ", re.sub(r"<[^>]+>", " ", block))).strip()
+        if len(re.findall(r"[^\W\d_]", URL.sub("", clean))) >= 40:
+            return clean[:600]
+    return None
+
+
+def linked_context(path):
+    lines = open(path, encoding="utf-8").read().splitlines()
+    for i, line in enumerate(lines):
+        m = re.match(r"^## LINKED (\S+)(.*)$", line)
+        if not m or not m.group(1).startswith("http"):
+            continue
+        title = re.sub(r"\[[^\]]*\]|\([^)]*\)", " ", m.group(2)).strip()
+        body = []
+        for nxt in lines[i + 1 :]:
+            if nxt.startswith("## LINKED "):
+                break
+            if nxt.startswith("(file ") or "Retrieved UTC:" in nxt:
+                continue
+            t = re.match(r"^Title:\s*(.+)$", nxt)
+            if t and not title:
+                title = t.group(1).strip()
+                continue
+            body.append(nxt)
+        paragraph = first_paragraph("\n".join(body))
+        if title or paragraph:
+            return "\n\n".join(p for p in (title, paragraph) if p)
+    return None
+
+
+def with_link(path, text):
+    if not is_thin(text):
+        return text
+    ctx = linked_context(path)
+    return f"{text}\n\n{ctx}" if ctx else text
+
+
 def topics_by_save(path):
     by = {}
     for e in json.load(open(path)):
@@ -60,12 +113,14 @@ def topics_by_save(path):
 oct_topics = topics_by_save(oct_findings)
 nov_topics = topics_by_save(nov_findings)
 exemplars = {}
+exemplars_linked = {}
 for f in os.listdir(raw_oct):
     sid = f.split(".")[0]
     if oct_topics.get(sid, set()) & HARNESS_TOPICS:
         t = post_text(os.path.join(raw_oct, f))
         if t:
             exemplars[sid] = t
+            exemplars_linked[sid] = with_link(os.path.join(raw_oct, f), t)
 
 disp = {}
 for line in open(nov_notes, encoding="utf-8"):
@@ -73,10 +128,12 @@ for line in open(nov_notes, encoding="utf-8"):
     if m:
         disp[m.group(1)] = {"handle": m.group(2), "kept": m.group(3) == "kept"}
 saves = {}
+saves_linked = {}
 for f in os.listdir(raw_nov):
     sid = f.split(".")[0]
     if sid in disp:
         saves[sid] = post_text(os.path.join(raw_nov, f))
+        saves_linked[sid] = with_link(os.path.join(raw_nov, f), saves[sid])
 
 model = TextEmbedding("BAAI/bge-base-en-v1.5", threads=2)
 unit = lambda m: m / np.linalg.norm(m, axis=-1, keepdims=True)
@@ -84,7 +141,10 @@ ex_ids = list(exemplars)
 sv_ids = [s for s in saves if saves[s]]
 EX = unit(np.array(list(model.embed([exemplars[i] for i in ex_ids], batch_size=32))))
 SV = unit(np.array(list(model.embed([saves[i] for i in sv_ids], batch_size=32))))
+EXL = unit(np.array(list(model.embed([exemplars_linked[i] for i in ex_ids], batch_size=32))))
+SVL = unit(np.array(list(model.embed([saves_linked[i] for i in sv_ids], batch_size=32))))
 bg = unit(np.load(bg_path)).mean(axis=0)
+thin = [s for s in sv_ids if saves_linked[s] != saves[s]]
 
 kept = np.array([disp[s]["kept"] for s in sv_ids])
 harness = np.array([disp[s]["kept"] and bool(nov_topics.get(s, set()) & HARNESS_TOPICS) for s in sv_ids])
@@ -104,9 +164,10 @@ def rates(flag, gold):
 report = {
     "charter": CHARTER,
     "exemplars": {"count": len(ex_ids), "source": "Oct 26 saves whose findings carry a harness topic", "ids": ex_ids},
-    "saves": {"scored": len(sv_ids), "without_post_text": [s for s in saves if not saves[s]], "kept": int(kept.sum()), "kept_with_harness_topic": int(harness.sum())},
+    "saves": {"scored": len(sv_ids), "without_post_text": [s for s in saves if not saves[s]], "kept": int(kept.sum()), "kept_with_harness_topic": int(harness.sum()),
+              "thin_with_link_context": len(thin), "thin_exemplars_with_link_context": sum(exemplars_linked[i] != exemplars[i] for i in ex_ids)},
 }
-for name, ex, sv in [("raw", EX, SV), ("centered", unit(EX - bg), unit(SV - bg))]:
+for name, ex, sv in [("raw", EX, SV), ("centered", unit(EX - bg), unit(SV - bg)), ("centered_with_links", unit(EXL - bg), unit(SVL - bg))]:
     c = unit(ex.mean(axis=0))
     ec = np.sort(ex @ c)
     open_at, glance_at = float(np.median(ec)), float(ec[int(np.floor(0.1 * (len(ec) - 1)))])

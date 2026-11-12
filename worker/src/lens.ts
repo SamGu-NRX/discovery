@@ -7,6 +7,7 @@
 
 import type { Env } from "./check";
 import { fail, HttpError, readJson, str } from "./http";
+import { composeText, isThin, linkContext } from "./lens-text";
 import { EMBED_MODEL } from "./x";
 
 const ACTIONS = ["skip", "glance", "open"] as const;
@@ -33,6 +34,9 @@ interface LensRow {
   open_at: number;
   glance_at: number;
   project_terms_json: string;
+  exemplar_ids_json: string;
+  background_version: number | null;
+  thresholds_source: string;
 }
 
 // ---- model adapter --------------------------------------------------------
@@ -116,6 +120,185 @@ async function modelLabels(env: Env, charter: string, posts: { id: string; text:
   }
 }
 
+// ---- backgrounds and the text a post embeds as -----------------------------
+// Tastes are cosines after subtracting a background: the mean unit embedding
+// of posts the lens account sees. Raw bge cosines put every post fetch mode
+// captured on Nov 12 between about 0.67 and 0.84; half of 10,142 posts sat
+// near two unrelated lenses, and held-out exemplars beat ordinary posts at an
+// AUC of only 0.69. With the mean subtracted, 0.9% sat near both and the AUC
+// was 0.94 (docs/LENS.md, "Measured on captured posts").
+
+const MIN_BACKGROUND_POSTS = 50;
+const EMBED_BATCH = 100;
+
+interface Background {
+  version: number;
+  mean: number[];
+}
+
+async function embedAll(env: Env, texts: string[]): Promise<number[][]> {
+  const out: number[][] = [];
+  for (let i = 0; i < texts.length; i += EMBED_BATCH) out.push(...(await embedTexts(env, texts.slice(i, i + EMBED_BATCH))).vectors);
+  return out;
+}
+
+const centered = (v: number[], mean: number[]) => unit(unit(v).map((x, i) => x - (mean[i] ?? 0)));
+const meanOf = (vs: number[][]) => vs[0].map((_, i) => vs.reduce((s, v) => s + v[i], 0) / vs.length);
+
+async function latestBackground(env: Env, account: string): Promise<(Background & { created_at: number }) | null> {
+  const row = await env.DB.prepare("SELECT version, mean_json, created_at FROM lens_backgrounds WHERE account = ?1 ORDER BY version DESC LIMIT 1")
+    .bind(account)
+    .first<{ version: number; mean_json: string; created_at: number }>();
+  return row ? { version: row.version, mean: JSON.parse(row.mean_json), created_at: row.created_at } : null;
+}
+
+async function backgroundFor(env: Env, lens: LensRow): Promise<Background> {
+  if (lens.background_version === null) throw new HttpError(409, `lens ${lens.id} has no background; POST /lenses/backgrounds/refresh for account ${lens.account}`);
+  const row = await env.DB.prepare("SELECT mean_json FROM lens_backgrounds WHERE account = ?1 AND version = ?2")
+    .bind(lens.account, lens.background_version)
+    .first<{ mean_json: string }>();
+  if (!row) throw new HttpError(409, `background ${lens.background_version} of account ${lens.account} is missing`);
+  return { version: lens.background_version, mean: JSON.parse(row.mean_json) };
+}
+
+// The knowledge store's bundle for a post (docs/KNOWLEDGE.md), when this
+// Worker has the store and the post has one.
+async function storedLinkContext(env: Env, postId: string) {
+  if (!env.KNOWLEDGE) return null;
+  let row: { json_key: string } | null;
+  try {
+    row = await env.DB.prepare("SELECT json_key FROM bundles WHERE post_id = ?1 ORDER BY version DESC LIMIT 1").bind(postId).first<{ json_key: string }>();
+  } catch (err) {
+    if (/no such table/i.test((err as Error).message)) return null;
+    throw err;
+  }
+  if (!row) return null;
+  const obj = await env.KNOWLEDGE.get(row.json_key);
+  return obj ? linkContext(await obj.json()) : null;
+}
+
+// What each post embeds as: its own text, or for a post with little text of
+// its own, that plus its linked page's title and first paragraph
+// (src/lens-text.ts).
+async function embeddingTexts(env: Env, posts: { id: string; text: string }[]): Promise<string[]> {
+  return Promise.all(posts.map(async (p) => (isThin(p.text) ? composeText(p.text, await storedLinkContext(env, p.id)) : p.text)));
+}
+
+async function tastesFor(env: Env, posts: { id: string; text: string }[], fits: { mean: number[]; centroid: number[] }[]): Promise<number[][]> {
+  const vectors = posts.length ? await embedAll(env, await embeddingTexts(env, posts)) : [];
+  return vectors.map((v) => fits.map((f) => dot(centered(v, f.mean), f.centroid)));
+}
+
+interface Fit {
+  centroid: number[];
+  open_at: number;
+  glance_at: number;
+  thresholds_source: "baseline" | "exemplars";
+}
+
+// A lens's centroid and thresholds against one background. The thresholds
+// come from the day-1 baseline when the lens has one, not the exemplars:
+// with the background subtracted, the exemplars' median and 10th percentile
+// opened 1% of the 10,142 posts captured on Nov 12, where the reader means
+// to open about one post in ten. The untouched For You top 100 is the feed
+// the reader skims, so open_at is its 90th percentile (about one in ten
+// opened) and glance_at, also "near" for purity, its 70th. The baseline's
+// own purity is then about 0.3 by construction, and later sessions are read
+// against it. Before any baseline, the exemplars' median and 10th percentile
+// stand in.
+async function fit(env: Env, exemplars: { id: string; text: string }[], background: Background, baseline: { id: string; text: string }[] | null): Promise<Fit> {
+  const ex = (await embedAll(env, await embeddingTexts(env, exemplars))).map((v) => centered(v, background.mean));
+  const centroid = unit(meanOf(ex));
+  if (baseline?.length) {
+    const tastes = (await tastesFor(env, baseline, [{ mean: background.mean, centroid }])).map((t) => t[0]).sort((a, b) => a - b);
+    return { centroid, open_at: quantile(tastes, 0.9), glance_at: quantile(tastes, 0.7), thresholds_source: "baseline" };
+  }
+  const cosines = ex.map((v) => dot(v, centroid)).sort((a, b) => a - b);
+  return { centroid, open_at: median(cosines) as number, glance_at: quantile(cosines, 0.1), thresholds_source: "exemplars" };
+}
+
+async function firstBaseline(env: Env, lensId: string): Promise<{ id: string; text: string }[] | null> {
+  const row = await env.DB.prepare("SELECT texts_json FROM lens_baselines WHERE lens_id = ?1 AND texts_json IS NOT NULL ORDER BY at LIMIT 1")
+    .bind(lensId)
+    .first<{ texts_json: string }>();
+  return row ? JSON.parse(row.texts_json) : null;
+}
+
+async function exemplarPosts(env: Env, ids: string[]) {
+  return (await env.DB.prepare("SELECT id, text FROM x_posts WHERE id IN (SELECT value FROM json_each(?1))").bind(JSON.stringify(ids)).all<{ id: string; text: string }>()).results;
+}
+
+// Takes a new background for `account` from the posts `source` saw in the
+// last `hours`, and refits every lens of the account against it.
+async function takeBackground(env: Env, account: string, source: string, hours: number, max: number) {
+  const since = Date.now() - hours * 3600_000;
+  const posts = (
+    await env.DB.prepare(
+      `SELECT p.id, p.text FROM x_posts p JOIN (
+         SELECT post_id, max(seen_at) AS last FROM x_sightings WHERE account = ?1 AND seen_at >= ?2 GROUP BY post_id
+       ) s ON s.post_id = p.id WHERE length(p.text) > 0 ORDER BY s.last DESC LIMIT ?3`,
+    )
+      .bind(source, since, max)
+      .all<{ id: string; text: string }>()
+  ).results;
+  if (posts.length < MIN_BACKGROUND_POSTS) {
+    fail(`${source} saw ${posts.length} posts with text in the last ${hours} hours; a background needs at least ${MIN_BACKGROUND_POSTS}`);
+  }
+  const mean = meanOf((await embedAll(env, posts.map((p) => p.text))).map(unit));
+  const prev = await latestBackground(env, account);
+  const version = (prev?.version ?? 0) + 1;
+  const now = Date.now();
+  await env.DB.prepare(
+    "INSERT INTO lens_backgrounds (account, version, mean_json, posts, source_account, since, embed_model, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+  )
+    .bind(account, version, JSON.stringify(mean), posts.length, source, since, EMBED_MODEL, now)
+    .run();
+  const lenses = (await env.DB.prepare("SELECT * FROM lenses WHERE account = ?1 ORDER BY id").bind(account).all<LensRow>()).results;
+  const refit = [];
+  for (const lens of lenses) {
+    const f = await fit(env, await exemplarPosts(env, JSON.parse(lens.exemplar_ids_json)), { version, mean }, await firstBaseline(env, lens.id));
+    await env.DB.prepare(
+      "UPDATE lenses SET centroid_json = ?2, open_at = ?3, glance_at = ?4, thresholds_source = ?5, background_version = ?6, updated_at = ?7 WHERE id = ?1",
+    )
+      .bind(lens.id, JSON.stringify(f.centroid), f.open_at, f.glance_at, f.thresholds_source, version, now)
+      .run();
+    refit.push({ id: lens.id, open_at: f.open_at, glance_at: f.glance_at, thresholds_source: f.thresholds_source });
+  }
+  return { account, version, posts: posts.length, source_account: source, lenses: refit };
+}
+
+// POST /lenses/backgrounds/refresh (admin or runner): { account,
+// source_account?, hours? = 24, max? = 500 }. A new lens account has seen
+// nothing yet, so its first background comes from another account's posts
+// (source_account), until the daily refresh can use its own.
+export async function refreshBackground(env: Env, req: Request) {
+  const b = await readJson<Record<string, unknown>>(req);
+  const account = str(b.account, "account", 64).replace(/^@/, "");
+  const source = b.source_account === undefined ? account : str(b.source_account, "source_account", 64).replace(/^@/, "");
+  const hours = b.hours ?? 24;
+  if (!Number.isInteger(hours) || (hours as number) < 1 || (hours as number) > 24 * 30) fail("hours must be 1 to 720");
+  const max = b.max ?? 500;
+  if (!Number.isInteger(max) || (max as number) < MIN_BACKGROUND_POSTS || (max as number) > 2000) fail(`max must be ${MIN_BACKGROUND_POSTS} to 2000`);
+  return takeBackground(env, account, source, hours as number, max as number);
+}
+
+// From the cron: once a day, each lens account's background is retaken from
+// the posts it saw in the last 24 hours, when it saw enough of them.
+export async function refreshDueBackgrounds(env: Env, now: number) {
+  const accounts = (await env.DB.prepare("SELECT DISTINCT account FROM lenses").all<{ account: string }>()).results.map((r) => r.account);
+  const done = [];
+  for (const account of accounts) {
+    const latest = await latestBackground(env, account);
+    if (latest && now - latest.created_at < 24 * 3600_000) continue;
+    const seen = await env.DB.prepare("SELECT count(DISTINCT post_id) AS n FROM x_sightings WHERE account = ?1 AND seen_at >= ?2")
+      .bind(account, now - 24 * 3600_000)
+      .first<{ n: number }>();
+    if ((seen?.n ?? 0) < MIN_BACKGROUND_POSTS) continue;
+    done.push(await takeBackground(env, account, account, 24, 500));
+  }
+  return done;
+}
+
 // ---- lenses ---------------------------------------------------------------
 
 async function loadLens(env: Env, id: string): Promise<LensRow> {
@@ -125,10 +308,7 @@ async function loadLens(env: Env, id: string): Promise<LensRow> {
 }
 
 // POST /lenses (admin): creates or replaces a lens from exemplar posts the
-// Worker already stores. The open and glance thresholds come from the
-// exemplars themselves: open at their median cosine to the centroid, glance
-// (and "near" for purity) at their 10th percentile, so about nine exemplars
-// in ten count as near. There is no live calibration behind these yet.
+// Worker already stores, fitted against the account's latest background.
 export async function upsertLens(env: Env, req: Request) {
   const b = await readJson<Record<string, unknown>>(req);
   const id = str(b.id, "id", 64);
@@ -139,29 +319,32 @@ export async function upsertLens(env: Env, req: Request) {
   const terms = b.project_terms ?? [];
   if (!Array.isArray(terms) || !terms.every((t) => typeof t === "string" && t.length > 0 && t.length <= 60)) fail("project_terms must be an array of short strings");
   const exemplarIds = [...new Set(b.exemplar_ids as string[])];
-  const found = await env.DB.prepare("SELECT id, text FROM x_posts WHERE id IN (SELECT value FROM json_each(?1))")
-    .bind(JSON.stringify(exemplarIds))
-    .all<{ id: string; text: string }>();
-  if (found.results.length < MIN_EXEMPLARS) fail(`only ${found.results.length} of the exemplar_ids are stored posts; a lens needs at least ${MIN_EXEMPLARS}`);
-  const { model, vectors } = await embedTexts(env, found.results.map((r) => r.text));
-  const units = vectors.map(unit);
-  const centroid = unit(units[0].map((_, i) => units.reduce((s, v) => s + v[i], 0) / units.length));
-  const cosines = units.map((v) => dot(v, centroid)).sort((x, y) => x - y);
-  // The median (the mean of the middle two for an even count), and the
-  // lower nearest-rank 10th percentile.
-  const openAt = median(cosines) as number;
-  const glanceAt = quantile(cosines, 0.1);
+  const found = await exemplarPosts(env, exemplarIds);
+  if (found.length < MIN_EXEMPLARS) fail(`only ${found.length} of the exemplar_ids are stored posts; a lens needs at least ${MIN_EXEMPLARS}`);
+  const background = await latestBackground(env, account);
+  if (!background) fail(`account ${account} has no background yet; POST /lenses/backgrounds/refresh first (with source_account for an account that has seen nothing)`);
+  const f = await fit(env, found, background, await firstBaseline(env, id));
   const now = Date.now();
   await env.DB.prepare(
-    `INSERT INTO lenses (id, account, charter, exemplar_ids_json, centroid_json, embed_model, open_at, glance_at, project_terms_json, created_at, updated_at)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10)
+    `INSERT INTO lenses (id, account, charter, exemplar_ids_json, centroid_json, embed_model, open_at, glance_at, project_terms_json, created_at, updated_at, background_version, thresholds_source)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10, ?11, ?12)
      ON CONFLICT (id) DO UPDATE SET account = excluded.account, charter = excluded.charter, exemplar_ids_json = excluded.exemplar_ids_json,
        centroid_json = excluded.centroid_json, embed_model = excluded.embed_model, open_at = excluded.open_at, glance_at = excluded.glance_at,
-       project_terms_json = excluded.project_terms_json, updated_at = excluded.updated_at`,
+       project_terms_json = excluded.project_terms_json, updated_at = excluded.updated_at, background_version = excluded.background_version,
+       thresholds_source = excluded.thresholds_source`,
   )
-    .bind(id, account, charter, JSON.stringify(found.results.map((r) => r.id)), JSON.stringify(centroid), model, openAt, glanceAt, JSON.stringify(terms), now)
+    .bind(id, account, charter, JSON.stringify(found.map((r) => r.id)), JSON.stringify(f.centroid), EMBED_MODEL, f.open_at, f.glance_at, JSON.stringify(terms), now, background.version, f.thresholds_source)
     .run();
-  return { id, account, exemplars: found.results.length, missing_exemplars: exemplarIds.filter((x) => !found.results.some((r) => r.id === x)), open_at: openAt, glance_at: glanceAt };
+  return {
+    id,
+    account,
+    exemplars: found.length,
+    missing_exemplars: exemplarIds.filter((x) => !found.some((r) => r.id === x)),
+    background_version: background.version,
+    open_at: f.open_at,
+    glance_at: f.glance_at,
+    thresholds_source: f.thresholds_source,
+  };
 }
 
 // GET /lenses?account= (ingest): the lenses an account reads for. No
@@ -218,7 +401,8 @@ export async function labelPosts(env: Env, id: string, req: Request) {
   const posts = readPosts(b.posts, MAX_LABEL_POSTS);
   const centroid = JSON.parse(lens.centroid_json) as number[];
   const terms = JSON.parse(lens.project_terms_json) as string[];
-  const { vectors } = await embedTexts(env, posts.map((p) => p.text));
+  const { mean } = await backgroundFor(env, lens);
+  const tastes = await tastesFor(env, posts, [{ mean, centroid }]);
   const seen = await env.DB.prepare(
     "SELECT DISTINCT post_id FROM x_sightings WHERE lens_id = ?1 AND post_id IN (SELECT value FROM json_each(?2))",
   )
@@ -232,7 +416,7 @@ export async function labelPosts(env: Env, id: string, req: Request) {
     source: labels ? "model" : "centroid",
     note,
     labels: posts.map((p, i) => {
-      const taste = dot(unit(vectors[i]), centroid);
+      const taste = tastes[i][0];
       const parts = interestParts(taste, !sighted.has(p.id), p.author_followed, p.text, terms);
       return { id: p.id, action: byModel.get(p.id) ?? centroidAction(taste, lens), ...parts };
     }),
@@ -316,23 +500,39 @@ export async function doneRepolls(env: Env, req: Request) {
 // ---- baseline -------------------------------------------------------------
 
 // POST /lenses/:id/baseline (ingest): the untouched For You top 100, in feed
-// order, with each post's text. Purity is the share at or above glance_at.
+// order, with each post's text. The lens's first baseline sets its
+// thresholds (fit() says why). Purity is the share at or above glance_at.
 export async function recordBaseline(env: Env, id: string, req: Request) {
   const lens = await loadLens(env, id);
   const b = await readJson<Record<string, unknown>>(req, 512 * 1024);
   const sessionId = str(b.session_id, "session_id", 128);
   const posts = readPosts(b.posts, 100);
   const centroid = JSON.parse(lens.centroid_json) as number[];
-  const { vectors } = await embedTexts(env, posts.map((p) => p.text));
-  const tastes = vectors.map((v) => dot(unit(v), centroid));
-  const purity = tastes.filter((t) => t >= lens.glance_at).length / tastes.length;
-  await env.DB.prepare(
-    `INSERT INTO lens_baselines (lens_id, session_id, at, post_ids_json, tastes_json, purity) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-     ON CONFLICT (lens_id, session_id) DO UPDATE SET at = excluded.at, post_ids_json = excluded.post_ids_json, tastes_json = excluded.tastes_json, purity = excluded.purity`,
-  )
-    .bind(id, sessionId, Date.now(), JSON.stringify(posts.map((p) => p.id)), JSON.stringify(tastes), purity)
-    .run();
-  return { lens_id: id, posts: posts.length, purity };
+  const { mean } = await backgroundFor(env, lens);
+  const tastes = (await tastesFor(env, posts, [{ mean, centroid }])).map((t) => t[0]);
+  let { open_at: openAt, glance_at: glanceAt } = lens;
+  const first = !(await firstBaseline(env, id));
+  if (first) {
+    const sorted = [...tastes].sort((x, y) => x - y);
+    openAt = quantile(sorted, 0.9);
+    glanceAt = quantile(sorted, 0.7);
+  }
+  const purity = tastes.filter((t) => t >= glanceAt).length / tastes.length;
+  const texts = JSON.stringify(posts.map((p) => ({ id: p.id, text: p.text })));
+  await env.DB.batch([
+    env.DB.prepare(
+      `INSERT INTO lens_baselines (lens_id, session_id, at, post_ids_json, tastes_json, purity, texts_json) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+       ON CONFLICT (lens_id, session_id) DO UPDATE SET at = excluded.at, post_ids_json = excluded.post_ids_json, tastes_json = excluded.tastes_json,
+         purity = excluded.purity, texts_json = excluded.texts_json`,
+    ).bind(id, sessionId, Date.now(), JSON.stringify(posts.map((p) => p.id)), JSON.stringify(tastes), purity, texts),
+    env.DB.prepare("UPDATE lenses SET open_at = ?2, glance_at = ?3, thresholds_source = CASE WHEN ?4 THEN 'baseline' ELSE thresholds_source END WHERE id = ?1").bind(
+      id,
+      openAt,
+      glanceAt,
+      first ? 1 : 0,
+    ),
+  ]);
+  return { lens_id: id, posts: posts.length, purity, open_at: openAt, glance_at: glanceAt, thresholds_set: first };
 }
 
 // ---- scorecard ------------------------------------------------------------
@@ -442,8 +642,8 @@ export async function signals(env: Env, url: URL) {
 
   const lenses = (
     await (account
-      ? env.DB.prepare("SELECT id, account, centroid_json, open_at, glance_at FROM lenses WHERE account = ?1 ORDER BY id").bind(account)
-      : env.DB.prepare("SELECT id, account, centroid_json, open_at, glance_at FROM lenses ORDER BY id")
+      ? env.DB.prepare("SELECT * FROM lenses WHERE account = ?1 ORDER BY id").bind(account)
+      : env.DB.prepare("SELECT * FROM lenses ORDER BY id")
     ).all<LensRow>()
   ).results;
   if (!lenses.length) throw new HttpError(404, account ? `no lenses for account ${account}` : "no lenses");
@@ -474,8 +674,9 @@ export async function signals(env: Env, url: URL) {
   ]);
   const byId = new Map(stored.results.map((r) => [r.id as string, r as { id: string; author_handle: string; text: string }]));
   const posts = ids.filter((id) => byId.has(id)).map((id) => byId.get(id)!);
-  const { vectors } = posts.length ? await embedTexts(env, posts.map((p) => p.text)) : { vectors: [] };
-  const centroids = lenses.map((l) => JSON.parse(l.centroid_json) as number[]);
+  // Each lens scores against its own account's background.
+  const fits = await Promise.all(lenses.map(async (l) => ({ mean: (await backgroundFor(env, l)).mean, centroid: JSON.parse(l.centroid_json) as number[] })));
+  const tastes = await tastesFor(env, posts, fits);
   const lensAccounts = new Set(lenses.map((l) => l.account));
   const openedBy = new Map<string, string[]>();
   for (const r of opens.results) (openedBy.get(r.post_id as string) ?? openedBy.set(r.post_id as string, []).get(r.post_id as string)!).push(r.lens_id as string);
@@ -484,10 +685,9 @@ export async function signals(env: Env, url: URL) {
 
   const iso = (ms: number | undefined) => (ms === undefined ? null : new Date(ms).toISOString());
   const rows = posts.map((p, i) => {
-    const v = unit(vectors[i]);
     const perLens = Object.fromEntries(
       lenses.map((l, li) => {
-        const taste = dot(v, centroids[li]);
+        const taste = tastes[i][li];
         return [l.id, { taste, near: taste >= l.glance_at, open: taste >= l.open_at }];
       }),
     );

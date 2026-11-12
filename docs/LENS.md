@@ -99,7 +99,12 @@ Subtracting the corpus mean vector before the cosine fixes the separation:
 | Held-out exemplars vs all posts, AUC (harness / design) | 0.69 / 0.64 | 0.94 / 0.97 |
 | Held-out exemplars vs the other lens's, AUC | 0.64 / 0.81 | 0.85 / 0.75 |
 
-The thresholds still come from exemplar percentiles. With the mean subtracted, they open 1% of these posts, not the 10% the reader aims for. These posts are reply threads around saves, not a For You feed, so the day-1 baseline is where the open threshold should be set. `lens.ts` does not subtract a mean yet.
+With the mean subtracted, thresholds taken from exemplar percentiles open 1% of these posts, not the 10% the reader aims for.
+
+`lens.ts` now works this way:
+- It keeps one background per lens account in `lens_backgrounds`, versioned, and each lens records the version it was fitted against. The background is the mean unit embedding of up to 500 posts the account saw in the last 24 hours. The cron retakes it once a day when the account saw at least 50 posts. `POST /lenses/backgrounds/refresh` takes the first one, from another account's posts while the lens account has seen nothing.
+- Every taste is the cosine after subtracting that mean.
+- A lens's first baseline sets `open_at` and `glance_at` to the 90th and 70th percentiles of the baseline's tastes. Until then, the exemplar median and 10th percentile stand in. `thresholds_source` says which applies. The 70th percentile makes the baseline's purity about 0.3 by construction. No live session has checked these percentiles yet.
 
 **First charter, "agent harnesses".** The charter reads: "Agent harnesses: how Claude Code, Codex, T3 Code and other coding-agent harnesses are set up and run, including subagents and orchestration, model routing and effort, MCP tools, skills and instruction files, memory, sessions and long-running agents."
 
@@ -114,7 +119,16 @@ The gold is the archive lead's disposition of the 170 Nov 12 saves. 98 were kept
 
 Without the mean subtraction, open labels 28 saves at precision 0.89 vs kept and 0.71 vs harness, and near labels 83 at 0.735 and 0.46. The AUC of harness saves against the rest is 0.83, against 0.82 raw.
 
-Four of the seven harness saves the lens misses carry little or no post text: a bare mention, a link, a one-line reply. Their substance is in the quoted post or the linked page, which the reader does not see in the feed either.
+The lens misses seven harness saves. Two of them have little post text. "@theo" carries its substance in a screenshot's text, and "use hex by @kitlangton" in its parent post. Neither links a page. The other five are long posts that score below `glance_at`.
+
+**Thin posts with link context.** A post under 15 words (links and @mentions not counted), or one made up mostly of links, is embedded together with the title and first prose paragraph of the page it links (`src/lens-text.ts`). The Worker takes these from the knowledge store's bundle when the `KNOWLEDGE` bucket is bound. The re-score takes them from the archive's raw files. 27 of the 170 saves got link context. None of the 32 exemplars is thin. Mean subtracted, before and after:
+
+| | Labeled | Precision vs kept | Recall of kept | Precision vs harness | Recall of harness |
+|---|---|---|---|---|---|
+| open, before / after | 17 / 17 | 0.94 / 0.94 | 0.16 / 0.16 | 0.82 / 0.82 | 0.30 / 0.30 |
+| near, before / after | 86 / 89 | 0.81 / 0.80 | 0.71 / 0.72 | 0.47 / 0.45 | 0.85 / 0.85 |
+
+The AUC of kept saves against skipped ones moves from 0.80 to 0.82, and harness against the rest stays at 0.83. Link context reaches neither thin miss. Reaching them would take the parent post's text and a screenshot's text, which `lens.ts` does not add.
 
 ## Not yet checked
 
