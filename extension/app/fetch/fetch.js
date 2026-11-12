@@ -212,10 +212,11 @@ async function run({ jobs, limits }) {
 }
 
 // The Worker status for how a run ended. X's own signals keep their name;
-// Stop, the cap and a pause another tab set are a clean end; anything else
+// Stop, the cap, a pause another tab set and a run that would have eaten
+// into the rate reserve are a clean end; anything else
 // (a refused template, a parse failure, a 404) is an error.
 function statusFor(stop) {
-  if (!stop || ["stopped", "cap", "paused"].includes(stop.reason)) return "ok";
+  if (!stop || ["stopped", "cap", "paused", "rate_budget"].includes(stop.reason)) return "ok";
   return ["rate_limited", "login_wall", "challenge"].includes(stop.reason) ? stop.reason : "error";
 }
 

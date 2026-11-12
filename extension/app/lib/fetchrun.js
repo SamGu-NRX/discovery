@@ -34,6 +34,12 @@ export const DEFAULT_LIMITS = Object.freeze({
   linksPerPost: 3,
   // Re-primes after a 404 per operation, before the run stops.
   reprimesPerOperation: 1,
+  // X gives each endpoint a request budget per 15-minute window, per
+  // account, and Sam's own X tabs draw on the same budget. A run never takes
+  // the last 30% of a window: it waits for the reset instead, at most this
+  // long, and otherwise stops that run cleanly.
+  rateReserveFraction: 0.3,
+  maxRateWaitMs: 16 * 60_000,
 });
 
 export function clampLimits(given = {}) {
@@ -41,6 +47,8 @@ export function clampLimits(given = {}) {
   const int = (v) => (Number.isFinite(Number(v)) ? Math.floor(Number(v)) : null);
   if (int(given.minGapMs) !== null) out.minGapMs = Math.max(DEFAULT_LIMITS.minGapMs, int(given.minGapMs));
   if (int(given.jitterMs) !== null) out.jitterMs = Math.max(0, Math.min(10_000, int(given.jitterMs)));
+  if (Number.isFinite(Number(given.rateReserveFraction))) out.rateReserveFraction = Math.max(DEFAULT_LIMITS.rateReserveFraction, Math.min(0.9, Number(given.rateReserveFraction)));
+  if (int(given.maxRateWaitMs) !== null) out.maxRateWaitMs = Math.max(0, Math.min(DEFAULT_LIMITS.maxRateWaitMs, int(given.maxRateWaitMs)));
   if (int(given.runCap) !== null) out.runCap = Math.max(1, Math.min(DEFAULT_LIMITS.runCap, int(given.runCap)));
   for (const key of ["detailCapPerPost", "branchesPerPost", "searchPagesPerQuery", "linksPerPost", "reprimesPerOperation"]) {
     if (int(given[key]) !== null) out[key] = Math.max(0, Math.min(200, int(given[key])));
@@ -133,6 +141,9 @@ export async function runJobs(jobs, limits, io) {
     context: {},
     stop: null,
     lastRequestAt: null,
+    // The last x-rate-limit-* headers per operation, and each wait for a reset.
+    rate: {},
+    rateWaits: [],
     reprimes: {},
     primedFor: {},
   };
@@ -158,10 +169,11 @@ export async function runJobs(jobs, limits, io) {
   return out;
 }
 
-async function gate(run, io) {
+async function gate(run, io, operation = null) {
   if (io.stopRequested()) throw new RunStopped("stopped", "stopped by Sam");
   if (run.requests >= run.limits.runCap) throw new RunStopped("cap", `reached the run cap of ${run.limits.runCap} requests`);
   if (await io.paused()) throw new RunStopped("paused", "the extension is paused (an X signal in the last 24 hours)");
+  if (operation) await keepRateReserve(run, io, operation);
   if (run.lastRequestAt !== null) {
     const gap = run.limits.minGapMs + io.random() * run.limits.jitterMs;
     const wait = run.lastRequestAt + gap - io.now();
@@ -190,13 +202,31 @@ async function prime(run, io, operation, arg) {
   }
 }
 
+// Waits for X's window to reset when the last response left no more than
+// the reserve, so a run never spends the requests Sam's own browsing needs.
+async function keepRateReserve(run, io, operation) {
+  const rate = run.rate[operation];
+  if (!rate || rate.limit === null || rate.remaining === null || rate.reset === null) return;
+  const reserve = Math.max(5, Math.ceil(rate.limit * run.limits.rateReserveFraction));
+  if (rate.remaining > reserve) return;
+  const wait = rate.reset * 1000 + 2000 - io.now();
+  if (wait > run.limits.maxRateWaitMs) {
+    throw new RunStopped("rate_budget", `${operation} has ${rate.remaining} of ${rate.limit} requests left and resets in ${Math.round(wait / 60_000)} min`);
+  }
+  if (wait > 0) {
+    run.rateWaits.push({ operation, at: new Date(io.now()).toISOString(), ms: wait, remaining: rate.remaining, limit: rate.limit });
+    await io.sleep(wait);
+  }
+  delete run.rate[operation];
+}
+
 // One GET. Returns { json, url }; re-primes and retries once after a 404.
 async function request(run, io, operation, changes, note) {
   assertReadOperation(operation);
   for (;;) {
     const template = await io.template(operation);
     const { url, variables } = buildRequest(template, operation, changes);
-    await gate(run, io);
+    await gate(run, io, operation);
     let res;
     try {
       res = await io.send(operation, url);
@@ -207,8 +237,9 @@ async function request(run, io, operation, changes, note) {
       const redirected = /redirect/i.test(err.message);
       throw new RunStopped(redirected ? "login_wall" : "error", `${operation} request failed: ${err.message}`, { pause: redirected });
     }
+    if (res.rate?.limit != null) run.rate[operation] = res.rate;
     const verdict = classifyResponse({ operation, ...res });
-    ledger(run, { operation, variables, status: res.status, ms: res.ms, note });
+    ledger(run, { operation, variables, status: res.status, ms: res.ms, note, remaining: res.rate?.remaining ?? null });
     if (verdict.kind === "json") return { json: verdict.json, url };
     if (verdict.kind === "stop") throw new RunStopped(verdict.reason, verdict.detail, { pause: verdict.pause });
     const used = run.reprimes[operation] ?? 0;
@@ -218,11 +249,11 @@ async function request(run, io, operation, changes, note) {
   }
 }
 
-function ledger(run, { operation, variables, status, ms, note }) {
+function ledger(run, { operation, variables, status, ms, note, remaining = null }) {
   // Cursors are long opaque strings; the start is enough to tell pages apart.
   const shown = { ...variables };
   if (typeof shown.cursor === "string") shown.cursor = `${shown.cursor.slice(0, 16)}…`;
-  run.ledger.push({ i: run.requests, at: new Date(run.lastRequestAt).toISOString(), operation, variables: shown, status, ms, note });
+  run.ledger.push({ i: run.requests, at: new Date(run.lastRequestAt).toISOString(), operation, variables: shown, status, ms, remaining, note });
 }
 
 // Parses one response into a batch, keeps its posts, and queues the batch.

@@ -52,7 +52,13 @@
       signal: AbortSignal.timeout(TIMEOUT_MS),
     });
     const text = await res.text();
-    return { status: res.status, contentType: res.headers.get("content-type") ?? "", text, ms: Math.round(performance.now() - started) };
+    // X's per-endpoint budget for this account, shared with every X tab.
+    const header = (name) => {
+      const value = res.headers.get(name);
+      return value !== null && /^\d+$/.test(value) ? Number(value) : null;
+    };
+    const rate = { limit: header("x-rate-limit-limit"), remaining: header("x-rate-limit-remaining"), reset: header("x-rate-limit-reset") };
+    return { status: res.status, contentType: res.headers.get("content-type") ?? "", text, ms: Math.round(performance.now() - started), rate };
   }
 
   const COMMANDS = Object.freeze({

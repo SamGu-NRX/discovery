@@ -296,3 +296,19 @@ test("a job list with an unknown job type or option is refused, not half-run", (
   assert.throws(() => parseJobs({ jobs: [{ type: "context", ids: ["1"], quote: false }] }), /quote is not a context option/);
   assert.throws(() => parseJobs({ jobs: [{ type: "context", ids: [1] }] }), /post id strings/);
 });
+
+test("a run leaves 30% of X's per-endpoint window to Sam: it waits for the reset, or stops cleanly when that is too far off", async () => {
+  // The harness clock starts at 1,000,000 ms; X's reset is in epoch seconds.
+  const page = (resetSeconds) => (_, v) => ({ ...json(bookmarksPage([v.cursor ? "2" : "1"], v.cursor ? null : "c1")), rate: { limit: 50, remaining: 15, reset: resetSeconds } });
+  const soon = harness(page(1_600));
+  const waited = await run({ jobs: [{ type: "bookmarks_until", boundary: "2" }] }, soon);
+  assert.equal(waited.stop, null);
+  assert.ok(soon.sends[1].at >= 1_602_000, `second request at ${soon.sends[1].at}, before the window reset`);
+  assert.equal(waited.rateWaits.length, 1);
+
+  const late = harness(page(1_000 + 30 * 60));
+  const stopped = await run({ jobs: [{ type: "bookmarks_until", boundary: "2" }] }, late);
+  assert.equal(stopped.stop.reason, "rate_budget");
+  assert.equal(late.sends.length, 1);
+  assert.deepEqual(late.signals, [], "running low is not X backing off, so nothing is paused");
+});
