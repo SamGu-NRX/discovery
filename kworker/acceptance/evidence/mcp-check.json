@@ -13,52 +13,52 @@
   "ids": [
    {
     "id": "2113101611669307727",
-    "version": 1,
+    "version": 2,
     "completeness": "complete"
    },
    {
     "id": "2112875577388712123",
-    "version": 1,
+    "version": 2,
     "completeness": "complete"
    },
    {
     "id": "2112288527837024667",
-    "version": 1,
+    "version": 2,
     "completeness": "complete"
    },
    {
     "id": "2112712092163957157",
-    "version": 2,
+    "version": 3,
     "completeness": "complete"
    },
    {
     "id": "2109412046244913643",
-    "version": 1,
+    "version": 2,
     "completeness": "complete"
    },
    {
     "id": "2114435444587065486",
-    "version": 1,
+    "version": 2,
     "completeness": "complete"
    },
    {
     "id": "2111883168190275752",
-    "version": 1,
+    "version": 2,
     "completeness": "complete"
    },
    {
     "id": "2111478858478465421",
-    "version": 1,
+    "version": 2,
     "completeness": "complete"
    },
    {
     "id": "2112247046082363821",
-    "version": 1,
+    "version": 2,
     "completeness": "complete"
    },
    {
     "id": "2112632133357346889",
-    "version": 2,
+    "version": 3,
     "completeness": "partial"
    }
   ],
@@ -89,7 +89,7 @@
   "results": [
    {
     "post_id": "2112875577388712123",
-    "version": 1,
+    "version": 2,
     "author_untrusted": "raunofreiberg",
     "snippet_untrusted": "you should be using [og]:[video]\nmost client sites have not even got [og]:image right…"
    }
@@ -250,7 +250,9 @@
   {
    "post_id": "2112712092163957157",
    "what": "text screenshot, two-post thread (theo, cost to land changes)",
-   "cut_sections": [],
+   "cut_sections": [
+    "markdown"
+   ],
    "text_match": true,
    "thread_match": true,
    "thread": {

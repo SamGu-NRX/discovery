@@ -1,16 +1,16 @@
 {
- "folder": "C:\\Users\\sgu07\\AppData\\Local\\Temp\\kworker-wiped-tr_o5kym\\kworker",
- "wall_s": 117.9,
+ "folder": "C:\\Users\\sgu07\\AppData\\Local\\Temp\\kworker-wiped-_cd46a23\\kworker",
+ "wall_s": 124.1,
  "jobs_rerun": 55,
  "totals": {
   "fetches": 0,
   "model_calls": 0,
-  "uploaded_bytes": 14069
+  "uploaded_bytes": 499478
  },
  "cache_hits": {
   "derive:embed": 18,
   "model:gate_band": 9,
-  "blob": 37,
+  "blob": 19,
   "fetch": 38,
   "derive:extract": 15,
   "model:image_read": 9,
@@ -28,12 +28,12 @@
    "state": "done",
    "owner": "kworker@Sam_ZephyrusG14",
    "lease_until": null,
-   "attempts": 3,
+   "attempts": 4,
    "expired_leases": 0,
-   "runs": 3,
+   "runs": 4,
    "error": null,
    "created_at": 1794506468404,
-   "updated_at": 1794507734633,
+   "updated_at": 1794508726243,
    "payload": {
     "post_id": "2112632133357346889",
     "expansion_sha": "aa2aeb382e33fc866e967c252b6631b6873c5036d6f31d1b679cccc3e2016a9a"
@@ -62,7 +62,7 @@
      "uploaded_blobs": 0,
      "large_via_worker": 0
     },
-    "wall_s": 0.2
+    "wall_s": 0.23
    }
   },
   {
@@ -72,12 +72,12 @@
    "state": "done",
    "owner": "kworker@Sam_ZephyrusG14",
    "lease_until": null,
-   "attempts": 3,
+   "attempts": 4,
    "expired_leases": 0,
-   "runs": 3,
+   "runs": 4,
    "error": null,
    "created_at": 1794506468347,
-   "updated_at": 1794507732446,
+   "updated_at": 1794508724072,
    "payload": {
     "post_id": "2112247046082363821",
     "expansion_sha": "2da4857c33841bc78186f6e4e117d2157e3562c0fcfc3fc1cd121ec1c3cb0330"
@@ -106,7 +106,7 @@
      "uploaded_blobs": 0,
      "large_via_worker": 0
     },
-    "wall_s": 0.19
+    "wall_s": 0.23
    }
   },
   {
@@ -116,12 +116,12 @@
    "state": "done",
    "owner": "kworker@Sam_ZephyrusG14",
    "lease_until": null,
-   "attempts": 3,
+   "attempts": 4,
    "expired_leases": 0,
-   "runs": 3,
+   "runs": 4,
    "error": null,
    "created_at": 1794506468290,
-   "updated_at": 1794507730171,
+   "updated_at": 1794508721915,
    "payload": {
     "post_id": "2111478858478465421",
     "expansion_sha": "8979ce149f1fab3217b1343bdf379e2f5f9a519bb897f3efe8a075d2e7afff1d"
@@ -150,7 +150,7 @@
      "uploaded_blobs": 0,
      "large_via_worker": 0
     },
-    "wall_s": 0.2
+    "wall_s": 0.22
    }
   },
   {
@@ -160,12 +160,12 @@
    "state": "done",
    "owner": "kworker@Sam_ZephyrusG14",
    "lease_until": null,
-   "attempts": 3,
+   "attempts": 4,
    "expired_leases": 0,
-   "runs": 3,
+   "runs": 4,
    "error": null,
    "created_at": 1794506468239,
-   "updated_at": 1794507727964,
+   "updated_at": 1794508719802,
    "payload": {
     "post_id": "2111883168190275752",
     "expansion_sha": "e30ce1d3dda6e7a23b916c3000171f3e0071bd26c49c3647cd22aca9cb6c84aa"
@@ -194,7 +194,7 @@
      "uploaded_blobs": 0,
      "large_via_worker": 0
     },
-    "wall_s": 0.23
+    "wall_s": 0.25
    }
   },
   {
@@ -204,12 +204,12 @@
    "state": "done",
    "owner": "kworker@Sam_ZephyrusG14",
    "lease_until": null,
-   "attempts": 3,
+   "attempts": 4,
    "expired_leases": 0,
-   "runs": 3,
+   "runs": 4,
    "error": null,
    "created_at": 1794506468189,
-   "updated_at": 1794507725780,
+   "updated_at": 1794508717508,
    "payload": {
     "post_id": "2114435444587065486",
     "expansion_sha": "0a98e0fff1618ea672fdf474bdd9b9fe2aece531db1e0da029fbdf3081812b5c"
@@ -238,7 +238,7 @@
      "uploaded_blobs": 0,
      "large_via_worker": 0
     },
-    "wall_s": 0.34
+    "wall_s": 0.36
    }
   },
   {
@@ -248,12 +248,12 @@
    "state": "done",
    "owner": "kworker@Sam_ZephyrusG14",
    "lease_until": null,
-   "attempts": 3,
+   "attempts": 4,
    "expired_leases": 0,
-   "runs": 3,
+   "runs": 4,
    "error": null,
    "created_at": 1794506468134,
-   "updated_at": 1794507723560,
+   "updated_at": 1794508715085,
    "payload": {
     "post_id": "2109412046244913643",
     "expansion_sha": "705539013a087d9866d139744832006a7cbfc289dbd9c9de9d83a48f1b65c434"
@@ -282,7 +282,7 @@
      "uploaded_blobs": 0,
      "large_via_worker": 0
     },
-    "wall_s": 0.22
+    "wall_s": 0.24
    }
   },
   {
@@ -292,12 +292,12 @@
    "state": "done",
    "owner": "kworker@Sam_ZephyrusG14",
    "lease_until": null,
-   "attempts": 3,
+   "attempts": 4,
    "expired_leases": 0,
-   "runs": 3,
+   "runs": 4,
    "error": null,
    "created_at": 1794506468080,
-   "updated_at": 1794507721392,
+   "updated_at": 1794508712919,
    "payload": {
     "post_id": "2112712092163957157",
     "expansion_sha": "050b4c3651565a6e979a721be3f3438c89bc9c96ccd80eda2fcf021bb4240a4a"
@@ -324,7 +324,7 @@
      "uploaded_blobs": 0,
      "large_via_worker": 0
     },
-    "wall_s": 0.09
+    "wall_s": 0.11
    }
   },
   {
@@ -334,12 +334,12 @@
    "state": "done",
    "owner": "kworker@Sam_ZephyrusG14",
    "lease_until": null,
-   "attempts": 3,
+   "attempts": 4,
    "expired_leases": 0,
-   "runs": 3,
+   "runs": 4,
    "error": null,
    "created_at": 1794506468021,
-   "updated_at": 1794507719384,
+   "updated_at": 1794508710743,
    "payload": {
     "post_id": "2112288527837024667",
     "expansion_sha": "4c122d2ef9239ae09e70858989de65c4bdd182d21576940bcb2e2d170c14647a"
@@ -368,7 +368,7 @@
      "uploaded_blobs": 0,
      "large_via_worker": 0
     },
-    "wall_s": 0.16
+    "wall_s": 0.2
    }
   },
   {
@@ -378,12 +378,12 @@
    "state": "done",
    "owner": "kworker@Sam_ZephyrusG14",
    "lease_until": null,
-   "attempts": 3,
+   "attempts": 4,
    "expired_leases": 0,
-   "runs": 3,
+   "runs": 4,
    "error": null,
    "created_at": 1794506467972,
-   "updated_at": 1794507717443,
+   "updated_at": 1794508708404,
    "payload": {
     "post_id": "2112875577388712123",
     "expansion_sha": "5b58412cfe13ee084d2618c38284ea0357f81ba4d4a24e2f6993ff24e66a6501"
@@ -412,7 +412,7 @@
      "uploaded_blobs": 0,
      "large_via_worker": 0
     },
-    "wall_s": 0.17
+    "wall_s": 0.19
    }
   },
   {
@@ -422,12 +422,12 @@
    "state": "done",
    "owner": "kworker@Sam_ZephyrusG14",
    "lease_until": null,
-   "attempts": 3,
+   "attempts": 4,
    "expired_leases": 0,
-   "runs": 3,
+   "runs": 4,
    "error": null,
    "created_at": 1794506467917,
-   "updated_at": 1794507715559,
+   "updated_at": 1794508705962,
    "payload": {
     "post_id": "2113101611669307727",
     "expansion_sha": "74aca2cb5c9e598cb4f153ef8da590af12e5e0b2f5d1bafaa40759d82e9c7b47"
@@ -456,7 +456,7 @@
      "uploaded_blobs": 0,
      "large_via_worker": 0
     },
-    "wall_s": 0.22
+    "wall_s": 0.25
    }
   },
   {
@@ -466,12 +466,12 @@
    "state": "done",
    "owner": "kworker@Sam_ZephyrusG14",
    "lease_until": null,
-   "attempts": 3,
+   "attempts": 4,
    "expired_leases": 0,
-   "runs": 3,
+   "runs": 4,
    "error": null,
    "created_at": 1794506551537,
-   "updated_at": 1794507826878,
+   "updated_at": 1794508822236,
    "payload": {
     "url": "https://arxiv.org/abs/2609.26550",
     "from": "post"
@@ -529,12 +529,12 @@
    "state": "done",
    "owner": "kworker@Sam_ZephyrusG14",
    "lease_until": null,
-   "attempts": 3,
+   "attempts": 4,
    "expired_leases": 0,
-   "runs": 3,
+   "runs": 4,
    "error": null,
    "created_at": 1794506551526,
-   "updated_at": 1794507824439,
+   "updated_at": 1794508819987,
    "payload": {
     "url": "https://academy.dair.ai/labs/jev-as-a-judge-for-agent-evals",
     "from": "post"
@@ -582,12 +582,12 @@
    "state": "done",
    "owner": "kworker@Sam_ZephyrusG14",
    "lease_until": null,
-   "attempts": 3,
+   "attempts": 4,
    "expired_leases": 0,
-   "runs": 3,
+   "runs": 4,
    "error": null,
    "created_at": 1794506551515,
-   "updated_at": 1794507822119,
+   "updated_at": 1794508817429,
    "payload": {
     "url": "https://academy.dair.ai/dashboard/resources/jev-as-a-judge",
     "from": "post"
@@ -631,12 +631,12 @@
    "state": "done",
    "owner": "kworker@Sam_ZephyrusG14",
    "lease_until": null,
-   "attempts": 3,
+   "attempts": 4,
    "expired_leases": 0,
-   "runs": 3,
+   "runs": 4,
    "error": null,
    "created_at": 1794506545201,
-   "updated_at": 1794507817450,
+   "updated_at": 1794508813143,
    "payload": {
     "url": "https://github.com/stevysmith/fx0",
     "from": "reply:2112917698858643659"
@@ -688,7 +688,7 @@
      "uploaded_blobs": 0,
      "large_via_worker": 0
     },
-    "wall_s": 0.08
+    "wall_s": 0.05
    }
   },
   {
@@ -698,12 +698,12 @@
    "state": "done",
    "owner": "kworker@Sam_ZephyrusG14",
    "lease_until": null,
-   "attempts": 3,
+   "attempts": 4,
    "expired_leases": 0,
-   "runs": 3,
+   "runs": 4,
    "error": null,
    "created_at": 1794506545185,
-   "updated_at": 1794507815174,
+   "updated_at": 1794508810954,
    "payload": {
     "url": "http://fx0.vercel.dev",
     "from": "post"
@@ -764,7 +764,7 @@
      "uploaded_blobs": 0,
      "large_via_worker": 0
     },
-    "wall_s": 0.11
+    "wall_s": 0.09
    }
   },
   {
@@ -774,12 +774,12 @@
    "state": "done",
    "owner": "kworker@Sam_ZephyrusG14",
    "lease_until": null,
-   "attempts": 3,
+   "attempts": 4,
    "expired_leases": 0,
-   "runs": 3,
+   "runs": 4,
    "error": null,
    "created_at": 1794506538605,
-   "updated_at": 1794507808158,
+   "updated_at": 1794508804227,
    "payload": {
     "url": "https://bencho.dev",
     "from": "post"
@@ -840,7 +840,7 @@
      "uploaded_blobs": 0,
      "large_via_worker": 0
     },
-    "wall_s": 0.11
+    "wall_s": 0.08
    }
   },
   {
@@ -850,12 +850,12 @@
    "state": "done",
    "owner": "kworker@Sam_ZephyrusG14",
    "lease_until": null,
-   "attempts": 3,
+   "attempts": 4,
    "expired_leases": 0,
-   "runs": 3,
+   "runs": 4,
    "error": null,
    "created_at": 1794506532054,
-   "updated_at": 1794507801323,
+   "updated_at": 1794508796630,
    "payload": {
     "url": "https://x.com/trq212/status/2105333496768319969?s=46",
     "from": "thread:2111883082953547881"
@@ -909,12 +909,12 @@
    "state": "done",
    "owner": "kworker@Sam_ZephyrusG14",
    "lease_until": null,
-   "attempts": 3,
+   "attempts": 4,
    "expired_leases": 0,
-   "runs": 3,
+   "runs": 4,
    "error": null,
    "created_at": 1794506526375,
-   "updated_at": 1794507788305,
+   "updated_at": 1794508783529,
    "payload": {
     "url": "https://github.com/Pomerado/pomerado",
     "from": "thread:2114436006778925376"
@@ -976,12 +976,12 @@
    "state": "done",
    "owner": "kworker@Sam_ZephyrusG14",
    "lease_until": null,
-   "attempts": 3,
+   "attempts": 4,
    "expired_leases": 0,
-   "runs": 3,
+   "runs": 4,
    "error": null,
    "created_at": 1794506526362,
-   "updated_at": 1794507786274,
+   "updated_at": 1794508781562,
    "payload": {
     "url": "https://pomerado.ai",
     "from": "thread:2114435945474998716"
@@ -1042,7 +1042,7 @@
      "uploaded_blobs": 0,
      "large_via_worker": 0
     },
-    "wall_s": 0.09
+    "wall_s": 0.08
    }
   },
   {
@@ -1052,12 +1052,12 @@
    "state": "done",
    "owner": "kworker@Sam_ZephyrusG14",
    "lease_until": null,
-   "attempts": 3,
+   "attempts": 4,
    "expired_leases": 0,
-   "runs": 3,
+   "runs": 4,
    "error": null,
    "created_at": 1794506520262,
-   "updated_at": 1794507766000,
+   "updated_at": 1794508760341,
    "payload": {
     "url": "https://coinbase.com/careers",
     "from": "thread:2109412049562611793"
@@ -1104,12 +1104,12 @@
    "state": "done",
    "owner": "kworker@Sam_ZephyrusG14",
    "lease_until": null,
-   "attempts": 3,
+   "attempts": 4,
    "expired_leases": 0,
-   "runs": 3,
+   "runs": 4,
    "error": null,
    "created_at": 1794506520250,
-   "updated_at": 1794507764060,
+   "updated_at": 1794508758288,
    "payload": {
     "url": "https://www.coinbase.com/blog/part-one-how-coinbase-built-evaluated-and-post-trained-a-fraud-agent",
     "from": "thread:2109412049562611793"
@@ -1157,12 +1157,12 @@
    "state": "done",
    "owner": "kworker@Sam_ZephyrusG14",
    "lease_until": null,
-   "attempts": 3,
+   "attempts": 4,
    "expired_leases": 0,
-   "runs": 3,
+   "runs": 4,
    "error": null,
    "created_at": 1794506512686,
-   "updated_at": 1794507756183,
+   "updated_at": 1794508749745,
    "payload": {
     "url": "https://rkufoapn89co.postplan.dev/",
     "from": "thread:2112712462772658479"
@@ -1202,7 +1202,7 @@
      "uploaded_blobs": 0,
      "large_via_worker": 0
     },
-    "wall_s": 0.03
+    "wall_s": 0.05
    }
   },
   {
@@ -1212,12 +1212,12 @@
    "state": "done",
    "owner": "kworker@Sam_ZephyrusG14",
    "lease_until": null,
-   "attempts": 3,
+   "attempts": 4,
    "expired_leases": 0,
-   "runs": 3,
+   "runs": 4,
    "error": null,
    "created_at": 1794506498088,
-   "updated_at": 1794507738459,
+   "updated_at": 1794508730405,
    "payload": {
     "url": "https://claude.com/resources/articles/claude-duet",
     "from": "reply:2113279721488412973"
@@ -1255,7 +1255,7 @@
      "uploaded_blobs": 0,
      "large_via_worker": 0
     },
-    "wall_s": 0.05
+    "wall_s": 0.06
    }
   },
   {
@@ -1265,12 +1265,12 @@
    "state": "done",
    "owner": "kworker@Sam_ZephyrusG14",
    "lease_until": null,
-   "attempts": 3,
+   "attempts": 4,
    "expired_leases": 0,
-   "runs": 3,
+   "runs": 4,
    "error": null,
    "created_at": 1794506538594,
-   "updated_at": 1794507805998,
+   "updated_at": 1794508801961,
    "payload": {
     "source_url": "https://pbs.twimg.com/media/HU16x7NWoAAatvp.jpg?name=orig",
     "media_kind": "photo",
@@ -1308,7 +1308,7 @@
      "uploaded_blobs": 0,
      "large_via_worker": 0
     },
-    "wall_s": 0.05
+    "wall_s": 0.06
    }
   },
   {
@@ -1318,12 +1318,12 @@
    "state": "done",
    "owner": "kworker@Sam_ZephyrusG14",
    "lease_until": null,
-   "attempts": 3,
+   "attempts": 4,
    "expired_leases": 0,
-   "runs": 3,
+   "runs": 4,
    "error": null,
    "created_at": 1794506526347,
-   "updated_at": 1794507784225,
+   "updated_at": 1794508779165,
    "payload": {
     "source_url": "https://pbs.twimg.com/media/HVf7wi6agAEvSM5.jpg?name=orig",
     "media_kind": "photo",
@@ -1366,7 +1366,7 @@
      "uploaded_blobs": 0,
      "large_via_worker": 0
     },
-    "wall_s": 0.06
+    "wall_s": 0.08
    }
   },
   {
@@ -1376,12 +1376,12 @@
    "state": "done",
    "owner": "kworker@Sam_ZephyrusG14",
    "lease_until": null,
-   "attempts": 3,
+   "attempts": 4,
    "expired_leases": 0,
-   "runs": 3,
+   "runs": 4,
    "error": null,
    "created_at": 1794506526287,
-   "updated_at": 1794507774300,
+   "updated_at": 1794508768352,
    "payload": {
     "source_url": "https://pbs.twimg.com/media/HVf6hiabsAATZ0f.jpg?name=orig",
     "media_kind": "photo",
@@ -1424,7 +1424,7 @@
      "uploaded_blobs": 0,
      "large_via_worker": 0
     },
-    "wall_s": 0.06
+    "wall_s": 0.08
    }
   },
   {
@@ -1434,12 +1434,12 @@
    "state": "done",
    "owner": "kworker@Sam_ZephyrusG14",
    "lease_until": null,
-   "attempts": 3,
+   "attempts": 4,
    "expired_leases": 0,
-   "runs": 3,
+   "runs": 4,
    "error": null,
    "created_at": 1794506520237,
-   "updated_at": 1794507762045,
+   "updated_at": 1794508756289,
    "payload": {
     "source_url": "https://pbs.twimg.com/media/HUYhnxrXoAA8WCz.jpg?name=orig",
     "media_kind": "photo",
@@ -1482,7 +1482,7 @@
      "uploaded_blobs": 0,
      "large_via_worker": 0
     },
-    "wall_s": 0.06
+    "wall_s": 0.08
    }
   },
   {
@@ -1492,12 +1492,12 @@
    "state": "done",
    "owner": "kworker@Sam_ZephyrusG14",
    "lease_until": null,
-   "attempts": 3,
+   "attempts": 4,
    "expired_leases": 0,
-   "runs": 3,
+   "runs": 4,
    "error": null,
    "created_at": 1794506520223,
-   "updated_at": 1794507760176,
+   "updated_at": 1794508754090,
    "payload": {
     "source_url": "https://pbs.twimg.com/media/HUYhjMnW8AAM-ty.jpg?name=orig",
     "media_kind": "photo",
@@ -1550,12 +1550,12 @@
    "state": "done",
    "owner": "kworker@Sam_ZephyrusG14",
    "lease_until": null,
-   "attempts": 3,
+   "attempts": 4,
    "expired_leases": 0,
-   "runs": 3,
+   "runs": 4,
    "error": null,
    "created_at": 1794506512674,
-   "updated_at": 1794507754260,
+   "updated_at": 1794508747446,
    "payload": {
     "source_url": "https://pbs.twimg.com/media/HVHcwmga0AA7R0T.jpg?name=orig",
     "media_kind": "photo",
@@ -1598,7 +1598,7 @@
      "uploaded_blobs": 0,
      "large_via_worker": 0
     },
-    "wall_s": 0.05
+    "wall_s": 0.08
    }
   },
   {
@@ -1608,12 +1608,12 @@
    "state": "done",
    "owner": "kworker@Sam_ZephyrusG14",
    "lease_until": null,
-   "attempts": 3,
+   "attempts": 4,
    "expired_leases": 0,
-   "runs": 3,
+   "runs": 4,
    "error": null,
    "created_at": 1794506512657,
-   "updated_at": 1794507752235,
+   "updated_at": 1794508745275,
    "payload": {
     "source_url": "https://pbs.twimg.com/media/HVHchv_bkAAFO-J.jpg?name=orig",
     "media_kind": "photo",
@@ -1656,7 +1656,7 @@
      "uploaded_blobs": 0,
      "large_via_worker": 0
     },
-    "wall_s": 0.08
+    "wall_s": 0.09
    }
   },
   {
@@ -1666,12 +1666,12 @@
    "state": "done",
    "owner": "kworker@Sam_ZephyrusG14",
    "lease_until": null,
-   "attempts": 3,
+   "attempts": 4,
    "expired_leases": 0,
-   "runs": 3,
+   "runs": 4,
    "error": null,
    "created_at": 1794506512644,
-   "updated_at": 1794507750361,
+   "updated_at": 1794508743203,
    "payload": {
     "source_url": "https://pbs.twimg.com/media/HVHcZjlbMAAfNQ3.jpg?name=orig",
     "media_kind": "photo",
@@ -1724,12 +1724,12 @@
    "state": "done",
    "owner": "kworker@Sam_ZephyrusG14",
    "lease_until": null,
-   "attempts": 3,
+   "attempts": 4,
    "expired_leases": 0,
-   "runs": 3,
+   "runs": 4,
    "error": null,
    "created_at": 1794506510051,
-   "updated_at": 1794507746552,
+   "updated_at": 1794508738820,
    "payload": {
     "source_url": "https://pbs.twimg.com/media/HVBbK6LWoAAUQpF.png?name=orig",
     "media_kind": "photo",
@@ -1777,12 +1777,12 @@
    "state": "done",
    "owner": "kworker@Sam_ZephyrusG14",
    "lease_until": null,
-   "attempts": 3,
+   "attempts": 4,
    "expired_leases": 0,
-   "runs": 3,
+   "runs": 4,
    "error": null,
    "created_at": 1794506545168,
-   "updated_at": 1794507812788,
+   "updated_at": 1794508808717,
    "payload": {
     "source_url": "https://video.twimg.com/amplify_video/2112245358327959552/vid/avc1/2690x1814/9aoWkbwawOloLD3z.mp4?tag=29",
     "media_kind": "video",
@@ -1847,7 +1847,7 @@
      "uploaded_blobs": 0,
      "large_via_worker": 0
     },
-    "wall_s": 0.12
+    "wall_s": 0.09
    }
   },
   {
@@ -1857,12 +1857,12 @@
    "state": "done",
    "owner": "kworker@Sam_ZephyrusG14",
    "lease_until": null,
-   "attempts": 3,
+   "attempts": 4,
    "expired_leases": 0,
-   "runs": 3,
+   "runs": 4,
    "error": null,
    "created_at": 1794506532044,
-   "updated_at": 1794507799038,
+   "updated_at": 1794508794183,
    "payload": {
     "source_url": "https://video.twimg.com/amplify_video/2111884147589619712/vid/avc1/1920x1080/h8V6sDgPpU2tqquG.mp4?tag=29",
     "media_kind": "video",
@@ -1931,7 +1931,7 @@
      "uploaded_blobs": 0,
      "large_via_worker": 0
     },
-    "wall_s": 0.09
+    "wall_s": 0.11
    }
   },
   {
@@ -1941,12 +1941,12 @@
    "state": "done",
    "owner": "kworker@Sam_ZephyrusG14",
    "lease_until": null,
-   "attempts": 3,
+   "attempts": 4,
    "expired_leases": 0,
-   "runs": 3,
+   "runs": 4,
    "error": null,
    "created_at": 1794506532027,
-   "updated_at": 1794507796830,
+   "updated_at": 1794508791961,
    "payload": {
     "source_url": "https://video.twimg.com/amplify_video/2111883801819484160/vid/avc1/1920x1080/nkNlhBv4szwoldW2.mp4?tag=29",
     "media_kind": "video",
@@ -2041,12 +2041,12 @@
    "state": "done",
    "owner": "kworker@Sam_ZephyrusG14",
    "lease_until": null,
-   "attempts": 3,
+   "attempts": 4,
    "expired_leases": 0,
-   "runs": 3,
+   "runs": 4,
    "error": null,
    "created_at": 1794506532011,
-   "updated_at": 1794507794689,
+   "updated_at": 1794508789855,
    "payload": {
     "source_url": "https://video.twimg.com/amplify_video/2111883106118709248/vid/avc1/1920x1080/RvEiFj0XeRAeKWZp.mp4?tag=29",
     "media_kind": "video",
@@ -2121,12 +2121,12 @@
    "state": "done",
    "owner": "kworker@Sam_ZephyrusG14",
    "lease_until": null,
-   "attempts": 3,
+   "attempts": 4,
    "expired_leases": 0,
-   "runs": 3,
+   "runs": 4,
    "error": null,
    "created_at": 1794506531996,
-   "updated_at": 1794507792575,
+   "updated_at": 1794508787853,
    "payload": {
     "source_url": "https://video.twimg.com/amplify_video/2111883041320964096/vid/avc1/1920x1080/GpBN8jgArEivlZFv.mp4?tag=29",
     "media_kind": "video",
@@ -2199,7 +2199,7 @@
      "uploaded_blobs": 0,
      "large_via_worker": 0
     },
-    "wall_s": 0.09
+    "wall_s": 0.12
    }
   },
   {
@@ -2209,12 +2209,12 @@
    "state": "done",
    "owner": "kworker@Sam_ZephyrusG14",
    "lease_until": null,
-   "attempts": 3,
+   "attempts": 4,
    "expired_leases": 0,
-   "runs": 3,
+   "runs": 4,
    "error": null,
    "created_at": 1794506526335,
-   "updated_at": 1794507782308,
+   "updated_at": 1794508777020,
    "payload": {
     "source_url": "https://video.twimg.com/tweet_video/HVf6_I_bQAAp1lU.mp4",
     "media_kind": "video",
@@ -2270,7 +2270,7 @@
      "uploaded_blobs": 0,
      "large_via_worker": 0
     },
-    "wall_s": 0.08
+    "wall_s": 0.09
    }
   },
   {
@@ -2280,12 +2280,12 @@
    "state": "done",
    "owner": "kworker@Sam_ZephyrusG14",
    "lease_until": null,
-   "attempts": 3,
+   "attempts": 4,
    "expired_leases": 0,
-   "runs": 3,
+   "runs": 4,
    "error": null,
    "created_at": 1794506526321,
-   "updated_at": 1794507780312,
+   "updated_at": 1794508774857,
    "payload": {
     "source_url": "https://video.twimg.com/tweet_video/HVf65mDaEAAqh3T.mp4",
     "media_kind": "video",
@@ -2341,7 +2341,7 @@
      "uploaded_blobs": 0,
      "large_via_worker": 0
     },
-    "wall_s": 0.08
+    "wall_s": 0.11
    }
   },
   {
@@ -2351,12 +2351,12 @@
    "state": "done",
    "owner": "kworker@Sam_ZephyrusG14",
    "lease_until": null,
-   "attempts": 3,
+   "attempts": 4,
    "expired_leases": 0,
-   "runs": 3,
+   "runs": 4,
    "error": null,
    "created_at": 1794506526310,
-   "updated_at": 1794507778394,
+   "updated_at": 1794508772596,
    "payload": {
     "source_url": "https://video.twimg.com/tweet_video/HVf61-QacAA_qCP.mp4",
     "media_kind": "video",
@@ -2426,12 +2426,12 @@
    "state": "done",
    "owner": "kworker@Sam_ZephyrusG14",
    "lease_until": null,
-   "attempts": 3,
+   "attempts": 4,
    "expired_leases": 0,
-   "runs": 3,
+   "runs": 4,
    "error": null,
    "created_at": 1794506526299,
-   "updated_at": 1794507776374,
+   "updated_at": 1794508770515,
    "payload": {
     "source_url": "https://video.twimg.com/tweet_video/HVf6yyhaoAAXyNJ.mp4",
     "media_kind": "video",
@@ -2501,12 +2501,12 @@
    "state": "done",
    "owner": "kworker@Sam_ZephyrusG14",
    "lease_until": null,
-   "attempts": 3,
+   "attempts": 4,
    "expired_leases": 0,
-   "runs": 3,
+   "runs": 4,
    "error": null,
    "created_at": 1794506526274,
-   "updated_at": 1794507772236,
+   "updated_at": 1794508766358,
    "payload": {
     "source_url": "https://video.twimg.com/tweet_video/HVf6SIyboAACGJR.mp4",
     "media_kind": "video",
@@ -2562,7 +2562,7 @@
      "uploaded_blobs": 0,
      "large_via_worker": 0
     },
-    "wall_s": 0.08
+    "wall_s": 0.06
    }
   },
   {
@@ -2572,12 +2572,12 @@
    "state": "done",
    "owner": "kworker@Sam_ZephyrusG14",
    "lease_until": null,
-   "attempts": 3,
+   "attempts": 4,
    "expired_leases": 0,
-   "runs": 3,
+   "runs": 4,
    "error": null,
    "created_at": 1794506526262,
-   "updated_at": 1794507770073,
+   "updated_at": 1794508764409,
    "payload": {
     "source_url": "https://video.twimg.com/amplify_video/2114433558794444800/vid/avc1/1920x1080/C7wBNP7RonH7OjKI.mp4?tag=29",
     "media_kind": "video",
@@ -2672,12 +2672,12 @@
    "state": "done",
    "owner": "kworker@Sam_ZephyrusG14",
    "lease_until": null,
-   "attempts": 3,
+   "attempts": 4,
    "expired_leases": 0,
-   "runs": 3,
+   "runs": 4,
    "error": null,
    "created_at": 1794506504571,
-   "updated_at": 1794507742583,
+   "updated_at": 1794508734500,
    "payload": {
     "source_url": "https://video.twimg.com/amplify_video/2112875525425233920/vid/avc1/1168x848/Lc_rACT1jiaGf8F_.mp4?tag=29",
     "media_kind": "video",
@@ -2739,12 +2739,12 @@
    "state": "done",
    "owner": "kworker@Sam_ZephyrusG14",
    "lease_until": null,
-   "attempts": 3,
+   "attempts": 4,
    "expired_leases": 0,
-   "runs": 3,
+   "runs": 4,
    "error": null,
    "created_at": 1794506498055,
-   "updated_at": 1794507736568,
+   "updated_at": 1794508728244,
    "payload": {
     "source_url": "https://video.twimg.com/amplify_video/2113101311860482048/vid/avc1/1206x2622/Pivh4m-5Fwz2qoz9.mp4?tag=29",
     "media_kind": "video",
@@ -2839,12 +2839,12 @@
    "state": "done",
    "owner": "kworker@Sam_ZephyrusG14",
    "lease_until": null,
-   "attempts": 3,
+   "attempts": 4,
    "expired_leases": 0,
-   "runs": 3,
+   "runs": 4,
    "error": null,
    "created_at": 1794506551554,
-   "updated_at": 1794507829243,
+   "updated_at": 1794508824622,
    "payload": {
     "post_id": "2112632133357346889",
     "expansion_sha": "aa2aeb382e33fc866e967c252b6631b6873c5036d6f31d1b679cccc3e2016a9a",
@@ -2878,14 +2878,14 @@
    "result": {
     "result": {
      "post_id": "2112632133357346889",
-     "json_sha": "40208199bfe598c87b525f94f70888e8b9f0f62eedcfc0564b6ccbf545a5e827",
-     "md_sha": "ede821355eb8e8b4d3273ac4071311b096c2f9234d71f33fd76dbcadf124f699",
+     "json_sha": "20b90b6f205ddc19db5192d9de280212290f18a2b32729e2ad0cad565e8b9651",
+     "md_sha": "a53bb690955915f41befa43bd08cb79d83b1348735f2e891b707ac4bc5d7a82b",
      "registered": {
       "created": true,
       "post_id": "2112632133357346889",
-      "version": 2,
-      "r2_key": "bundles/2112632133357346889/v2.md",
-      "json_key": "bundles/2112632133357346889/v2.json"
+      "version": 3,
+      "r2_key": "bundles/2112632133357346889/v3.md",
+      "json_key": "bundles/2112632133357346889/v3.json"
      },
      "completeness": "partial",
      "missing": 3
@@ -2897,11 +2897,11 @@
      "model_calls_by_model": {},
      "tokens": {},
      "cache_hits": {},
-     "uploaded_bytes": 14069,
+     "uploaded_bytes": 14783,
      "uploaded_blobs": 2,
      "large_via_worker": 0
     },
-    "wall_s": 0.14
+    "wall_s": 0.19
    }
   },
   {
@@ -2911,12 +2911,12 @@
    "state": "done",
    "owner": "kworker@Sam_ZephyrusG14",
    "lease_until": null,
-   "attempts": 3,
+   "attempts": 4,
    "expired_leases": 0,
-   "runs": 3,
+   "runs": 4,
    "error": null,
    "created_at": 1794506545217,
-   "updated_at": 1794507819845,
+   "updated_at": 1794508815420,
    "payload": {
     "post_id": "2112247046082363821",
     "expansion_sha": "2da4857c33841bc78186f6e4e117d2157e3562c0fcfc3fc1cd121ec1c3cb0330",
@@ -2951,14 +2951,14 @@
    "result": {
     "result": {
      "post_id": "2112247046082363821",
-     "json_sha": "f1c221d328167b0cdd6d1044a6f9e7332b8b62d18990467b6cf1f94c768d21d4",
-     "md_sha": "fe348bc9d49bbb4b4450db8f9361f1a42840974b73e70c23108971cedd4e99c0",
+     "json_sha": "82a4dd0671b16667ac0212b12499d8e83249cf2dc0f7de6f8e6d714d23a5586c",
+     "md_sha": "3d9ab877ed37ee971880d0e224eee4de6e7e1126ed424d4cfa7c1dceb768a89e",
      "registered": {
-      "created": false,
+      "created": true,
       "post_id": "2112247046082363821",
-      "version": 1,
-      "r2_key": "bundles/2112247046082363821/v1.md",
-      "json_key": "bundles/2112247046082363821/v1.json"
+      "version": 2,
+      "r2_key": "bundles/2112247046082363821/v2.md",
+      "json_key": "bundles/2112247046082363821/v2.json"
      },
      "completeness": "complete",
      "missing": 2
@@ -2969,11 +2969,9 @@
      "model_calls": 0,
      "model_calls_by_model": {},
      "tokens": {},
-     "cache_hits": {
-      "blob": 2
-     },
-     "uploaded_bytes": 0,
-     "uploaded_blobs": 0,
+     "cache_hits": {},
+     "uploaded_bytes": 46810,
+     "uploaded_blobs": 2,
      "large_via_worker": 0
     },
     "wall_s": 0.2
@@ -2986,12 +2984,12 @@
    "state": "done",
    "owner": "kworker@Sam_ZephyrusG14",
    "lease_until": null,
-   "attempts": 3,
+   "attempts": 4,
    "expired_leases": 0,
-   "runs": 3,
+   "runs": 4,
    "error": null,
    "created_at": 1794506538624,
-   "updated_at": 1794507810373,
+   "updated_at": 1794508806629,
    "payload": {
     "post_id": "2111478858478465421",
     "expansion_sha": "8979ce149f1fab3217b1343bdf379e2f5f9a519bb897f3efe8a075d2e7afff1d",
@@ -3019,14 +3017,14 @@
    "result": {
     "result": {
      "post_id": "2111478858478465421",
-     "json_sha": "b5a12b961c9078b3c8350bd364f42dfbf46829239ed15302ce9e4f5b72e2a3f1",
-     "md_sha": "5178851f4cb301c822b5459e080067d754b295979187030035aac773eef7d9fc",
+     "json_sha": "aa4d6851fe3f2c24f194b50a4c30cdd7a953993fdd0c9cada1fbc4f1d6fffcb4",
+     "md_sha": "eba96542dd8104242e68cef8c9b83b94a156b62f7af06be2ed6e1a63dfb51abd",
      "registered": {
-      "created": false,
+      "created": true,
       "post_id": "2111478858478465421",
-      "version": 1,
-      "r2_key": "bundles/2111478858478465421/v1.md",
-      "json_key": "bundles/2111478858478465421/v1.json"
+      "version": 2,
+      "r2_key": "bundles/2111478858478465421/v2.md",
+      "json_key": "bundles/2111478858478465421/v2.json"
      },
      "completeness": "complete",
      "missing": 2
@@ -3037,14 +3035,12 @@
      "model_calls": 0,
      "model_calls_by_model": {},
      "tokens": {},
-     "cache_hits": {
-      "blob": 2
-     },
-     "uploaded_bytes": 0,
-     "uploaded_blobs": 0,
+     "cache_hits": {},
+     "uploaded_bytes": 15302,
+     "uploaded_blobs": 2,
      "large_via_worker": 0
     },
-    "wall_s": 0.12
+    "wall_s": 0.17
    }
   },
   {
@@ -3054,12 +3050,12 @@
    "state": "done",
    "owner": "kworker@Sam_ZephyrusG14",
    "lease_until": null,
-   "attempts": 3,
+   "attempts": 4,
    "expired_leases": 0,
-   "runs": 3,
+   "runs": 4,
    "error": null,
    "created_at": 1794506532077,
-   "updated_at": 1794507803792,
+   "updated_at": 1794508799308,
    "payload": {
     "post_id": "2111883168190275752",
     "expansion_sha": "e30ce1d3dda6e7a23b916c3000171f3e0071bd26c49c3647cd22aca9cb6c84aa",
@@ -3111,14 +3107,14 @@
    "result": {
     "result": {
      "post_id": "2111883168190275752",
-     "json_sha": "162308e935474c5ac16fe2330c60a1922d6d26083f85a5b40cf5995c38efeb80",
-     "md_sha": "b7713b79b4d40cad23cc61624d197af38365515e51a89fe6db803940bae9f62d",
+     "json_sha": "e525cd80f63dce9a10dde2660c4151b4395b09bf7e7a47fbbbf6d172188baab1",
+     "md_sha": "a9e566d0e8a5a64c31df74513c9f6b0fdd7de7414e4fe6ea14a1220c3758e167",
      "registered": {
-      "created": false,
+      "created": true,
       "post_id": "2111883168190275752",
-      "version": 1,
-      "r2_key": "bundles/2111883168190275752/v1.md",
-      "json_key": "bundles/2111883168190275752/v1.json"
+      "version": 2,
+      "r2_key": "bundles/2111883168190275752/v2.md",
+      "json_key": "bundles/2111883168190275752/v2.json"
      },
      "completeness": "complete",
      "missing": 2
@@ -3129,14 +3125,12 @@
      "model_calls": 0,
      "model_calls_by_model": {},
      "tokens": {},
-     "cache_hits": {
-      "blob": 2
-     },
-     "uploaded_bytes": 0,
-     "uploaded_blobs": 0,
+     "cache_hits": {},
+     "uploaded_bytes": 33461,
+     "uploaded_blobs": 2,
      "large_via_worker": 0
     },
-    "wall_s": 0.22
+    "wall_s": 0.39
    }
   },
   {
@@ -3146,12 +3140,12 @@
    "state": "done",
    "owner": "kworker@Sam_ZephyrusG14",
    "lease_until": null,
-   "attempts": 3,
+   "attempts": 4,
    "expired_leases": 0,
-   "runs": 3,
+   "runs": 4,
    "error": null,
    "created_at": 1794506526390,
-   "updated_at": 1794507790600,
+   "updated_at": 1794508785731,
    "payload": {
     "post_id": "2114435444587065486",
     "expansion_sha": "0a98e0fff1618ea672fdf474bdd9b9fe2aece531db1e0da029fbdf3081812b5c",
@@ -3242,14 +3236,14 @@
    "result": {
     "result": {
      "post_id": "2114435444587065486",
-     "json_sha": "a722b245e4e3bc48678ee6c82198aedd157fe0b12993a8b57606a3a0af80b790",
-     "md_sha": "fdb09446b8e29d6c9f00d2e1440a65a678bf7778ed92743d04757a0bddbaf961",
+     "json_sha": "032a0a8678dec82106a3433433eb2e668f27619d9cb8c9647232146dffe556a2",
+     "md_sha": "562ec3bb3957d41777b2bad2a5b9fb453ee4a3ec1024453908d784937c244c48",
      "registered": {
-      "created": false,
+      "created": true,
       "post_id": "2114435444587065486",
-      "version": 1,
-      "r2_key": "bundles/2114435444587065486/v1.md",
-      "json_key": "bundles/2114435444587065486/v1.json"
+      "version": 2,
+      "r2_key": "bundles/2114435444587065486/v2.md",
+      "json_key": "bundles/2114435444587065486/v2.json"
      },
      "completeness": "complete",
      "missing": 2
@@ -3260,14 +3254,12 @@
      "model_calls": 0,
      "model_calls_by_model": {},
      "tokens": {},
-     "cache_hits": {
-      "blob": 2
-     },
-     "uploaded_bytes": 0,
-     "uploaded_blobs": 0,
+     "cache_hits": {},
+     "uploaded_bytes": 94962,
+     "uploaded_blobs": 2,
      "large_via_worker": 0
     },
-    "wall_s": 0.27
+    "wall_s": 0.31
    }
   },
   {
@@ -3277,12 +3269,12 @@
    "state": "done",
    "owner": "kworker@Sam_ZephyrusG14",
    "lease_until": null,
-   "attempts": 3,
+   "attempts": 4,
    "expired_leases": 0,
-   "runs": 3,
+   "runs": 4,
    "error": null,
    "created_at": 1794506520279,
-   "updated_at": 1794507768091,
+   "updated_at": 1794508762514,
    "payload": {
     "post_id": "2109412046244913643",
     "expansion_sha": "705539013a087d9866d139744832006a7cbfc289dbd9c9de9d83a48f1b65c434",
@@ -3325,14 +3317,14 @@
    "result": {
     "result": {
      "post_id": "2109412046244913643",
-     "json_sha": "cfd14b5b39693fede3be18f03a646d7764bc32cf791af43731f797c650d10777",
-     "md_sha": "ca593cf9071d4d8beaac37b1e9e13b9232ee3486e18a69c5297f6f3f1333d203",
+     "json_sha": "2fed8f76caba64021563174ba5b0cfc4526b5528e281f9cb211400b9e4bb02da",
+     "md_sha": "97fdeb6b0d0235ee317cfa1ff90cc3796b05322ff8d5bdc9785ae4e3f9c1ac6f",
      "registered": {
-      "created": false,
+      "created": true,
       "post_id": "2109412046244913643",
-      "version": 1,
-      "r2_key": "bundles/2109412046244913643/v1.md",
-      "json_key": "bundles/2109412046244913643/v1.json"
+      "version": 2,
+      "r2_key": "bundles/2109412046244913643/v2.md",
+      "json_key": "bundles/2109412046244913643/v2.json"
      },
      "completeness": "complete",
      "missing": 2
@@ -3343,14 +3335,12 @@
      "model_calls": 0,
      "model_calls_by_model": {},
      "tokens": {},
-     "cache_hits": {
-      "blob": 2
-     },
-     "uploaded_bytes": 0,
-     "uploaded_blobs": 0,
+     "cache_hits": {},
+     "uploaded_bytes": 92920,
+     "uploaded_blobs": 2,
      "large_via_worker": 0
     },
-    "wall_s": 0.14
+    "wall_s": 0.19
    }
   },
   {
@@ -3360,12 +3350,12 @@
    "state": "done",
    "owner": "kworker@Sam_ZephyrusG14",
    "lease_until": null,
-   "attempts": 3,
+   "attempts": 4,
    "expired_leases": 0,
-   "runs": 3,
+   "runs": 4,
    "error": null,
    "created_at": 1794506512704,
-   "updated_at": 1794507758211,
+   "updated_at": 1794508752024,
    "payload": {
     "post_id": "2112712092163957157",
     "expansion_sha": "050b4c3651565a6e979a721be3f3438c89bc9c96ccd80eda2fcf021bb4240a4a",
@@ -3409,14 +3399,14 @@
    "result": {
     "result": {
      "post_id": "2112712092163957157",
-     "json_sha": "eae850255f83728534bfe56d3794a052046c28cb6a50e95647fd4525f391a6cd",
-     "md_sha": "e1e928c8c6229958abb8c56f2aee19e733c1869212efa87503e39ec161bbb1b3",
+     "json_sha": "e6281beffbc4f77b51334ef74872da1822400de7325b96a34bdd42371cebc1f8",
+     "md_sha": "4f5be53f26c2f237dafcbf89f8e04f841470edf8b817c37cdf3fa234e20ec687",
      "registered": {
-      "created": false,
+      "created": true,
       "post_id": "2112712092163957157",
-      "version": 2,
-      "r2_key": "bundles/2112712092163957157/v2.md",
-      "json_key": "bundles/2112712092163957157/v2.json"
+      "version": 3,
+      "r2_key": "bundles/2112712092163957157/v3.md",
+      "json_key": "bundles/2112712092163957157/v3.json"
      },
      "completeness": "complete",
      "missing": 2
@@ -3427,14 +3417,12 @@
      "model_calls": 0,
      "model_calls_by_model": {},
      "tokens": {},
-     "cache_hits": {
-      "blob": 2
-     },
-     "uploaded_bytes": 0,
-     "uploaded_blobs": 0,
+     "cache_hits": {},
+     "uploaded_bytes": 147758,
+     "uploaded_blobs": 2,
      "large_via_worker": 0
     },
-    "wall_s": 0.14
+    "wall_s": 0.23
    }
   },
   {
@@ -3444,12 +3432,12 @@
    "state": "done",
    "owner": "kworker@Sam_ZephyrusG14",
    "lease_until": null,
-   "attempts": 3,
+   "attempts": 4,
    "expired_leases": 0,
-   "runs": 3,
+   "runs": 4,
    "error": null,
    "created_at": 1794506510069,
-   "updated_at": 1794507748480,
+   "updated_at": 1794508741084,
    "payload": {
     "post_id": "2112288527837024667",
     "expansion_sha": "4c122d2ef9239ae09e70858989de65c4bdd182d21576940bcb2e2d170c14647a",
@@ -3470,14 +3458,14 @@
    "result": {
     "result": {
      "post_id": "2112288527837024667",
-     "json_sha": "de010048c60c35a4c8f51e46e2cae071bb49b54ab962f95773b12aa5c2af6cef",
-     "md_sha": "99837ed7df2e7ca8f2990c868682baaacdeac514a0704364fa42057b0e41f90e",
+     "json_sha": "9a8ca41eae7fdeee45cb03c2246680586d26dca0e119533ef43cc6948344c9f2",
+     "md_sha": "8f9f26d189576687467031784fdc4d18c46c8802e7c5bc5370a2d37d2326df7c",
      "registered": {
-      "created": false,
+      "created": true,
       "post_id": "2112288527837024667",
-      "version": 1,
-      "r2_key": "bundles/2112288527837024667/v1.md",
-      "json_key": "bundles/2112288527837024667/v1.json"
+      "version": 2,
+      "r2_key": "bundles/2112288527837024667/v2.md",
+      "json_key": "bundles/2112288527837024667/v2.json"
      },
      "completeness": "complete",
      "missing": 2
@@ -3488,14 +3476,12 @@
      "model_calls": 0,
      "model_calls_by_model": {},
      "tokens": {},
-     "cache_hits": {
-      "blob": 2
-     },
-     "uploaded_bytes": 0,
-     "uploaded_blobs": 0,
+     "cache_hits": {},
+     "uploaded_bytes": 6832,
+     "uploaded_blobs": 2,
      "large_via_worker": 0
     },
-    "wall_s": 0.08
+    "wall_s": 0.16
    }
   },
   {
@@ -3505,12 +3491,12 @@
    "state": "done",
    "owner": "kworker@Sam_ZephyrusG14",
    "lease_until": null,
-   "attempts": 3,
+   "attempts": 4,
    "expired_leases": 0,
-   "runs": 3,
+   "runs": 4,
    "error": null,
    "created_at": 1794506504585,
-   "updated_at": 1794507744664,
+   "updated_at": 1794508736617,
    "payload": {
     "post_id": "2112875577388712123",
     "expansion_sha": "5b58412cfe13ee084d2618c38284ea0357f81ba4d4a24e2f6993ff24e66a6501",
@@ -3531,14 +3517,14 @@
    "result": {
     "result": {
      "post_id": "2112875577388712123",
-     "json_sha": "f7b56d59055605e9649865c59e5ddcf32ef7a87a558a8206d1b478dcde209f66",
-     "md_sha": "af67f4a5824637162440d461acf65201e6cec6c02fc5e4c39b1deae3065a8243",
+     "json_sha": "e9a6215d9322db18231619e263d67d1f95a185cefc31c13c5513fe577ac7e424",
+     "md_sha": "33ec0662de7acbfd4e0c9cd0194c497063ae6442bc3ee4105266e220112f683c",
      "registered": {
-      "created": false,
+      "created": true,
       "post_id": "2112875577388712123",
-      "version": 1,
-      "r2_key": "bundles/2112875577388712123/v1.md",
-      "json_key": "bundles/2112875577388712123/v1.json"
+      "version": 2,
+      "r2_key": "bundles/2112875577388712123/v2.md",
+      "json_key": "bundles/2112875577388712123/v2.json"
      },
      "completeness": "complete",
      "missing": 2
@@ -3549,14 +3535,12 @@
      "model_calls": 0,
      "model_calls_by_model": {},
      "tokens": {},
-     "cache_hits": {
-      "blob": 2
-     },
-     "uploaded_bytes": 0,
-     "uploaded_blobs": 0,
+     "cache_hits": {},
+     "uploaded_bytes": 8719,
+     "uploaded_blobs": 2,
      "large_via_worker": 0
     },
-    "wall_s": 0.06
+    "wall_s": 0.17
    }
   },
   {
@@ -3566,12 +3550,12 @@
    "state": "done",
    "owner": "kworker@Sam_ZephyrusG14",
    "lease_until": null,
-   "attempts": 3,
+   "attempts": 4,
    "expired_leases": 0,
-   "runs": 3,
+   "runs": 4,
    "error": null,
    "created_at": 1794506498100,
-   "updated_at": 1794507740551,
+   "updated_at": 1794508732571,
    "payload": {
     "post_id": "2113101611669307727",
     "expansion_sha": "74aca2cb5c9e598cb4f153ef8da590af12e5e0b2f5d1bafaa40759d82e9c7b47",
@@ -3599,14 +3583,14 @@
    "result": {
     "result": {
      "post_id": "2113101611669307727",
-     "json_sha": "4b547253187f098d96c20dfbdaaaadaf04c9292ec01afe84130726cf6f86bdbf",
-     "md_sha": "19b6f48ffc77d0c6de9ad6bce9d26b3d5b1f09097dddf56aaba48044bdce822d",
+     "json_sha": "812ab1aaa518a9099b85c641db85fdc34b9733c1c27ef5264b5e90b2377ab501",
+     "md_sha": "2021ee078b7da9fd792fa60f066fda096c7287a51c503db87fac83d8787f51f3",
      "registered": {
-      "created": false,
+      "created": true,
       "post_id": "2113101611669307727",
-      "version": 1,
-      "r2_key": "bundles/2113101611669307727/v1.md",
-      "json_key": "bundles/2113101611669307727/v1.json"
+      "version": 2,
+      "r2_key": "bundles/2113101611669307727/v2.md",
+      "json_key": "bundles/2113101611669307727/v2.json"
      },
      "completeness": "complete",
      "missing": 2
@@ -3617,14 +3601,12 @@
      "model_calls": 0,
      "model_calls_by_model": {},
      "tokens": {},
-     "cache_hits": {
-      "blob": 2
-     },
-     "uploaded_bytes": 0,
-     "uploaded_blobs": 0,
+     "cache_hits": {},
+     "uploaded_bytes": 37931,
+     "uploaded_blobs": 2,
      "large_via_worker": 0
     },
-    "wall_s": 0.09
+    "wall_s": 0.17
    }
   }
  ]
