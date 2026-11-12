@@ -14,6 +14,14 @@ export interface Env {
   // Approval notifications for proposals. Unset means proposals wait
   // unnotified; watcher matches never POST anywhere.
   T3_APPROVALS_WEBHOOK_URL?: string;
+  // Lens labeling (src/lens.ts). LENS_EMBED_URL replaces Workers AI for
+  // embeddings with an OpenAI-compatible /embeddings endpoint; the label
+  // model is an OpenAI-compatible chat endpoint. Unset label settings mean
+  // labels come from the centroid.
+  LENS_EMBED_URL?: string;
+  LENS_LABEL_URL?: string;
+  LENS_LABEL_MODEL?: string;
+  LENS_LABEL_KEY?: string;
 }
 
 export interface WatcherRow {

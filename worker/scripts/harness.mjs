@@ -38,7 +38,8 @@ export function devVars() {
 }
 
 // webhook: false starts the Worker with T3_APPROVALS_WEBHOOK_URL unset.
-export async function startStack({ port, fixturePort, inspectorPort, logFile, persistTo, webhook = true }) {
+// vars: further Worker vars, each passed as --var NAME:value.
+export async function startStack({ port, fixturePort, inspectorPort, logFile, persistTo, webhook = true, vars: extraVars = {} }) {
   const vars = devVars();
   // Without persistTo (the tests), state goes in a throwaway directory under
   // .wrangler/ that stop() removes.
@@ -54,7 +55,8 @@ export async function startStack({ port, fixturePort, inspectorPort, logFile, pe
   const proc = spawn(
     WRANGLER,
     ["dev", "--port", String(port), "--ip", "127.0.0.1", "--inspector-port", String(inspectorPort), "--persist-to", stateDir, "--test-scheduled", "--show-interactive-dev-session=false",
-      ...(webhook === false ? [] : ["--var", `T3_APPROVALS_WEBHOOK_URL:http://127.0.0.1:${fixturePort}/t3-webhook`])],
+      ...(webhook === false ? [] : ["--var", `T3_APPROVALS_WEBHOOK_URL:http://127.0.0.1:${fixturePort}/t3-webhook`]),
+      ...Object.entries(extraVars).flatMap(([k, v]) => ["--var", `${k}:${v}`])],
     { cwd: ROOT, env: ENV, stdio: ["ignore", "pipe", "pipe"] },
   );
   const lines = [];
