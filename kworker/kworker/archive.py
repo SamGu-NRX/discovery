@@ -28,7 +28,7 @@ def _load(path: Path):
 def _iso(created_at: str | None) -> str | None:
     if not created_at:
         return None
-    if "T" in created_at:
+    if re.match(r"^\d{4}-\d{2}-\d{2}T", created_at):
         return created_at
     # Syndication's "Wed Oct 21 01:07:58 +0000 2026".
     return datetime.strptime(created_at, "%a %b %d %H:%M:%S %z %Y").astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")

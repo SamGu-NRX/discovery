@@ -410,7 +410,8 @@ def link_job(ctx: Ctx, payload: dict) -> dict:
         if worst is None or (worst.status != "ok" and f.status == "blocked"):
             worst = f
     if got is None:
-        got = worst if worst and worst.status == "ok" else Fetched(7, _final_failure(attempts), canon, note="every rung failed: " + "; ".join(a.get("note") or a.get("skipped", "") for a in attempts if a.get("note") or a.get("skipped"))[:500])
+        tried = "; ".join(f"rung {a['rung']}: {a.get('note') or a['status']}" for a in attempts if "status" in a)
+        got = worst if worst and worst.status == "ok" else Fetched(7, _final_failure(attempts), canon, note=f"every rung failed ({tried})"[:500])
 
     content_sha = ctx.api.put_bytes(got.content, got.mime or "application/octet-stream") if got.status == "ok" and got.content else None
     row = {

@@ -38,3 +38,11 @@ def test_agreement_ignores_reading_order_but_not_wording():
     chart_b = "Cost per task\n$1.0k\n$10\nFable 5 · 81\nOpus 5.5 · 22"
     assert agreement(chart_a, chart_b) >= AGREE_AT
     assert agreement("run npm install --save-dev vitest", "run pnpm add -D jest") < AGREE_AT
+
+
+def test_syndication_times_become_iso():
+    from kworker.archive import _iso
+
+    # "Tue" contains a T; the first acceptance bundles showed this time raw.
+    assert _iso("Tue Oct 20 20:50:13 +0000 2026") == "2026-10-20T20:50:13Z"
+    assert _iso("2026-10-20T19:48:00Z") == "2026-10-20T19:48:00Z"
