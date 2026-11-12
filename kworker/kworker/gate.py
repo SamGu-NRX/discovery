@@ -29,7 +29,10 @@ from .embed import embed_texts, to_int8
 KEEP_AT = 0.76
 DROP_AT = 0.53
 TOP_K = 5
-GATE_V = f"gate-v1(keep>={KEEP_AT},drop<={DROP_AT},top{TOP_K},brief-v1,gate-band-v1)"
+_WORDS = re.compile(r"[^\W_]+(?:['’][^\W_]+)?")
+_URL_OR_CODE = re.compile(r"https?://|`")
+OP_MIN_WORDS = 6
+GATE_V = f"gate-v2(keep>={KEEP_AT},drop<={DROP_AT},top{TOP_K},op>={OP_MIN_WORDS}w,brief-v1,gate-band-v1)"
 
 _REPO = re.compile(r"(?:github\.com|gitlab\.com|codeberg\.org)/[\w.-]+/[\w.-]+|gist\.github\.com/", re.I)
 _CODE = re.compile(r"```|^\s*(?:\$ |npm |npx |pnpm |pip |uv |brew |git |curl |docker )|[{};]\s*$|=>|def |function |import ", re.I | re.M)
@@ -58,9 +61,15 @@ def bare(text: str) -> str:
 
 def rule(c: dict, save_author: str) -> tuple[str, str] | None:
     """('keep', reason) or ('model', reason) or None (go to embeddings)."""
-    if c["author_handle"].lower() == save_author.lower():
-        return "keep", "reply by the original poster"
     blob = c["text"] + "\n" + "\n".join(c.get("links", []))
+    if c["author_handle"].lower() == save_author.lower():
+        # The first acceptance run kept every OP reply, and 15 of the 45
+        # kept replies were OP thank-yous and emoji ("thanks man! 🙌🏻").
+        # An OP reply with a link, code or six words is kept; a shorter one
+        # goes to the model, which keeps it if it answers something.
+        if len(_WORDS.findall(bare(c["text"]))) >= OP_MIN_WORDS or _URL_OR_CODE.search(blob):
+            return "keep", "reply by the original poster"
+        return "model", "short reply by the original poster"
     if _REPO.search(blob):
         return "model", "carries a repo link"
     if _CODE.search(c["text"]):

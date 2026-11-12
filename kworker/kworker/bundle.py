@@ -253,6 +253,9 @@ def _when(iso: str | None) -> str:
     return iso.replace("T", " ").replace("Z", " UTC") if iso else "time unknown"
 
 
+RUNGS = {0: "site adapter", 1: "plain fetch", 2: "rendered page", 3: "archived copy", 4: "headed browser", 7: "every rung failed"}
+
+
 def render_md(b: dict) -> str:
     a = b["author"]
     out = [
@@ -282,8 +285,10 @@ def render_md(b: dict) -> str:
     if len(b["thread"]) > 1:
         out += [f"## Self-thread ({len(b['thread'])} posts by @{a['handle']}, in order)", ""]
         for i, t in enumerate(b["thread"], 1):
-            mark = " (the saved post)" if t["is_save"] else ""
-            out += [f"{i}. [{t['id']}]({t['url']}) · {_when(t.get('created_at'))}{mark}", ""]
+            if t["is_save"]:
+                out += [f"{i}. [{t['id']}]({t['url']}) · {_when(t.get('created_at'))} (the saved post, quoted at the top)", ""]
+                continue
+            out += [f"{i}. [{t['id']}]({t['url']}) · {_when(t.get('created_at'))}", ""]
             out += ["   " + line for line in _quote(t["text"]).splitlines()]
             if t["media"]:
                 out += ["", "   Media: " + ", ".join(f"[{mid}](#{mid}) {media_by_id[mid]['kind']}" for mid in t["media"])]
@@ -326,9 +331,10 @@ def render_md(b: dict) -> str:
             if v["read"]["scenes"]:
                 out += ["Scenes:", ""]
                 for s in v["read"]["scenes"]:
-                    ost = f" On screen: “{s['on_screen_text']}”" if s.get("on_screen_text") else ""
-                    out += [f"- {float(s['t']):.1f} s: {s['description']}{ost}"]
-                out.append("")
+                    out += [f"- {float(s['t']):.1f} s: {s['description']}"]
+                    if (s.get("on_screen_text") or "").strip():
+                        out += ["", "  On screen, verbatim:", ""] + ["  " + line for line in _fence(s["on_screen_text"].strip()).splitlines()]
+                    out.append("")
             tr = v["transcript"]
             if tr["segments"]:
                 out += [f"Transcript ({_by(tr['by'])}, language {tr.get('language')}), verbatim:", ""]
@@ -344,8 +350,12 @@ def render_md(b: dict) -> str:
         title = l.get("title") or urlsplit(l.get("final_url") or l["url"]).hostname
         out += [f"### {title}", "", f"<{l['url']}>" + (f", resolved to <{l['final_url']}>" if l.get("final_url") and l["final_url"] != l["url"] else ""), ""]
         source = l["from"].replace("reply:", "a kept reply ").replace("thread:", "thread post ")
-        out += [f"From: {source}. Fetch: {l['status']}{'' if l.get('rung') is None else f" at rung {l['rung']}"} ({l.get('note') or 'no note'})." + (f" Repo: <{l['repo']}>." if l.get("repo") else ""), ""]
-        if l.get("text"):
+        rung = "" if l.get("rung") is None else f" at rung {l['rung']}, {RUNGS.get(l['rung'], '?')}"
+        note = f" ({l['note']})" if l.get("note") else ""
+        out += [f"From: {source}. Fetch: {l['status']}{rung}{note}." + (f" Repo: <{l['repo']}>." if l.get("repo") else ""), ""]
+        if l.get("repo") and l["repo"] == (l.get("canonical_url") or "").lower():
+            out += ["The README is under Repos.", ""]
+        elif l.get("text"):
             t = l["text"]
             shown = t[:MD_LINK_TEXT]
             out += [_fence(shown + ("\n…" if len(t) > len(shown) else "")), ""]

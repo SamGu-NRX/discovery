@@ -51,8 +51,7 @@ def save_job(ctx: Ctx, payload: dict) -> dict:
     for t in exp["thread"]:
         if not t["is_save"]:
             wanted += [(u, f"thread:{t['id']}") for u in _URL.findall(t["text"])]
-    if exp.get("quoted") and exp["quoted"].get("url"):
-        wanted.append((exp["quoted"]["url"], "quoted"))
+    # The quoted post's text is already in the expansion, so it is not fetched.
     for k in decided["kept"]:
         wanted += [(u, f"reply:{k['item_id']}") for u in k.get("links", [])]
     seen_links = set()

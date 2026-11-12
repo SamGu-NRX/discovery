@@ -162,6 +162,12 @@ def _norm(t: str | None) -> str:
     return " ".join((t or "").split())
 
 
+def _reply_key(t: str) -> str:
+    from kworker.gate import bare
+
+    return _norm(bare(t))
+
+
 def cmd_check(a) -> None:
     root = a.archive
     gold_posts, gold_threads = {}, {}
@@ -200,8 +206,10 @@ def cmd_check(a) -> None:
         got_repos = sorted(r["url"].lower() for r in (bj.get("repos") or []))
         thread_want = gold_threads.get(pid, [pid])
         thread_got = [t["id"] for t in (bj.get("thread") or [])]
-        kept_truth = {_norm(r["text"]) for r in data["replies"] if r["root_id"] == pid}
-        kept_got = {_norm(r["text"]) for r in (bj.get("replies") or [])}
+        # The archive holds some replies twice, with and without the leading
+        # @mention, so replies compare by their text after the mentions.
+        kept_truth = {_reply_key(r["text"]) for r in data["replies"] if r["root_id"] == pid}
+        kept_got = {_reply_key(r["text"]) for r in (bj.get("replies") or [])}
         rows.append(
             {
                 "post_id": pid,

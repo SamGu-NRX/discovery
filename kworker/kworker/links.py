@@ -119,7 +119,7 @@ def github_repo(ctx: Ctx, repo_url: str) -> Fetched:
         }
     }
     doc = f"# {meta['full_name']}\n\n{meta.get('description') or ''}\n\n{readme_text}"
-    return Fetched(0, "ok", meta["html_url"], doc.encode("utf-8"), "text/markdown; charset=utf-8", 200, note="GitHub API", extra=extra)
+    return _adapter(meta["html_url"], "github_repo", extra, doc, "GitHub API")
 
 
 def github_gist(ctx: Ctx, gist_id: str, url: str) -> Fetched:

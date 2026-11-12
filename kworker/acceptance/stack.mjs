@@ -4,9 +4,12 @@
 // the fixture stand-in, and acceptance must use real models. Usage: node acceptance/stack.mjs <state dir> [port]
 
 import { mkdirSync } from "node:fs";
+import { resolve } from "node:path";
 import { startStack } from "../../worker/scripts/harness.mjs";
 
-const stateDir = process.argv[2];
+// Absolute, because wrangler runs in worker/ and would resolve a relative
+// path from there.
+const stateDir = process.argv[2] && resolve(process.argv[2]);
 if (!stateDir) throw new Error("usage: node acceptance/stack.mjs <state dir> [port]");
 const port = Number(process.argv[3] ?? 8871);
 mkdirSync(stateDir, { recursive: true });

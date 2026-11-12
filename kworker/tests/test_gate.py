@@ -11,7 +11,9 @@ def reply(author, text, links=()):
 @pytest.mark.parametrize(
     ("c", "want"),
     [
-        (reply("Theo", "@someone yes, it's in the repo"), "keep"),  # the OP, any casing
+        (reply("Theo", "@someone yes, it's in the repo for everyone"), "keep"),  # the OP, any casing
+        (reply("theo", "@someone thanks man! 🙌🏻"), "model"),  # a short OP reply is the model's call
+        (reply("theo", "@someone here https://t3.gg"), "keep"),
         (reply("x", "here: https://github.com/o/r"), "model"),
         (reply("x", "check this", ["https://github.com/stevysmith/fx0"]), "model"),  # the link only in expanded links
         (reply("x", "```\nnpm i foo\n```"), "model"),
