@@ -148,7 +148,10 @@ interface Route {
 
 const ok = (p: Promise<unknown>, status = 200) => p.then((data) => json(data, status));
 
-const MAIL_AGENTS: Scope[] = ["agent:dot", "agent:t3", "agent:grok"];
+// Hermes reads hostile text from iMessage. Its token reaches only these
+// mailbox routes and POST /inbox (reply and agent_push); never proposals,
+// approvals, devices, dispatch or the bridge.
+const MAIL_AGENTS: Scope[] = ["agent:dot", "agent:t3", "agent:grok", "agent:hermes"];
 // The low-risk calls an enrolled phone makes with its device token. Deciding
 // an approval takes a signature instead (POST /approvals/:id/decide, below).
 const DEVICE: Scope[] = ["device"];

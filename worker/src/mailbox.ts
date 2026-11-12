@@ -446,7 +446,9 @@ async function deliver(env: Env, w: { id: string; task_id: string; agent: string
   if (!hook) return { ok: false, status: null, error: `wake secrets for ${w.agent} are not set`, final: false };
   const body = wakeBody(w);
   const headers: Record<string, string> = { "content-type": "application/json" };
-  if (hook.hmacSecret) headers["x-mailbox-signature"] = "sha256=" + (await hmacHex(hook.hmacSecret, body));
+  if (hook.hmacSecret) headers[hook.signatureHeader ?? "x-mailbox-signature"] = "sha256=" + (await hmacHex(hook.hmacSecret, body));
+  // Hermes deduplicates deliveries on X-Request-ID for an hour.
+  if (hook.deliveryHeader) headers[hook.deliveryHeader] = w.id;
   if (hook.bearer) headers.authorization = `Bearer ${hook.bearer}`;
   return post(hook.url, headers, body);
 }
@@ -454,9 +456,20 @@ async function deliver(env: Env, w: { id: string; task_id: string; agent: string
 // t3: a T3 scheduled task with a webhook trigger. T3 checks HMAC-SHA256 of
 // the raw body, keyed by the secret's UTF-8 bytes, in a header it is told
 // (pingdotgg/t3code apps/server/src/scheduledTasks/webhookVerification.ts at
-// 633438d). grok: GrokBot's routine webhook takes a bearer key.
-function webhookFor(env: Env, agent: string): { url: string; hmacSecret?: string; bearer?: string } | null {
+// 633438d). grok: GrokBot's routine webhook takes a bearer key. hermes:
+// Hermes Agent's webhook adapter checks the GitHub form, X-Hub-Signature-256
+// with sha256=<hex HMAC-SHA256 of the body> (hermes-agent.nousresearch.com/
+// docs/user-guide/messaging/webhooks, read 2026-11-12; its route should pin
+// signature: github), and deduplicates on X-Request-ID. Not yet run against
+// a real Hermes gateway.
+function webhookFor(
+  env: Env,
+  agent: string,
+): { url: string; hmacSecret?: string; bearer?: string; signatureHeader?: string; deliveryHeader?: string } | null {
   if (agent === "t3" && env.MAIL_T3_WAKE_URL && env.MAIL_T3_WAKE_SECRET) return { url: env.MAIL_T3_WAKE_URL, hmacSecret: env.MAIL_T3_WAKE_SECRET };
+  if (agent === "hermes" && env.MAIL_HERMES_WAKE_URL && env.MAIL_HERMES_WAKE_SECRET) {
+    return { url: env.MAIL_HERMES_WAKE_URL, hmacSecret: env.MAIL_HERMES_WAKE_SECRET, signatureHeader: "x-hub-signature-256", deliveryHeader: "x-request-id" };
+  }
   if (agent === "grok" && env.MAIL_GROK_WAKE_URL && env.MAIL_GROK_WAKE_KEY) return { url: env.MAIL_GROK_WAKE_URL, bearer: env.MAIL_GROK_WAKE_KEY };
   return null;
 }
@@ -764,7 +777,7 @@ const TOOLS = [
     inputSchema: {
       type: "object",
       properties: {
-        to: { type: "string", description: "Receiving agent: dot, t3 or grok." },
+        to: { type: "string", description: "Receiving agent: dot, t3, grok or hermes." },
         body: { type: "string", description: "The task, at most 8 KB." },
         idempotency_key: { type: "string", description: "Unique per task you mean to send; a retry with the same key returns the same task." },
         reply: { type: ["string", "null"], description: "Who gets the result. Omit for yourself." },
@@ -1099,7 +1112,7 @@ const ROOM_TASKS = 100;
 // Text longer than this shows its start, with the rest behind a disclosure,
 // so one 16 KB result doesn't bury the conversations below it.
 const PREVIEW_CHARS = 400;
-const KNOWN_AGENTS = new Set(["sam", "dot", "t3", "grok"]);
+const KNOWN_AGENTS = new Set(["sam", "dot", "t3", "grok", "hermes"]);
 const WAITING = new Set(["queued", "claimed"]);
 const FAILED = new Set(["failed", "declined", "expired"]);
 
@@ -1187,8 +1200,8 @@ function message(t: TaskRow, rootDay: string): string {
 }
 
 const ROOM_CSS = `
-:root{--a-sam:var(--ink);--a-dot:#2a63a6;--a-t3:#276b41;--a-grok:#7a4bb0}
-@media (prefers-color-scheme:dark){:root{--a-dot:#8bb8ea;--a-t3:#7fcf9b;--a-grok:#c3a3ec}}
+:root{--a-sam:var(--ink);--a-dot:#2a63a6;--a-t3:#276b41;--a-grok:#7a4bb0;--a-hermes:#8a5a00}
+@media (prefers-color-scheme:dark){:root{--a-dot:#8bb8ea;--a-t3:#7fcf9b;--a-grok:#c3a3ec;--a-hermes:#e7b45a}}
 .room{max-width:40rem}
 .room h1{margin-bottom:6px}
 .summary{margin:0 0 4px}
@@ -1202,7 +1215,7 @@ const ROOM_CSS = `
 .route .muted{font-size:13px}
 .to{color:var(--muted);font-size:13px}
 .agent{font:600 12px/1 ui-monospace,"SF Mono",Menlo,monospace;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);border:1px solid currentColor;border-radius:4px;padding:3px 5px}
-.a-sam{color:var(--a-sam)}.a-dot{color:var(--a-dot)}.a-t3{color:var(--a-t3)}.a-grok{color:var(--a-grok)}
+.a-sam{color:var(--a-sam)}.a-dot{color:var(--a-dot)}.a-t3{color:var(--a-t3)}.a-grok{color:var(--a-grok)}.a-hermes{color:var(--a-hermes)}
 .text{margin:0;white-space:pre-wrap;overflow-wrap:anywhere}
 .status{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px;margin:10px 0 0;font-size:14px;color:var(--muted)}
 .reply{margin-top:10px;padding:10px 12px;background:var(--paper);border-radius:8px}
