@@ -61,8 +61,9 @@ def test_no_x_refuses_x_pages_and_apis_not_the_media_cdn():
     from kworker.ctx import Ctx, XFetchRefused
 
     ctx = Ctx(SimpleNamespace(no_x=True), None, Stats(), None, None)
-    for url in ("https://cdn.syndication.twimg.com/tweet-result?id=1", "https://x.com/a/status/1", "https://t.co/abc", "https://api.fxtwitter.com/a/status/1"):
+    for url in ("https://cdn.syndication.twimg.com/tweet-result?id=1", "https://x.com/a/status/1", "https://t.co/abc"):
         with pytest.raises(XFetchRefused):
             ctx.fetch("GET", url)
     assert ctx.stats.fetches == {}
     ctx._allowed("https://video.twimg.com/a.mp4")  # the media CDN stays open
+    ctx._allowed("https://api.fxtwitter.com/status/1")  # and fxtwitter, the lead's live source

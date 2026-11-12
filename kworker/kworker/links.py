@@ -153,9 +153,12 @@ def _xml(text: str, tag: str, nth: int) -> str:
 
 
 def x_post(ctx: Ctx, status_id: str, url: str) -> Fetched:
-    cached = _x_from_cache(ctx, status_id, url)
+    cached = None if ctx.live else _x_from_cache(ctx, status_id, url)
     if cached is not None:
         return cached
+    fx = _x_from_fxtwitter(ctx, status_id, url)
+    if fx is not None:
+        return fx
     # The token react-tweet computes for the public syndication endpoint.
     token = _syndication_token(status_id)
     r = ctx.fetch("GET", f"https://cdn.syndication.twimg.com/tweet-result?id={status_id}&token={token}&lang=en")
@@ -187,6 +190,21 @@ def _x_from_cache(ctx: Ctx, status_id: str, url: str) -> Fetched | None:
         meta = {"x_post": {"id": status_id, "author_handle": author.get("screen_name"), "text": text, "created_at": t.get("created_at")}}
         return _adapter(url, "x_fxtwitter_archive", meta, doc, "fxtwitter record from the archive")
     return None
+
+
+def _x_from_fxtwitter(ctx: Ctx, status_id: str, url: str) -> Fetched | None:
+    """fxtwitter's public API, the source the archive itself used."""
+    r = ctx.fetch("GET", f"https://api.fxtwitter.com/status/{status_id}")
+    if r.status_code != 200:
+        return None
+    t = r.json().get("tweet") or {}
+    if not t:
+        return None
+    author = t.get("author") or {}
+    text = t.get("text") or (t.get("raw_text") or {}).get("text", "")
+    doc = f"@{author.get('screen_name')} ({author.get('name')}), {t.get('created_at')}:\n\n{text}"
+    meta = {"x_post": {"id": status_id, "author_handle": author.get("screen_name"), "text": text, "created_at": t.get("created_at")}}
+    return _adapter(url, "x_fxtwitter", meta, doc, "fxtwitter API")
 
 
 def _syndication_token(status_id: str) -> str:
@@ -388,7 +406,9 @@ def link_job(ctx: Ctx, payload: dict) -> dict:
     h = url_hash(canon)
     prior = ctx.api.lookup_fetches([h]).get(h)
     revalidate = payload.get("revalidate", False)
-    if prior and prior["status"] in ("ok", "not_found", "blocked") and (prior["immutable"] or not revalidate):
+    live = payload.get("live", False)
+    ctx.live = live
+    if prior and prior["status"] in ("ok", "not_found", "blocked") and (prior["immutable"] or not revalidate) and not live:
         ctx.stats.cache_hits["fetch"] += 1
         return _result(ctx, payload, canon, prior, cached=True)
 

@@ -87,8 +87,10 @@ def load() -> Config:
         # Outside the repo, so wiping kworker/ does not delete the profile, and
         # separate from every profile another thread drives.
         chrome_profile=Path(_get("KWORKER_CHROME_PROFILE") or local / "kworker" / "chrome-profiles" / "pipeline"),
-        # Model weights only (whisper, embeddings). Pipeline state never lives here.
-        model_cache=Path(_get("KWORKER_MODEL_CACHE") or Path.home() / ".cache" / "kworker"),
+        # Model weights only (whisper, embeddings); pipeline state never lives
+        # here. Not under ~/.cache: the Zephyrus's disk cleanup clears that
+        # folder (2026-11-12), and the weights then download again.
+        model_cache=Path(_get("KWORKER_MODEL_CACHE") or local / "kworker" / "models"),
         media_dirs=_paths("KWORKER_MEDIA_DIRS"),
         x_cache=_paths("KWORKER_X_CACHE"),
         no_x=_get("KWORKER_NO_X") == "1",

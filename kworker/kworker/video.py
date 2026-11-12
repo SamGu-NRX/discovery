@@ -175,7 +175,7 @@ def key_frames(ctx: Ctx, media: dict, duration: float) -> list[dict]:
 
 
 def video_job(ctx: Ctx, payload: dict) -> dict:
-    media = fetch_media(ctx, payload["source_url"], payload.get("sha256"), payload.get("local_file"))
+    media = fetch_media(ctx, payload["source_url"], payload.get("sha256"), payload.get("local_file"), live=payload.get("live", False))
     info = probe(ctx, media)
     if info["has_audio"]:
         transcript = transcribe(ctx, media)
@@ -205,6 +205,7 @@ def video_job(ctx: Ctx, payload: dict) -> dict:
         "transcript_by": transcript.get("by"),
         "transcript_note": transcript.get("note"),
         "key_frames": frames[:MAX_FRAMES],
+        "live_check": {k: media[k] for k in ("previous_sha", "archive_sha") if k in media} or None,
         "read_sha": read.output_sha,
         "read_by": read.by.as_dict(),
     }

@@ -39,7 +39,7 @@ def _archive_copy(ctx: Ctx, local_file: str | None, expect_sha: str | None) -> P
     return None
 
 
-def fetch_media(ctx: Ctx, url: str, expect_sha: str | None = None, local_file: str | None = None) -> dict:
+def fetch_media(ctx: Ctx, url: str, expect_sha: str | None = None, local_file: str | None = None, live: bool = False) -> dict:
     """Downloads a media URL once. {sha256, mime, bytes, cached}; the bytes
     live in R2, not on disk, unless a later step asks for them. A copy the
     archive already downloaded is used instead of the origin when its hash
@@ -47,10 +47,10 @@ def fetch_media(ctx: Ctx, url: str, expect_sha: str | None = None, local_file: s
     canon = canonical_url(url)
     h = url_hash(canon)
     prior = ctx.api.lookup_fetches([h]).get(h)
-    if prior and prior["status"] == "ok" and prior.get("content_sha"):
+    if prior and prior["status"] == "ok" and prior.get("content_sha") and not live:
         ctx.stats.cache_hits["fetch"] += 1
         return {"sha256": prior["content_sha"], "mime": prior.get("mime") or "application/octet-stream", "cached": True, "url": canon}
-    copy = _archive_copy(ctx, local_file, expect_sha)
+    copy = None if live else _archive_copy(ctx, local_file, expect_sha)
     if copy is not None:
         mime = _MIME_BY_EXT.get(copy.suffix.lower(), "application/octet-stream")
         ctx.api.put_file(copy, mime, expect_sha)
@@ -80,7 +80,13 @@ def fetch_media(ctx: Ctx, url: str, expect_sha: str | None = None, local_file: s
         [{"url_hash": h, "canonical_url": canon, "final_url": final, "content_sha": sha, "mime": mime, "http_status": 200,
           "rung": 1, "status": "ok", "immutable": 1 if is_immutable(canon) else 0, "note": "media download"}]
     )
-    return {"sha256": sha, "mime": mime, "cached": False, "url": canon, "path": str(dest)}
+    out = {"sha256": sha, "mime": mime, "cached": False, "url": canon, "path": str(dest)}
+    if live:
+        # What the live download is compared with: the earlier fetch and the
+        # hash the archive recorded.
+        out["previous_sha"] = (prior or {}).get("content_sha")
+        out["archive_sha"] = expect_sha
+    return out
 
 
 class MediaError(RuntimeError):
@@ -113,7 +119,7 @@ def agreement(a: str, b: str) -> float:
 
 
 def image_job(ctx: Ctx, payload: dict) -> dict:
-    m = fetch_media(ctx, payload["source_url"], payload.get("sha256"), payload.get("local_file"))
+    m = fetch_media(ctx, payload["source_url"], payload.get("sha256"), payload.get("local_file"), live=payload.get("live", False))
     sha, mime = m["sha256"], m["mime"]
 
     def build_read(cap: dict):
@@ -129,6 +135,7 @@ def image_job(ctx: Ctx, payload: dict) -> dict:
         "mime": mime,
         "source_url": payload["source_url"],
         "post_id": payload["post_id"],
+        "live_check": {k: m[k] for k in ("previous_sha", "archive_sha") if k in m} or None,
         "read_sha": first.output_sha,
         "read_by": first.by.as_dict(),
         "second_sha": None,

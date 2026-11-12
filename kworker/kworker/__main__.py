@@ -46,7 +46,11 @@ def main(argv: list[str] | None = None) -> int:
         unknown = set(kinds) - set(jobs.KINDS)
         if unknown:
             ap.error(f"--kinds has unknown kinds {sorted(unknown)}; known: {','.join(jobs.KINDS)}")
-        done = jobs.drain(cfg, kinds, forever=a.forever)
+        try:
+            done = jobs.drain(cfg, kinds, forever=a.forever)
+        except jobs.DiskLow as e:
+            print(json.dumps({"stopped": str(e)}))
+            return 3
         print(json.dumps({"jobs": len(done), "failed": sum(1 for d in done if d["state"] == "failed")}))
         return 1 if any(d["state"] == "failed" for d in done) else 0
 
@@ -90,7 +94,7 @@ def main(argv: list[str] | None = None) -> int:
                 sha = ctx.api.put_json(arch.expansion(pid))
                 job = jobs.enqueue(ctx, "save", pid, {"post_id": pid, "expansion_sha": sha})
                 payload = job["payload"] if isinstance(job["payload"], dict) else json.loads(job["payload"])
-                if payload.get("expansion_sha") != sha and job["state"] in ("done", "failed"):
+                if job["state"] == "failed" or (payload.get("expansion_sha") != sha and job["state"] == "done"):
                     # The archive changed what this save expands to (a new
                     # judgment, more candidates): build it again.
                     job = jobs.enqueue(ctx, "save", pid, {"post_id": pid, "expansion_sha": sha}, again=True)

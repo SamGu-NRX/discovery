@@ -25,7 +25,9 @@ BROWSER_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTM
 # X's pages and APIs, which the archive lead's fetch queue uses. The static
 # media CDN (pbs.twimg.com, video.twimg.com) is not in it: serving a file
 # the archive could not copy here does not compete with that queue.
-X_HOSTS = {"x.com", "twitter.com", "mobile.twitter.com", "api.fxtwitter.com", "fxtwitter.com", "api.x.com", "t.co", "cdn.syndication.twimg.com"}
+# fxtwitter is a third party that caches X and is the lead's chosen source
+# for live reads, so it is not in the set.
+X_HOSTS = {"x.com", "twitter.com", "mobile.twitter.com", "api.x.com", "t.co", "cdn.syndication.twimg.com"}
 
 
 class XFetchRefused(RuntimeError):
@@ -39,6 +41,9 @@ class Ctx:
     stats: Stats
     web: httpx.Client
     scratch: Path
+    # A live capture (stage b): caches and archive copies are bypassed, so
+    # every fetch goes to the origin again.
+    live: bool = False
 
     def fetch(self, method: str, url: str, **kw) -> httpx.Response:
         """Every request kworker makes to anything but the Worker and the model
