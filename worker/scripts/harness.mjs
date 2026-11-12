@@ -10,12 +10,16 @@ import { fileURLToPath } from "node:url";
 import { createFixture } from "../fixtures/server.mjs";
 
 export const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const WRANGLER = join(ROOT, "node_modules/.bin/wrangler");
+// Run wrangler's JS entry through this node, so the harness also works where
+// node_modules/.bin/wrangler is a shell script the OS can't execute (Windows).
+const WRANGLER_JS = join(ROOT, "node_modules/wrangler/bin/wrangler.js");
+const wrangler = (args) => [process.execPath, [WRANGLER_JS, ...args]];
 const ENV = { ...process.env, CI: "1", WRANGLER_SEND_METRICS: "false" };
 
 const LOCAL_SECRETS = [
   "ADMIN_TOKEN", "WEBSUB_SECRET", "INGEST_TOKEN", "RUNNER_TOKEN", "INBOX_TOKEN",
   "MAIL_DOT_TOKEN", "MAIL_T3_TOKEN", "MAIL_GROK_TOKEN", "MAIL_ROOM_TOKEN", "MAIL_T3_WAKE_SECRET", "MAIL_GROK_WAKE_KEY",
+  "KNOWLEDGE_TOKEN",
 ];
 
 // Creates .dev.vars, or adds any secret it lacks, with random local values.
@@ -41,7 +45,10 @@ export function devVars() {
 }
 
 // webhook: false starts the Worker with T3_APPROVALS_WEBHOOK_URL unset.
-export async function startStack({ port, fixturePort, inspectorPort, logFile, persistTo, webhook = true }) {
+// gemini: false starts it with an empty GEMINI_API_KEY, so the Gemini
+// adapter is unavailable. GEMINI_BASE_URL always points at the fixture, so
+// no run can reach Google even if .dev.vars holds a real key.
+export async function startStack({ port, fixturePort, inspectorPort, logFile, persistTo, webhook = true, gemini = true }) {
   const vars = devVars();
   // Without persistTo (the tests), state goes in a throwaway directory under
   // .wrangler/ that stop() removes.
@@ -52,18 +59,19 @@ export async function startStack({ port, fixturePort, inspectorPort, logFile, pe
   const { server, state } = createFixture();
   await new Promise((r) => server.listen(fixturePort, "127.0.0.1", r));
 
-  execFileSync(WRANGLER, ["d1", "migrations", "apply", "DB", "--local", "--persist-to", stateDir], { cwd: ROOT, env: ENV, stdio: "pipe" });
+  execFileSync(...wrangler(["d1", "migrations", "apply", "DB", "--local", "--persist-to", stateDir]), { cwd: ROOT, env: ENV, stdio: "pipe" });
 
   const proc = spawn(
-    WRANGLER,
-    ["dev", "--port", String(port), "--ip", "127.0.0.1", "--inspector-port", String(inspectorPort), "--persist-to", stateDir, "--test-scheduled", "--show-interactive-dev-session=false",
+    ...wrangler(["dev", "--port", String(port), "--ip", "127.0.0.1", "--inspector-port", String(inspectorPort), "--persist-to", stateDir, "--test-scheduled", "--show-interactive-dev-session=false",
       ...(webhook === false ? [] : ["--var", `T3_APPROVALS_WEBHOOK_URL:http://127.0.0.1:${fixturePort}/t3-webhook`]),
       // Mailbox wakes for t3 and grok land on the fixture's /hook/<name>.
       "--var", `MAIL_T3_WAKE_URL:http://127.0.0.1:${fixturePort}/hook/t3`,
       "--var", `MAIL_GROK_WAKE_URL:http://127.0.0.1:${fixturePort}/hook/grok`,
       // MCP Events callbacks may go to the fixture (a loopback http origin,
       // which only local dev can reach).
-      "--var", `MAIL_CALLBACK_ORIGINS:http://127.0.0.1:${fixturePort}`],
+      "--var", `MAIL_CALLBACK_ORIGINS:http://127.0.0.1:${fixturePort}`,
+      "--var", `GEMINI_BASE_URL:http://127.0.0.1:${fixturePort}`,
+      "--var", `GEMINI_API_KEY:${gemini === false ? "" : "fixture-gemini-key"}`]),
     { cwd: ROOT, env: ENV, stdio: ["ignore", "pipe", "pipe"] },
   );
   const lines = [];
@@ -80,7 +88,7 @@ export async function startStack({ port, fixturePort, inspectorPort, logFile, pe
   const auth = { authorization: `Bearer ${vars.ADMIN_TOKEN}`, "content-type": "application/json" };
 
   // token: "admin" (default), "ingest", "runner", "inbox", "mail_dot",
-  // "mail_t3", "mail_grok", or "none".
+  // "mail_t3", "mail_grok", "knowledge", or "none".
   async function call(method, path, body, { raw = false, token = "admin" } = {}) {
     const headers = { "content-type": "application/json" };
     if (token !== "none") headers.authorization = `Bearer ${vars[`${token.toUpperCase()}_TOKEN`]}`;
@@ -122,12 +130,41 @@ export async function startStack({ port, fixturePort, inspectorPort, logFile, pe
   // Runs SQL against the same local D1 the Worker uses, for setting up states
   // that would otherwise need waiting (an overdue watcher).
   function d1(sql) {
-    const out = execFileSync(WRANGLER, ["d1", "execute", "DB", "--local", "--persist-to", stateDir, "--json", "--command", sql], { cwd: ROOT, env: ENV, stdio: "pipe" });
+    const out = execFileSync(...wrangler(["d1", "execute", "DB", "--local", "--persist-to", stateDir, "--json", "--command", sql]), { cwd: ROOT, env: ENV, stdio: "pipe" });
     return JSON.parse(out.toString())[0].results;
   }
 
+  // Writes and reads the local R2 bucket behind the Worker's back, for
+  // objects the Worker would never write itself (an S3 upload without a
+  // checksum) and for keys it writes but serves no route for.
+  function r2Put(key, bytes) {
+    const file = join(stateDir, `r2-put-${process.pid}-${Date.now()}`);
+    writeFileSync(file, bytes);
+    try {
+      execFileSync(...wrangler(["r2", "object", "put", `x-knowledge/${key}`, "--file", file, "--local", "--persist-to", stateDir]), { cwd: ROOT, env: ENV, stdio: "pipe" });
+    } finally {
+      rmSync(file, { force: true });
+    }
+  }
+  // Null when there is no object. --pipe would mix wrangler's banner into
+  // the bytes, so this goes through a file.
+  function r2Get(key) {
+    const file = join(stateDir, `r2-get-${process.pid}-${Date.now()}`);
+    try {
+      execFileSync(...wrangler(["r2", "object", "get", `x-knowledge/${key}`, "--file", file, "--local", "--persist-to", stateDir]), { cwd: ROOT, env: ENV, stdio: "pipe" });
+      return existsSync(file) ? readFileSync(file) : null;
+    } catch {
+      return null;
+    } finally {
+      rmSync(file, { force: true });
+    }
+  }
+
   async function stop() {
-    proc.kill("SIGTERM");
+    // On Windows a kill ends only wrangler's own process and leaves workerd
+    // holding the port and the state directory.
+    if (process.platform === "win32" && proc.exitCode === null) execFileSync("taskkill", ["/pid", String(proc.pid), "/T", "/F"], { stdio: "ignore" });
+    else proc.kill("SIGTERM");
     await new Promise((r) => (proc.exitCode !== null ? r() : proc.once("exit", r)));
     // A fixture response that never ends (hook-mode "flood") must not hold this up.
     server.closeAllConnections();
@@ -136,5 +173,5 @@ export async function startStack({ port, fixturePort, inspectorPort, logFile, pe
     if (!persistTo) rmSync(stateDir, { recursive: true, force: true });
   }
 
-  return { base, call, control, waitForFetches, d1, stop, lines, fixtureState: state, fixtureBase: `http://127.0.0.1:${fixturePort}`, vars, stateDir };
+  return { base, call, control, waitForFetches, d1, r2Put, r2Get, stop, lines, fixtureState: state, fixtureBase: `http://127.0.0.1:${fixturePort}`, vars, stateDir };
 }

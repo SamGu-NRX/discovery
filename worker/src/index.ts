@@ -5,6 +5,8 @@ import type { Env, WatcherRow } from "./check";
 import { HttpError, json, randomHex, readJson, timeParam, utcDay } from "./http";
 import { APPROVAL_DAILY_CAP, approvalPage, createProposal, decide, expireProposals, listProposals, presentProposal, rotateToken } from "./proposals";
 import { inbox, inboxExport, sightingsExport } from "./inbox";
+import { knowledgeErrorBody } from "./knowledge/common";
+import { KNOWLEDGE_ROUTES } from "./knowledge/routes";
 import { agentOf, listTasks, mailboxCron, mailboxStatus, mcp, mcpByPath, restAck, restClaim, restComplete, restSend, room, setPaused } from "./mailbox";
 import { handleDelivery, handleVerification, requestSubscription } from "./websub";
 import { addPositives, detailQueue, embed, ingest, ingestStatus, listPositives, listPosts, postContext, saveScores, startSession } from "./x";
@@ -129,7 +131,7 @@ async function watcherDetail(env: Env, id: string) {
 type Handler = (req: Request, env: Env, url: URL, params: string[], ctx: ExecutionContext, scope: Scope) => Promise<Response>;
 
 interface Route {
-  method: "GET" | "POST";
+  method: "GET" | "POST" | "PUT";
   path: RegExp;
   // Tokens that may call this route besides ADMIN_TOKEN, which may call all.
   scopes: Scope[];
@@ -151,9 +153,9 @@ const ROUTES: Route[] = [
   { method: "GET", path: /^\/x\/posts$/, scopes: ["runner"], handler: (_r, env, url) => ok(listPosts(env, url)) },
   { method: "POST", path: /^\/x\/posts\/scores$/, scopes: ["runner"], handler: (req, env) => ok(saveScores(env, req)) },
   { method: "GET", path: /^\/x\/posts\/([^/]+)\/context$/, scopes: ["runner"], handler: (_r, env, _u, [id]) => ok(postContext(env, id)) },
-  { method: "POST", path: /^\/embed$/, scopes: ["runner"], handler: (req, env, _u, _p, ctx) => embed(env, req, ctx) },
+  { method: "POST", path: /^\/embed$/, scopes: ["runner", "kworker"], handler: (req, env, _u, _p, ctx) => embed(env, req, ctx) },
   { method: "POST", path: /^\/positives$/, scopes: ["runner"], handler: (req, env) => ok(addPositives(env, req)) },
-  { method: "GET", path: /^\/positives$/, scopes: ["runner"], handler: (_r, env, url) => ok(listPositives(env, url)) },
+  { method: "GET", path: /^\/positives$/, scopes: ["runner", "kworker"], handler: (_r, env, url) => ok(listPositives(env, url)) },
   {
     method: "POST",
     path: /^\/candidates$/,
@@ -191,6 +193,8 @@ const ROUTES: Route[] = [
   { method: "POST", path: /^\/mail\/tasks\/([^/]+)\/complete$/, scopes: MAIL_AGENTS, handler: (req, env, _u, [id], ctx, scope) => restComplete(env, ctx, scope, id, req) },
   { method: "GET", path: /^\/admin\/mailbox$/, scopes: [], handler: (_r, env) => ok(mailboxStatus(env)) },
   { method: "POST", path: /^\/admin\/mailbox\/pause$/, scopes: [], handler: (req, env) => ok(setPaused(env, req)) },
+  // Knowledge store (src/knowledge/routes.ts).
+  ...KNOWLEDGE_ROUTES,
 ];
 
 function match(req: Request, url: URL): { route: Route; params: string[] } | "wrong_method" | null {
@@ -402,7 +406,8 @@ export default {
     try {
       return await route(req, env, ctx);
     } catch (e) {
-      if (e instanceof HttpError) return json({ error: e.message }, e.status);
+      // /k/ routes answer { error: <code>, message } (docs/KNOWLEDGE.md).
+      if (e instanceof HttpError) return json(new URL(req.url).pathname.startsWith("/k/") ? knowledgeErrorBody(e) : { error: e.message }, e.status);
       // An unexpected error's message can hold a URL or query text, so the
       // caller gets only an id to quote, and the log gets the path with any
       // token segment redacted.

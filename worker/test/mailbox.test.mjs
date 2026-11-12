@@ -426,7 +426,10 @@ test("the MCP endpoint: initialize advertises events, tools say they need no acc
   assert.equal(note.status, 202);
   assert.equal(await note.text(), "");
   const tools = (await rpc(mcpPath(), "tools/list", {})).body.result.tools;
-  assert.deepEqual(tools.map((t) => t.name).sort(), ["mailbox_ack", "mailbox_claim", "mailbox_complete", "mailbox_send"]);
+  // The knowledge tools (src/knowledge/tools.ts) share this endpoint.
+  assert.deepEqual(tools.map((t) => t.name).sort(), [
+    "knowledge_blob", "knowledge_bundle", "knowledge_has", "knowledge_search", "mailbox_ack", "mailbox_claim", "mailbox_complete", "mailbox_send",
+  ]);
   assert.ok(tools.every((t) => t.securitySchemes?.[0]?.type === "noauth" && t._meta?.securitySchemes?.[0]?.type === "noauth"));
   assert.deepEqual((await rpc(mcpPath(), "events/list", {})).body.result.events.map((e) => e.name), ["task_available"]);
   assert.equal((await rpc(mcpPath(), "no/such", {})).body.error.code, -32601);

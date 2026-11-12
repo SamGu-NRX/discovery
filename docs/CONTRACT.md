@@ -29,6 +29,7 @@ Each token is a random 32-byte hex string. It is stored locally in `~/.agent-sec
 | `MAIL_DOT_TOKEN` | the dot (ChatGPT) | `POST /mcp/dot/<token>` (in the URL path, because ChatGPT can't send a header), and as a bearer on the routes below |
 | `MAIL_T3_TOKEN`, `MAIL_GROK_TOKEN` | T3 on the Zephyrus, GrokBot | `POST /mcp`, `POST /mail/tasks`, `POST /mail/claim`, `POST /mail/ack`, `POST /mail/tasks/:id/complete` |
 | `MAIL_ROOM_TOKEN` | Sam | `GET /room/:token` |
+| `KNOWLEDGE_TOKEN` | kworker on the Zephyrus | `/k/*` (docs/KNOWLEDGE.md), `POST /embed`, `GET /positives` |
 
 The mailbox's wake secrets (`MAIL_T3_WAKE_URL`, `MAIL_T3_WAKE_SECRET`, `MAIL_GROK_WAKE_URL`, `MAIL_GROK_WAKE_KEY`) and `MAIL_CALLBACK_ORIGINS` are Worker secrets that authorize nothing on the Worker; `worker/README.md` lists them and how to rotate each.
 
