@@ -13,6 +13,7 @@ import { sha256Hex } from "./adapters";
 import { sameSecret, type Scope } from "./auth";
 import type { Env } from "./check";
 import { canonicalJson, fail, HttpError, intParam, json, oneOf, randomHex, readJson, readText, utcDayStart } from "./http";
+import { isKnowledgeTool, KNOWLEDGE_TOOLS, knowledgeTool } from "./knowledge/tools";
 import { dateLabel, esc, page } from "./proposals";
 import { brief, postInbox } from "./hub";
 
@@ -813,6 +814,7 @@ const TOOLS = [
       additionalProperties: false,
     },
   },
+  ...KNOWLEDGE_TOOLS,
 ];
 
 // The dot is Sam's secretary, so it alone also reads the brief and tells
@@ -870,6 +872,7 @@ async function callTool(env: Env, ctx: ExecutionContext, agent: string, p: Recor
     else if (p.name === "mailbox_ack") structured = await ack(env, agent, args);
     else if (p.name === "get_brief" && agent === "dot") structured = await brief(env);
     else if (p.name === "tell" && agent === "dot") structured = await postInbox(env, "dot", { kind: "agent_push", ...args });
+    else if (isKnowledgeTool(p.name)) structured = await knowledgeTool(env, p.name, args);
     else throw new RpcError(-32602, `unknown tool ${JSON.stringify(p.name)}`);
   } catch (e) {
     // A refusal or a bad argument is a tool result the model can read and

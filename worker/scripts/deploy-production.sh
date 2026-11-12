@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Deploys discovery-watcher to the Cloudflare account wrangler is logged in to.
 #
-# Creates two cloud resources if they are missing (the D1 database
-# "discovery-watcher" and the R2 bucket "discovery-voice"), applies migrations
+# Creates three cloud resources if they are missing (the D1 database
+# "discovery-watcher" and the R2 buckets "discovery-voice" and "x-knowledge"), applies migrations
 # remotely, deploys the Worker with its one cron, the Workers AI binding, the
 # R2 binding and the bridge Durable Object, sets the secrets and registers the
 # production watchers.
@@ -28,7 +28,7 @@ export CI=1 WRANGLER_SEND_METRICS=false
 "$W" whoami | grep -E 'logged in|Account' | head -3
 
 umask 077
-for name in discovery-admin-token discovery-websub-secret discovery-ingest-token discovery-runner-token discovery-inbox-token discovery-bridge-token; do
+for name in discovery-admin-token discovery-websub-secret discovery-ingest-token discovery-runner-token discovery-inbox-token discovery-bridge-token discovery-knowledge; do
   [ -s "$S/$name" ] || openssl rand -hex 32 > "$S/$name"
   chmod 600 "$S/$name"
 done
@@ -44,6 +44,7 @@ fi
 
 # The R2 binding must exist before the deploy.
 "$W" r2 bucket list | grep -q 'discovery-voice' || "$W" r2 bucket create discovery-voice
+"$W" r2 bucket list | grep -q 'x-knowledge' || "$W" r2 bucket create x-knowledge
 
 "$W" d1 migrations apply DB --remote
 # The apply above has exited after printing only its banner, leaving a
@@ -60,6 +61,7 @@ url=$(grep -oE 'https://discovery-watcher\.[a-z0-9-]+\.workers\.dev' .wrangler/d
 "$W" secret put RUNNER_TOKEN < "$S/discovery-runner-token"
 "$W" secret put INBOX_TOKEN < "$S/discovery-inbox-token"
 "$W" secret put BRIDGE_TOKEN < "$S/discovery-bridge-token"
+"$W" secret put KNOWLEDGE_TOKEN < "$S/discovery-knowledge"
 for pair in APNS_KEY_P8:discovery-apns-key-p8 APNS_KEY_ID:discovery-apns-key-id APNS_TEAM_ID:discovery-apns-team-id             APNS_TOPIC:discovery-apns-topic GITHUB_PR_TOKEN:discovery-github-pr-token GEMINI_API_KEY:discovery-gemini-api-key; do
   if [ -s "$S/${pair#*:}" ]; then
     "$W" secret put "${pair%%:*}" < "$S/${pair#*:}"

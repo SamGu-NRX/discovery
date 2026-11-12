@@ -6,7 +6,7 @@ import { sha256Hex } from "./adapters";
 import type { Env } from "./check";
 import { HttpError } from "./http";
 
-export type Scope = "admin" | "ingest" | "runner" | "inbox" | "bridge" | "device" | "agent:dot" | "agent:t3" | "agent:grok";
+export type Scope = "admin" | "ingest" | "runner" | "inbox" | "bridge" | "device" | "agent:dot" | "agent:t3" | "agent:grok" | "kworker";
 
 // A device token names one enrolled device; every other scope is one secret.
 export interface Caller {
@@ -39,6 +39,7 @@ export async function callerScope(req: Request, env: Env): Promise<Caller> {
     ["agent:dot", env.MAIL_DOT_TOKEN],
     ["agent:t3", env.MAIL_T3_TOKEN],
     ["agent:grok", env.MAIL_GROK_TOKEN],
+    ["kworker", env.KNOWLEDGE_TOKEN],
   ];
   for (const [scope, secret] of scopes) {
     if (secret && (await sameSecret(m[1], secret))) return { scope };

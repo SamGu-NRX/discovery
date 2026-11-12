@@ -12,6 +12,8 @@ import type { Env, WatcherRow } from "./check";
 import { HttpError, json, randomHex, readJson, timeParam, utcDay } from "./http";
 import { APPROVAL_DAILY_CAP, approvalPage, createProposal, decide, expireProposals, listProposals, presentProposal, rotateToken } from "./proposals";
 import { inbox, inboxExport, sightingsExport } from "./inbox";
+import { knowledgeErrorBody } from "./knowledge/common";
+import { KNOWLEDGE_ROUTES } from "./knowledge/routes";
 import { agentOf, listTasks, MailRefusal, mailboxCron, mailboxStatus, mcp, mcpByPath, restAck, restClaim, restComplete, restSend, room, setPaused } from "./mailbox";
 import { handleDelivery, handleVerification, requestSubscription } from "./websub";
 import { addPositives, detailQueue, embed, ingest, ingestStatus, listPositives, listPosts, postContext, saveScores, startSession } from "./x";
@@ -137,7 +139,7 @@ async function watcherDetail(env: Env, id: string) {
 type Handler = (req: Request, env: Env, url: URL, params: string[], ctx: ExecutionContext, caller: Caller) => Promise<Response>;
 
 interface Route {
-  method: "GET" | "POST";
+  method: "GET" | "POST" | "PUT";
   path: RegExp;
   // Tokens that may call this route besides ADMIN_TOKEN, which may call all.
   scopes: Scope[];
@@ -162,9 +164,9 @@ const ROUTES: Route[] = [
   { method: "GET", path: /^\/x\/posts$/, scopes: ["runner"], handler: (_r, env, url) => ok(listPosts(env, url)) },
   { method: "POST", path: /^\/x\/posts\/scores$/, scopes: ["runner"], handler: (req, env) => ok(saveScores(env, req)) },
   { method: "GET", path: /^\/x\/posts\/([^/]+)\/context$/, scopes: ["runner"], handler: (_r, env, _u, [id]) => ok(postContext(env, id)) },
-  { method: "POST", path: /^\/embed$/, scopes: ["runner"], handler: (req, env, _u, _p, ctx) => embed(env, req, ctx) },
+  { method: "POST", path: /^\/embed$/, scopes: ["runner", "kworker"], handler: (req, env, _u, _p, ctx) => embed(env, req, ctx) },
   { method: "POST", path: /^\/positives$/, scopes: ["runner"], handler: (req, env) => ok(addPositives(env, req)) },
-  { method: "GET", path: /^\/positives$/, scopes: ["runner"], handler: (_r, env, url) => ok(listPositives(env, url)) },
+  { method: "GET", path: /^\/positives$/, scopes: ["runner", "kworker"], handler: (_r, env, url) => ok(listPositives(env, url)) },
   {
     method: "POST",
     path: /^\/candidates$/,
@@ -224,6 +226,9 @@ const ROUTES: Route[] = [
   // Agents as models (src/bridge.ts), for CLIProxyAPI.
   { method: "GET", path: /^\/v1\/models$/, scopes: ["bridge"], handler: async () => json(listModels()) },
   { method: "POST", path: /^\/v1\/chat\/completions$/, scopes: ["bridge"], handler: (req, env, _u, _p, ctx) => chatCompletions(env, ctx, req) },
+  // Knowledge store (src/knowledge/routes.ts). Its handlers take the bare
+  // scope; none reads it.
+  ...KNOWLEDGE_ROUTES.map((r) => ({ ...r, handler: ((req, env, url, params, ctx, caller) => r.handler(req, env, url, params, ctx, caller.scope)) as Handler })),
 ];
 
 function match(req: Request, url: URL): { route: Route; params: string[] } | "wrong_method" | null {
@@ -461,9 +466,11 @@ export default {
     try {
       return await route(req, env, ctx);
     } catch (e) {
-      const app = APP_PATH.test(new URL(req.url).pathname);
+      const path = new URL(req.url).pathname;
+      const app = APP_PATH.test(path);
       if (e instanceof HttpError && app) return json({ error: e instanceof MailRefusal ? e.rule : (CODES[e.status] ?? "error"), message: e.message }, e.status);
-      if (e instanceof HttpError) return json({ error: e.message }, e.status);
+      // /k/ routes answer { error: <code>, message } (docs/KNOWLEDGE.md).
+      if (e instanceof HttpError) return json(path.startsWith("/k/") ? knowledgeErrorBody(e) : { error: e.message }, e.status);
       // An unexpected error's message can hold a URL or query text, so the
       // caller gets only an id to quote, and the log gets the path with any
       // token segment redacted.

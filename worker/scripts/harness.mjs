@@ -21,7 +21,7 @@ const ENV = { ...process.env, CI: "1", WRANGLER_SEND_METRICS: "false" };
 const LOCAL_SECRETS = [
   "ADMIN_TOKEN", "WEBSUB_SECRET", "INGEST_TOKEN", "RUNNER_TOKEN", "INBOX_TOKEN",
   "MAIL_DOT_TOKEN", "MAIL_T3_TOKEN", "MAIL_GROK_TOKEN", "MAIL_ROOM_TOKEN", "MAIL_T3_WAKE_SECRET", "MAIL_GROK_WAKE_KEY",
-  "BRIDGE_TOKEN", "GITHUB_PR_TOKEN", "GEMINI_API_KEY",
+  "BRIDGE_TOKEN", "GITHUB_PR_TOKEN", "KNOWLEDGE_TOKEN",
 ];
 
 // Runs `wrangler d1 <args>`. When several suites run at once on Windows,
@@ -84,8 +84,15 @@ export function devVars() {
 
 // webhook: false starts the Worker with T3_APPROVALS_WEBHOOK_URL unset.
 // vars: more --var values, such as the APNs key a test generated.
-export async function startStack({ port, fixturePort, inspectorPort, logFile, persistTo, webhook = true, vars: extraVars = {} }) {
+// gemini: false starts it with an empty GEMINI_API_KEY, so the Gemini
+// adapter is unavailable. GEMINI_BASE_URL and GEMINI_API_ORIGIN always point
+// at the fixture, so no run can reach Google even if .dev.vars holds a real key.
+export async function startStack({ port, fixturePort, inspectorPort, logFile, persistTo, webhook = true, gemini = true, vars: extraVars = {} }) {
   const vars = devVars();
+  // Knowledge pins this key (empty with gemini: false); s.vars reports what
+  // the Worker really got, which the voice test compares with.
+  const geminiKey = gemini === false ? "" : "fixture-gemini-key";
+  vars.GEMINI_API_KEY = geminiKey;
   // Without persistTo (the tests), state goes in a throwaway directory under
   // .wrangler/ that stop() removes.
   const scratchRoot = join(ROOT, ".wrangler", "test-state");
@@ -114,6 +121,8 @@ export async function startStack({ port, fixturePort, inspectorPort, logFile, pe
       "--var", `APNS_ORIGIN:http://127.0.0.1:${fixturePort}/apns`,
       "--var", `GITHUB_API_ORIGIN:http://127.0.0.1:${fixturePort}/github`,
       "--var", `GEMINI_API_ORIGIN:http://127.0.0.1:${fixturePort}/gemini`,
+      "--var", `GEMINI_BASE_URL:http://127.0.0.1:${fixturePort}`,
+      "--var", `GEMINI_API_KEY:${geminiKey}`,
       ...Object.entries(extraVars).flatMap(([k, v]) => ["--var", `${k}:${v}`])],
     { cwd: ROOT, env: ENV, stdio: ["ignore", "pipe", "pipe"] },
   );
@@ -131,8 +140,8 @@ export async function startStack({ port, fixturePort, inspectorPort, logFile, pe
   const auth = { authorization: `Bearer ${vars.ADMIN_TOKEN}`, "content-type": "application/json" };
 
   // token: "admin" (default), "ingest", "runner", "inbox", "mail_dot",
-  // "mail_t3", "mail_grok", "bridge", "none", or { bearer } for a token the
-  // test holds (a device token).
+  // "mail_t3", "mail_grok", "bridge", "knowledge", "none", or { bearer } for a
+  // token the test holds (a device token).
   async function call(method, path, body, { raw = false, token = "admin" } = {}) {
     const headers = { "content-type": "application/json" };
     if (typeof token === "object") headers.authorization = `Bearer ${token.bearer}`;
@@ -178,6 +187,32 @@ export async function startStack({ port, fixturePort, inspectorPort, logFile, pe
     return JSON.parse(wranglerD1(["execute", "DB", "--local", "--persist-to", stateDir, "--json", "--command", sql]).toString())[0].results;
   }
 
+  // Writes and reads the local R2 bucket behind the Worker's back, for
+  // objects the Worker would never write itself (an S3 upload without a
+  // checksum) and for keys it writes but serves no route for.
+  function r2Put(key, bytes) {
+    const file = join(stateDir, `r2-put-${process.pid}-${Date.now()}`);
+    writeFileSync(file, bytes);
+    try {
+      execFileSync(...wrangler(["r2", "object", "put", `x-knowledge/${key}`, "--file", file, "--local", "--persist-to", stateDir]), { cwd: ROOT, env: ENV, stdio: "pipe" });
+    } finally {
+      rmSync(file, { force: true });
+    }
+  }
+  // Null when there is no object. --pipe would mix wrangler's banner into
+  // the bytes, so this goes through a file.
+  function r2Get(key) {
+    const file = join(stateDir, `r2-get-${process.pid}-${Date.now()}`);
+    try {
+      execFileSync(...wrangler(["r2", "object", "get", `x-knowledge/${key}`, "--file", file, "--local", "--persist-to", stateDir]), { cwd: ROOT, env: ENV, stdio: "pipe" });
+      return existsSync(file) ? readFileSync(file) : null;
+    } catch {
+      return null;
+    } finally {
+      rmSync(file, { force: true });
+    }
+  }
+
   async function stop() {
     const exited = new Promise((r) => (proc.exitCode !== null ? r() : proc.once("exit", r)));
     // On Windows a signal reaches only node, and the workerd it started would
@@ -192,5 +227,5 @@ export async function startStack({ port, fixturePort, inspectorPort, logFile, pe
     if (!persistTo) rmSync(stateDir, { recursive: true, force: true });
   }
 
-  return { base, call, control, waitForFetches, d1, stop, lines, fixtureState: state, fixtureBase: `http://127.0.0.1:${fixturePort}`, vars, stateDir };
+  return { base, call, control, waitForFetches, d1, r2Put, r2Get, stop, lines, fixtureState: state, fixtureBase: `http://127.0.0.1:${fixturePort}`, vars, stateDir };
 }

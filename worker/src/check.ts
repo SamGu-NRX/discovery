@@ -50,6 +50,12 @@ export interface Env {
   APNS_ORIGIN?: string;
   GITHUB_API_ORIGIN?: string;
   GEMINI_API_ORIGIN?: string;
+  // Knowledge store (src/knowledge/, docs/KNOWLEDGE.md). R2 bucket
+  // x-knowledge; kworker's token; the optional Gemini key, and a base URL
+  // the tests point at the fixture's stand-in.
+  KNOWLEDGE: R2Bucket;
+  KNOWLEDGE_TOKEN?: string;
+  GEMINI_BASE_URL?: string;
 }
 
 export interface WatcherRow {

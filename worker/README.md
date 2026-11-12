@@ -15,12 +15,12 @@ Results and raw logs are in [EVIDENCE.md](EVIDENCE.md).
 
 ```sh
 npm install
-npm test                         # 76 tests against real wrangler dev stacks and the fixture server
+npm test                         # TEST_COUNT tests against real wrangler dev stacks and the fixture server
 python3 scripts/mutation-check.py # breaks the code many ways, one at a time; every break must fail a test
 npm run evidence                 # live sources plus the fixture phases, about 2 min; writes evidence/<timestamp>/
 ```
 
-If `.dev.vars` lacks any token or secret the harness needs (`ADMIN_TOKEN`, `WEBSUB_SECRET`, `INGEST_TOKEN`, `RUNNER_TOKEN`, `INBOX_TOKEN`, `BRIDGE_TOKEN`, `GITHUB_PR_TOKEN`, `GEMINI_API_KEY` and the `MAIL_*` ones below), the harness adds it with a random local value. The harness points `T3_APPROVALS_WEBHOOK_URL`, the mailbox wake URLs, APNs, the GitHub API and the Gemini API at the fixture server, so no test reaches T3, GrokBot, Apple, GitHub or Google. The hub test makes its own APNs key and device keys. No test calls `/embed`, because the `AI` binding always reaches the real Workers AI service, even in `wrangler dev`.
+If `.dev.vars` lacks any token or secret the harness needs (`ADMIN_TOKEN`, `WEBSUB_SECRET`, `INGEST_TOKEN`, `RUNNER_TOKEN`, `INBOX_TOKEN`, `BRIDGE_TOKEN`, `GITHUB_PR_TOKEN`, `KNOWLEDGE_TOKEN` and the `MAIL_*` ones below), the harness adds it with a random local value. The harness points `T3_APPROVALS_WEBHOOK_URL`, the mailbox wake URLs, APNs, the GitHub API, `GEMINI_API_ORIGIN` (voice and routing) and `GEMINI_BASE_URL` (the knowledge store) at the fixture server, so no test reaches T3, GrokBot, Apple, GitHub or Google. It sets `GEMINI_API_KEY` to a fixture value, or to empty with `gemini: false`. The hub test makes its own APNs key and device keys. No test calls `/embed`, because the `AI` binding always reaches the real Workers AI service, even in `wrangler dev`.
 
 The harness runs on macOS and on Windows: it starts wrangler through node, ends the process tree it started, opens a fresh connection per call, and retries a local d1 command whose runtime failed to start (six suites starting at once on Windows sometimes hit that).
 
@@ -64,6 +64,7 @@ No secret is printed. Then `node scripts/verify-production.mjs <base-url> ~/.age
 | none; D1 keeps its SHA-256 | a device token, one per enrolled iPhone | the app | `GET /approvals*`, `POST /inbox`, `GET /brief`, `POST /voice`, `GET /voice/:id`, its own `POST /devices/:id/apns-token` |
 | none; minted per enrollment | a 12-character code, 10 minutes, single use | Sam types it into the app | `POST /devices/enroll` |
 | `discovery-bridge-token` | `BRIDGE_TOKEN` | CLIProxyAPI's `openai-compatibility` entry | `GET /v1/models`, `POST /v1/chat/completions` |
+| `discovery-knowledge` | `KNOWLEDGE_TOKEN` | kworker | `/k/*`, `POST /embed`, `GET /positives` |
 
 **Routes.** All bodies are JSON. Times the Worker sets are epoch milliseconds; `since` parameters take ISO or milliseconds.
 
@@ -159,6 +160,8 @@ No secret is printed. Then `node scripts/verify-production.mjs <base-url> ~/.age
 **Pause approvals.** `POST /admin/notifications/pause` with `{"paused":true}` or `{"paused":false}`. Production is paused. `GET /admin/notifications` shows today's count against the cap, recent approval notifications, and the watcher notifications from before v2.
 
 **Turn on approval notifications.** Write the webhook URL to `~/.agent-secrets/discovery-t3-approvals-webhook-url` (mode 600), run `npx wrangler secret put T3_APPROVALS_WEBHOOK_URL < ~/.agent-secrets/discovery-t3-approvals-webhook-url`, then unpause.
+
+**Knowledge store.** `src/knowledge/` and `migrations/0020_knowledge.sql` implement `docs/KNOWLEDGE.md`, which holds the routes, tables, cache keys and deployment steps (R2 bucket `x-knowledge` bound as `KNOWLEDGE`, secrets `KNOWLEDGE_TOKEN` and optional `GEMINI_API_KEY`). `scripts/deploy-production.sh` does not create the bucket or set those secrets yet. The Gemini adapter has been tested only against the fixture's stand-in, not Google's API.
 
 **Mailbox.** The contract's "Mailbox" section has the rules. Here is how they are built (`src/mailbox.ts`, `migrations/0008_mailbox.sql`).
 

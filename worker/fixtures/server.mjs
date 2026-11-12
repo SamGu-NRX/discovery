@@ -20,6 +20,12 @@
 //               answers state.apns[token] ?? {status: 200}
 //   /gemini/*   the Files API resumable upload and POST /v1beta/interactions,
 //               answering state.gemini.transcript (or state.gemini.status)
+//   /upload/v1beta/files, /upload-session/<id>, /v1beta/files/<id>,
+//   /v1beta/models/<model>:generateContent
+//               stand-in for the Gemini API (generateContent and the Files
+//               API resumable upload), written from Google's docs. Records
+//               every call in state.kgemini.calls with the bytes it received
+//               hashed; /control/gemini reads them
 //
 // Usage: node fixtures/server.mjs [port]   (default 8799)
 
@@ -60,6 +66,8 @@ export function createFixture() {
     // answer: what an interactions call returns as its JSON output text; the
     // transcript is added for a call that carries audio.
     gemini: { transcript: "Remember to ship the hub branch.", answer: null, status: 200, requests: [], uploads: [], seq: 0 },
+    // The knowledge store's Gemini stand-in (generateContent and Files).
+    kgemini: { calls: [], nextFile: 1 },
   };
 
   const atom = () =>
@@ -126,6 +134,8 @@ export function createFixture() {
           case "/control/gemini-set":
             Object.assign(state.gemini, b);
             return send(200, "{}");
+          case "/control/gemini-calls":
+            return send(200, JSON.stringify(state.kgemini.calls));
           case "/control/atom":
             return send(200, atom(), { "content-type": "application/atom+xml" });
           default:
@@ -213,6 +223,7 @@ export function createFixture() {
       });
       return;
     }
+    if (url.pathname.startsWith("/upload/") || url.pathname.startsWith("/upload-session/") || url.pathname.startsWith("/v1beta/")) return gemini(req, res, url, send);
 
     state.hits.push({
       path: url.pathname,
@@ -285,6 +296,71 @@ export function createFixture() {
       }
       if (req.method === "PATCH" && /^\/pulls\/\d+$/.test(path)) return out(200, { state: body.state });
       out(404, { message: "Not Found" });
+    });
+  }
+
+  function gemini(req, res, url, send) {
+    const chunks = [];
+    req.on("data", (c) => chunks.push(c));
+    req.on("end", () => {
+      const raw = Buffer.concat(chunks);
+      const h = req.headers;
+      const call = { method: req.method, path: url.pathname, key: h["x-goog-api-key"] ?? null };
+      state.kgemini.calls.push(call);
+      const origin = `http://${h.host}`;
+      const reply = (status, body, headers = {}) => send(status, JSON.stringify(body), { "content-type": "application/json", ...headers });
+      if (req.method === "POST" && url.pathname === "/upload/v1beta/files") {
+        const id = `fx${state.kgemini.nextFile++}`;
+        Object.assign(call, {
+          op: "start",
+          protocol: h["x-goog-upload-protocol"],
+          command: h["x-goog-upload-command"],
+          declared_length: h["x-goog-upload-header-content-length"],
+          declared_type: h["x-goog-upload-header-content-type"],
+          body: JSON.parse(raw.toString() || "null"),
+        });
+        return reply(200, {}, { "x-goog-upload-url": `${origin}/upload-session/${id}` });
+      }
+      const session = url.pathname.match(/^\/upload-session\/(\w+)$/);
+      if (req.method === "POST" && session) {
+        Object.assign(call, {
+          op: "upload",
+          command: h["x-goog-upload-command"],
+          offset: h["x-goog-upload-offset"],
+          content_length: h["content-length"] ?? null,
+          chunked: h["transfer-encoding"] === "chunked",
+          bytes: raw.length,
+          sha256: createHash("sha256").update(raw).digest("hex"),
+        });
+        return reply(200, { file: { name: `files/${session[1]}`, uri: `${origin}/v1beta/files/${session[1]}`, state: "PROCESSING" } });
+      }
+      const file = url.pathname.match(/^\/v1beta\/files\/(\w+)$/);
+      if (file && req.method === "GET") {
+        call.op = "status";
+        return reply(200, { name: `files/${file[1]}`, uri: `${origin}/v1beta/files/${file[1]}`, state: "ACTIVE" });
+      }
+      if (file && req.method === "DELETE") {
+        call.op = "delete";
+        return reply(200, {});
+      }
+      const gen = url.pathname.match(/^\/v1beta\/models\/([^/:]+):generateContent$/);
+      if (req.method === "POST" && gen) {
+        const body = JSON.parse(raw.toString());
+        const parts = body.contents[0].parts.map((p) =>
+          p.inline_data
+            ? { inline: p.inline_data.mime_type, sha256: createHash("sha256").update(Buffer.from(p.inline_data.data, "base64")).digest("hex") }
+            : p.file_data
+              ? { file: p.file_data.file_uri, mime: p.file_data.mime_type }
+              : { text: p.text },
+        );
+        Object.assign(call, { op: "generate", model: gen[1], parts, generationConfig: body.generationConfig });
+        // Two text parts, so the adapter has to concatenate them.
+        return reply(200, {
+          candidates: [{ content: { role: "model", parts: [{ text: '{"read":' }, { text: `"fixture","parts":${parts.length}}` }] }, finishReason: "STOP" }],
+          usageMetadata: { promptTokenCount: 11, candidatesTokenCount: 7 },
+        });
+      }
+      reply(404, { error: { status: "NOT_FOUND" } });
     });
   }
 
