@@ -18,7 +18,10 @@ export const TEST_ACCOUNT = "test";
 const PAUSE_MS = 24 * 3600 * 1000;
 const DETAIL_QUEUE_SIZE = 5;
 
-const MODES = ["passive", "active"] as const;
+// fetch: batches from the extension's fetch mode, which issues X's own read
+// operations instead of scrolling (extension/README.md, "Fetch mode").
+const MODES = ["passive", "active", "fetch"] as const;
+const RESERVED_MODES = ["active", "fetch"] as const;
 const OPS = ["HomeTimeline", "HomeLatestTimeline", "Bookmarks", "TweetDetail", "SearchTimeline", "UserTweets", "ListLatestTweetsTimeline"] as const;
 const SURFACES = ["home_for_you", "home_following", "bookmarks", "detail", "search", "profile", "list"] as const;
 const STATUSES = ["ok", "login_wall", "rate_limited", "challenge", "error"] as const;
@@ -95,6 +98,7 @@ interface IngestBody {
   mode: unknown;
   captured_at: unknown;
   batches: unknown;
+  lens_id?: unknown;
 }
 
 export async function ingest(env: Env, req: Request) {
@@ -104,6 +108,12 @@ export async function ingest(env: Env, req: Request) {
   const mode = oneOf(b.mode, MODES, "mode");
   isoTime(b.captured_at, "captured_at");
   if (!Array.isArray(b.batches)) fail("batches must be an array");
+  // A lens session's captures name their lens (docs/LENS.md); it must be a
+  // lens of the account that captured them.
+  const lensId = b.lens_id === undefined || b.lens_id === null ? null : str(b.lens_id, "lens_id", 64);
+  if (lensId && !(await env.DB.prepare("SELECT 1 FROM lenses WHERE id = ?1 AND account = ?2").bind(lensId, account).first())) {
+    fail(`lens_id ${JSON.stringify(lensId)} is not a lens of account ${JSON.stringify(account)}`);
+  }
 
   // One version of each post per batch, the last occurrence in that batch.
   // The upsert applies them in request order and skips batches the Worker
@@ -112,7 +122,7 @@ export async function ingest(env: Env, req: Request) {
   // objects: SQLite's json_extract returns them as JSON text.
   const versions: (Post & { batch_id: string; bookmarked: number })[] = [];
   const posts = new Map<string, { id: string; author_handle: string; text: string; batch_ids: string[]; bookmark_batch_ids: string[] }>();
-  const sightings: { batch_id: string; post_id: string; surface: string; position: unknown; metrics: unknown }[] = [];
+  const sightings: { batch_id: string; post_id: string; surface: string; position: unknown; metrics: unknown; author_followed: boolean | null }[] = [];
   const threads: unknown[] = [];
   const batchIds = new Set<string>();
   b.batches.forEach((batch: Record<string, unknown>, bi: number) => {
@@ -137,7 +147,10 @@ export async function ingest(env: Env, req: Request) {
       if (seen) {
         seen.metrics = p.metrics;
       } else {
-        inBatch.set(p.id, { batch_id: batchId, post_id: p.id, surface, position, metrics: p.metrics });
+        // Whether the capturing account follows the author, when X said so.
+        const followed = raw.author_followed;
+        if (followed !== undefined && followed !== null && typeof followed !== "boolean") fail(`${at}.posts[${pi}].author_followed must be true, false or null`);
+        inBatch.set(p.id, { batch_id: batchId, post_id: p.id, surface, position, metrics: p.metrics, author_followed: (followed as boolean | null | undefined) ?? null });
         const prev = posts.get(p.id);
         posts.set(p.id, {
           id: p.id,
@@ -231,13 +244,14 @@ export async function ingest(env: Env, req: Request) {
       .bind(JSON.stringify(versions), now, requestId),
     db
       .prepare(
-        `INSERT INTO x_sightings (post_id, account, surface, position, session_id, mode, seen_at, metrics_json, batch_id)
+        `INSERT INTO x_sightings (post_id, account, surface, position, session_id, mode, seen_at, metrics_json, batch_id, lens_id, author_followed)
          SELECT json_extract(value, '$.post_id'), ?2, json_extract(value, '$.surface'), json_extract(value, '$.position'),
-                ?3, ?4, ?5, json(json_extract(value, '$.metrics')), json_extract(value, '$.batch_id')
+                ?3, ?4, ?5, json(json_extract(value, '$.metrics')), json_extract(value, '$.batch_id'), ?7,
+                CASE json_type(value, '$.author_followed') WHEN 'true' THEN 1 WHEN 'false' THEN 0 END
          FROM json_each(?1)
          WHERE ${fresh("json_extract(value, '$.batch_id')", "?6")}`,
       )
-      .bind(JSON.stringify(sightings), account, sessionId, mode, now, requestId),
+      .bind(JSON.stringify(sightings), account, sessionId, mode, now, requestId, lensId),
     db
       .prepare(
         `INSERT INTO x_threads (root_id, captured_at, account, op_self_thread_ids_json, reply_ids_json, related_ids_json)
@@ -324,6 +338,7 @@ export async function startSession(env: Env, req: Request): Promise<Response> {
   const b = await readJson<Record<string, unknown>>(req);
   const account = str(b.account, "account", 64);
   const sessionId = str(b.session_id, "session_id", 128);
+  const mode = b.mode === undefined ? "active" : oneOf(b.mode, RESERVED_MODES, "mode");
   const now = Date.now();
   const openElsewhere = `SELECT max(reserved_at) FROM x_sessions
     WHERE account = ?2 AND reserved_at IS NOT NULL AND status IS NULL AND session_id != ?1`;
@@ -335,13 +350,13 @@ export async function startSession(env: Env, req: Request): Promise<Response> {
     ).bind(account, now, now - RESERVATION_TIMEOUT_MS),
     env.DB.prepare(
       `INSERT INTO x_sessions (session_id, account, mode, started_at, reserved_at)
-       SELECT ?1, ?2, 'active', ?3, ?3
+       SELECT ?1, ?2, ?5, ?3, ?3
        WHERE NOT EXISTS (SELECT 1 FROM x_sessions WHERE account = ?2 AND status IS NOT NULL AND status != 'ok' AND ended_at > ?4)
          AND (${openElsewhere}) IS NULL
-       ON CONFLICT (session_id) DO UPDATE SET reserved_at = coalesce(x_sessions.reserved_at, excluded.reserved_at), mode = 'active'
+       ON CONFLICT (session_id) DO UPDATE SET reserved_at = coalesce(x_sessions.reserved_at, excluded.reserved_at), mode = excluded.mode
          WHERE x_sessions.status IS NULL AND x_sessions.account = excluded.account
        RETURNING reserved_at`,
-    ).bind(sessionId, account, now, now - PAUSE_MS),
+    ).bind(sessionId, account, now, now - PAUSE_MS, mode),
     env.DB.prepare(PAUSED_SINCE).bind(account, now - PAUSE_MS),
     env.DB.prepare(`SELECT (${openElsewhere}) AS open_at`).bind(sessionId, account),
     env.DB.prepare("SELECT account, status FROM x_sessions WHERE session_id = ?1").bind(sessionId),

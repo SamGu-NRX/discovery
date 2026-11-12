@@ -11,6 +11,9 @@ const BOUNDS = {
   bookmarksMaxScreens: { min: 1, max: 15, fallback: 15 },
   detailMaxPosts: { min: 0, max: 5, fallback: 5 },
   detailMaxScreens: { min: 1, max: 4, fallback: 4 },
+  // A lens session (docs/LENS.md) reads at most this many posts and minutes.
+  lensMaxPosts: { min: 1, max: 150, fallback: 120 },
+  lensMaxMinutes: { min: 1, max: 25, fallback: 20 },
 };
 
 const MODES = ["off", "passive", "active"];
@@ -28,6 +31,12 @@ export async function loadConfig() {
     // When the mode last changed (the popup sets it); captures stored after a
     // switch to Off are dropped against it, at the switch and at startup.
     modeChangedAt: Number.isFinite(config.modeChangedAt) ? config.modeChangedAt : null,
+    // The lens this browser profile reads for, when its account is a lens
+    // account; sessions then read the home feed as that lens instead of
+    // scrolling it. lensBaseline: the next session records the untouched
+    // For You top 100 instead.
+    lensId: typeof config.lensId === "string" && /^[a-z0-9][a-z0-9-]{0,63}$/.test(config.lensId) ? config.lensId : null,
+    lensBaseline: config.lensBaseline === true,
   };
   for (const [key, { min, max, fallback }] of Object.entries(BOUNDS)) {
     const value = Number(config[key]);

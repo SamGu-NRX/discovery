@@ -93,6 +93,8 @@ async function render() {
   const configured = Boolean(config.workerUrl && config.ingestToken);
   if (!configured) $("connection").open = true;
   if (document.activeElement !== $("worker-url")) $("worker-url").value = config.workerUrl;
+  if (document.activeElement !== $("lens")) $("lens").value = config.lensId ?? "";
+  $("lens-baseline").checked = config.lensBaseline;
   $("token").placeholder = config.ingestToken ? `Saved, ends in ${config.ingestToken.slice(-4)}` : "Paste the INGEST token";
 }
 
@@ -146,6 +148,11 @@ $("run").addEventListener("click", async () => {
   $("run-note").textContent = reply?.error ?? reply?.reason ?? (reply?.stopping ? "Stopping…" : "");
 });
 
+$("open-fetch").addEventListener("click", () => {
+  chrome.tabs.create({ url: chrome.runtime.getURL("fetch/fetch.html") });
+  window.close();
+});
+
 $("connection-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const note = $("save-note");
@@ -170,8 +177,13 @@ $("connection-form").addEventListener("submit", async (event) => {
     if (!allowed) warning = " Without access to this host, captures cannot be sent.";
   }
 
+  const lensId = $("lens").value.trim().toLowerCase();
+  if (lensId && !/^[a-z0-9][a-z0-9-]{0,63}$/.test(lensId)) {
+    note.textContent = "A lens id is lowercase letters, digits and dashes.";
+    return;
+  }
   const token = $("token").value.trim();
-  await updateConfig({ workerUrl: origin, ...(token ? { ingestToken: token } : {}) });
+  await updateConfig({ workerUrl: origin, ...(token ? { ingestToken: token } : {}), lensId: lensId || null, lensBaseline: $("lens-baseline").checked });
   $("token").value = "";
   note.textContent = `Saved.${warning}`;
 });

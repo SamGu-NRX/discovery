@@ -96,3 +96,38 @@ test("a scroll is finished when the checked step returns", async () => {
   assert.equal(moved.result.scrolled, true);
   assert.equal(moved.y, moved.expected);
 });
+
+// A lens reader's dwell: the post must be the one in view, found by the time
+// link to its own permalink, never by a quoted post's link inside another.
+test("scrollToPost brings that post into view by its own permalink, and scrolls only on the expected path", async () => {
+  const out = await page.evaluate(() => {
+    const filler = '<div style="height:3000px"></div>';
+    document.body.innerHTML = `${filler}
+      <article id="quoter"><a href="/a/status/111"><time>1h</time></a><div><a href="/b/status/222">quoted</a></div></article>
+      ${filler}
+      <article id="target"><a href="/b/status/222"><time>2h</time></a><button data-name="like">Like</button></article>
+      ${filler}`;
+    window.scrollTo({ top: 0, behavior: "instant" });
+    const events = [];
+    for (const type of ["click", "keydown", "input", "submit"]) document.addEventListener(type, (e) => events.push(e.type), true);
+    const found = globalThis.__dxAgent.run({ name: "scrollToPost", arg: { postId: "222", pathPattern: "^/home$" } });
+    const top = document.getElementById("target").getBoundingClientRect().top;
+    const missing = globalThis.__dxAgent.run({ name: "scrollToPost", arg: { postId: "333", pathPattern: "^/home$" } });
+    history.replaceState(null, "", "/settings");
+    const moved = globalThis.__dxAgent.run({ name: "scrollToPost", arg: { postId: "222", pathPattern: "^/home$" } });
+    history.replaceState(null, "", "/home");
+    let refused = null;
+    try {
+      globalThis.__dxAgent.run({ name: "scrollToPost", arg: { postId: "222 or 1=1", pathPattern: "^/home$" } });
+    } catch (err) {
+      refused = err.message;
+    }
+    return { found, top, viewport: window.innerHeight, missing, moved, refused, events };
+  });
+  assert.deepEqual(out.found, { found: true });
+  assert.ok(out.top >= 0 && out.top < out.viewport / 2, `the post's top is at ${out.top} of ${out.viewport}`);
+  assert.deepEqual(out.missing, { found: false });
+  assert.deepEqual(out.moved, { found: false, wrongPath: true, path: "/settings" });
+  assert.match(out.refused, /refused/);
+  assert.deepEqual(out.events, []);
+});

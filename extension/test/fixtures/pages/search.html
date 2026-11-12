@@ -1,0 +1,12 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Search / X</title><script src="/__fixture/shared.js"></script></head>
+<body style="margin:0">
+  <nav><a data-testid="AppTabBar_Profile_Link" href="/fixtureuser">Profile</a></nav>
+  <main data-testid="primaryColumn"><div style="height:6000px"></div></main>
+  <script>
+    const rawQuery = new URLSearchParams(location.search).get("q");
+    graphql("SearchTimeline", { rawQuery, count: 20, querySource: "typed_query", product: "Latest" }, true);
+  </script>
+</body>
+</html>

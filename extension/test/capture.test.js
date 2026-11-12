@@ -37,6 +37,7 @@ test("a timeline post normalizes to the contract's post shape", () => {
     in_reply_to_id: null,
     quoted_id: null,
     retweet_of_id: null,
+    author_followed: null,
     urls: ["https://expanded.example/link"],
     media: [{ type: "photo", url: "https://pbs.twimg.com/media/F1aT_M9aAAEgJwi.jpg" }],
     metrics: { likes: 12, reposts: 3, replies: 4, quotes: 1, bookmarks: 9, views: 2300 },
@@ -237,4 +238,15 @@ test("an empty Tweet result with no legacy is skipped; the rest of the response 
 test("a response whose every tweet lacks legacy fails loudly", () => {
   const json = { data: { home: { home_timeline_urt: { instructions: [addEntries([itemEntry({ __typename: "Tweet", rest_id: "777" }, "1")])] } } } };
   assert.throws(() => home(json), (err) => err instanceof ParseError && /lack legacy/.test(err.message));
+});
+
+test("whether the account follows the author comes from relationship_perspectives, else legacy, else unknown", () => {
+  const entries = [
+    itemEntry(tweet({ id: "701", handle: "a", userId: "u-a", following: true }), "3"),
+    itemEntry(tweet({ id: "702", handle: "b", userId: "u-b", legacyFollowing: false }), "2"),
+    itemEntry(tweet({ id: "703", handle: "c", userId: "u-c" }), "1"),
+  ];
+  const json = { data: { home: { home_timeline_urt: { instructions: [{ type: "TimelineAddEntries", entries }] } } } };
+  const { batch } = home(json);
+  assert.deepEqual(batch.posts.map((p) => [p.id, p.author_followed]), [["701", true], ["702", false], ["703", null]]);
 });

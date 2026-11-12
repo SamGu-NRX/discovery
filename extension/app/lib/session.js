@@ -5,10 +5,12 @@
 // Everything it learns arrives through the same capture path as passive
 // browsing.
 
+import { fetchRunHeld, fetchRunHeldAnywhere } from "./fetchlock.js";
 import { flush } from "./outbox.js";
 import { scheduleNext } from "./schedule.js";
 import { extendPause, getLocal, getPauseUntil, loadConfig, pausedOrPausing, recordProblem, setLocal } from "./store.js";
-import { getDetailQueue, pauseFrom, postStatus, reserveSession } from "./worker-api.js";
+import { readFeed, recordBaseline } from "./reader.js";
+import { getDetailQueue, labelLensPosts, listLenses, pauseFrom, postStatus, reserveSession, sendLensBaseline, sendLensReads } from "./worker-api.js";
 import { bookmarksUrl, historyBookmarksUrl, homeUrl, isMintedXUrl, permalinkUrl, xPath } from "./xurl.js";
 
 const LOAD_TIMEOUT_MS = 30_000;
@@ -59,7 +61,7 @@ export function sessionTabId() {
 }
 
 export function sessionInfo() {
-  return current ? { id: current.id, account: current.account } : null;
+  return current ? { id: current.id, account: current.account, lensId: current.lens?.verified ? current.lens.id : null } : null;
 }
 
 // The stop is written to session storage at once, so a service worker that
@@ -113,9 +115,17 @@ export function requestStop(reason, detail) {
 
 // Called for every capture from a session tab, with the id of the session
 // that was running when the capture arrived.
-export function noteSessionCapture(sessionId, { operation, postIds }) {
+export function noteSessionCapture(sessionId, { operation, postIds, posts = [] }) {
   const s = current;
   if (!s || s.id !== sessionId) return;
+  // A lens session reads its home feed in the order X sent it.
+  if (s.lens && operation === "HomeTimeline") {
+    for (const p of [...posts].sort((a, b) => a.position - b.position)) {
+      if (s.lens.feedIds.has(p.id)) continue;
+      s.lens.feedIds.add(p.id);
+      s.lens.feed.push({ id: p.id, text: p.text, author_handle: p.author_handle, author_followed: p.author_followed ?? null });
+    }
+  }
   s.posts += postIds.length;
   s.operations.add(operation);
   // A home timeline with posts shows X is serving this account; K stops
@@ -128,6 +138,8 @@ export function noteSessionCapture(sessionId, { operation, postIds }) {
 
 export async function startSession(trigger) {
   if (current) return { started: false, reason: "A session is already running." };
+  // A fetch run and a session never share the account (lib/fetchlock.js).
+  if (fetchRunHeld()) return { started: false, reason: "A fetch run is going." };
   // Reserve before the first await, so a second start (an alarm and the
   // popup at once) sees this one and refuses.
   const s = {
@@ -158,6 +170,8 @@ export async function startSession(trigger) {
     account: null,
     knownBookmarks: new Set(),
     reachedKnownBookmark: false,
+    // Set when this profile reads for a lens (docs/LENS.md).
+    lens: null,
   };
   current = s;
   const refuse = (reason) => {
@@ -172,6 +186,8 @@ export async function startSession(trigger) {
       await recoverInterruptedSession();
       if (await hasRecordOtherThan(s.id)) return refuse("The last session is not reported yet; is the Worker reachable?");
     }
+    // One a previous service worker admitted.
+    if (await fetchRunHeldAnywhere()) return refuse("A fetch run is going.");
     s.config = await loadConfig();
     if (!s.config.workerUrl || !s.config.ingestToken) return refuse("Add the Worker URL and token first.");
     if (s.config.mode === "off") return refuse("Capture is off.");
@@ -179,6 +195,7 @@ export async function startSession(trigger) {
     const pause = await getPauseUntil();
     if (pause) return refuse(`Paused until ${new Date(pause).toLocaleString()}.`);
     s.knownBookmarks = new Set(await getLocal("sentBookmarkIds", []));
+    if (s.config.lensId) s.lens = { id: s.config.lensId, baseline: s.config.lensBaseline, feed: [], feedIds: new Set(), handed: 0, reads: new Map() };
     s.reservedAccount = (await getLocal("lastAccount", null)) ?? s.config.account;
     if (!s.reservedAccount) return refuse("Open x.com once while logged in, so the session knows the account.");
     if (s.stop) return refuse("Stopped before it began.");
@@ -255,9 +272,13 @@ async function run(s) {
   let outcome = { reason: "completed", detail: "finished" };
   try {
     await openWindow(s);
-    await visitHome(s);
-    await visitBookmarks(s);
-    await visitPermalinks(s);
+    if (s.lens) {
+      await visitHomeAsLens(s);
+    } else {
+      await visitHome(s);
+      await visitBookmarks(s);
+      await visitPermalinks(s);
+    }
     s.completed = true;
   } catch (err) {
     outcome = err instanceof StopSession ? { reason: err.reason, detail: err.detail } : { reason: "error", detail: err.message };
@@ -643,6 +664,137 @@ async function visitHome(s) {
   const account = s.reservedAccount;
   if (account) await checkWorkerPause(s, account);
   await scrollScreens(s, { screens: s.config.homeMaxScreens, ms: s.config.homeMaxMinutes * 60_000 });
+}
+
+// A lens session reads the home feed through lib/reader.js instead of
+// scrolling it: each post stays in view for as long as its label says, and
+// about one in ten is opened on its permalink. The lens must belong to the
+// account this session was reserved for, so a profile signed in to Sam's own
+// account is never read as a lens by mistake. The reads go to the Worker even
+// when the session stops partway.
+async function visitHomeAsLens(s) {
+  s.phase = "lens";
+  await publish(s);
+  await inspect(s);
+  const account = s.reservedAccount;
+  if (account) await checkWorkerPause(s, account);
+  let lenses;
+  try {
+    lenses = (await listLenses(s.config, account)).lenses ?? [];
+  } catch (err) {
+    throw new StopSession("lens_unavailable", `the Worker did not list lenses: ${err.message}`);
+  }
+  if (!lenses.some((l) => l.id === s.lens.id && l.account === account)) {
+    throw new StopSession("lens_unavailable", `lens ${s.lens.id} is not a lens of @${account}`);
+  }
+  // From here its captures carry lens_id (sessionInfo).
+  s.lens.verified = true;
+  const lens = s.lens;
+  // Steering and the baseline are about For You. X reopens home on the tab
+  // last used in this browser and selecting one takes a click, so a home
+  // that opened on Following ends the session; choosing For You once by hand
+  // fixes it.
+  for (let waited = 0; waited < 10_000 && !s.operations.has("HomeTimeline") && !s.operations.has("HomeLatestTimeline"); waited += 500) {
+    await sleep(500);
+    checkpoint(s);
+  }
+  if (s.operations.has("HomeLatestTimeline") && !s.operations.has("HomeTimeline")) {
+    throw new StopSession("lens_unavailable", "home opened on Following; choose For You once by hand in this profile");
+  }
+  const io = {
+    now: () => Date.now(),
+    random: Math.random,
+    pause: async (ms) => {
+      await sleep(ms);
+      checkpoint(s);
+    },
+    take: (n) => {
+      const out = lens.feed.slice(lens.handed, lens.handed + n);
+      lens.handed += out.length;
+      return out;
+    },
+    scrollScreen: async () => {
+      const result = await agent(s, "scroll", { fraction: random(0.75, 0.95), pathPattern: s.pathPattern });
+      if (!result.scrolled) throw new StopSession("error", `unexpected page ${result.path} after opening ${s.opened}`);
+      s.screens += 1;
+      await publish(s);
+      await inspect(s);
+    },
+    scrollToPost: async (id) => {
+      const result = await agent(s, "scrollToPost", { postId: id, pathPattern: s.pathPattern });
+      if (result.wrongPath) throw new StopSession("error", `unexpected page ${result.path} after opening ${s.opened}`);
+      return result.found;
+    },
+    label: async (posts) => {
+      let answer;
+      try {
+        answer = await labelLensPosts(s.config, lens.id, posts);
+      } catch (err) {
+        throw new StopSession("lens_unavailable", `the Worker did not label posts: ${err.message}`);
+      }
+      const problem = labelProblem(answer, posts);
+      if (problem) throw new StopSession("lens_unavailable", `the Worker's labels are unusable: ${problem}`);
+      return answer;
+    },
+    openPermalink: async (id) => {
+      await navigate(s, permalinkUrl(id));
+      await inspect(s);
+    },
+    readPermalink: async () => {
+      await agent(s, "scroll", { fraction: random(0.4, 0.6), pathPattern: s.pathPattern });
+      await inspect(s);
+    },
+    leavePermalink: async () => {},
+    onRead: (read) => lens.reads.set(read.post_id, { ...read }),
+  };
+  if (lens.baseline) {
+    const { posts, stop } = await recordBaseline(io, { count: 100 });
+    if (posts.length) {
+      try {
+        await sendLensBaseline(s.config, lens.id, s.id, posts);
+      } catch (err) {
+        throw new StopSession("lens_unavailable", `the Worker did not take the baseline: ${err.message}`);
+      }
+    }
+    // The next session reads; the baseline is recorded once.
+    const { config = {} } = await chrome.storage.local.get("config");
+    await setLocal({ config: { ...config, lensBaseline: false } });
+    s.notes.push(`lens ${lens.id} baseline: ${posts.length} posts (${stop})`);
+    return;
+  }
+  try {
+    const result = await readFeed(io, { maxPosts: s.config.lensMaxPosts, maxMs: s.config.lensMaxMinutes * 60_000 });
+    s.notes.push(`lens ${lens.id}: ${result.reads.length} read, ${result.opened.length} opened (${result.stop})`);
+  } finally {
+    await sendReads(s, lens);
+  }
+}
+
+// Why a label answer cannot drive the reader, or null: it must label every
+// post it was asked about exactly once, with skip, glance or open.
+function labelProblem(answer, posts) {
+  if (!answer || !["model", "centroid"].includes(answer.source) || !Array.isArray(answer.labels)) return "no source or labels";
+  const want = new Set(posts.map((p) => p.id));
+  const seen = new Set();
+  for (const label of answer.labels) {
+    if (!want.has(label?.id)) return `a label for a post not asked about (${label?.id})`;
+    if (seen.has(label.id)) return `two labels for post ${label.id}`;
+    if (!["skip", "glance", "open"].includes(label.action)) return `action ${JSON.stringify(label.action)} for post ${label.id}`;
+    seen.add(label.id);
+  }
+  return seen.size === want.size ? null : "posts left unlabeled";
+}
+
+async function sendReads(s, lens) {
+  const reads = [...lens.reads.values()];
+  for (let i = 0; i < reads.length; i += 200) {
+    try {
+      await sendLensReads(s.config, lens.id, s.id, reads.slice(i, i + 200));
+    } catch (err) {
+      s.notes.push(`lens reads not sent: ${err.message}`);
+      return;
+    }
+  }
 }
 
 async function visitBookmarks(s) {

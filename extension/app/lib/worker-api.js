@@ -54,14 +54,16 @@ export function pauseFrom(answer) {
 // that is still open answers 200 again, so a request whose answer was lost
 // is sent once more under the same session id. 409 means the id is closed or
 // another account's; sessions always use a fresh id, so it is a refusal.
-export async function reserveSession(config, { account, session_id }) {
+// `mode` is "active" for a scheduled or manual session and "fetch" for a
+// fetch-mode run; a Worker from before fetch mode ignores it.
+export async function reserveSession(config, { account, session_id, mode = "active" }) {
   let res;
   for (let attempt = 1; ; attempt += 1) {
     try {
       res = await fetch(new URL("/x/sessions/start", config.workerUrl), {
         method: "POST",
         headers: { authorization: `Bearer ${config.ingestToken}`, "content-type": "application/json" },
-        body: JSON.stringify({ account, session_id }),
+        body: JSON.stringify(mode === "active" ? { account, session_id } : { account, session_id, mode }),
         signal: AbortSignal.timeout(30_000),
       });
       break;
@@ -84,4 +86,29 @@ export async function reserveSession(config, { account, session_id }) {
 
 export function getDetailQueue(config, account) {
   return call(config, "GET", `/x/detail-queue?account=${encodeURIComponent(account)}`);
+}
+
+// Lens routes (docs/LENS.md), all with the INGEST token.
+export function listLenses(config, account) {
+  return call(config, "GET", `/lenses?account=${encodeURIComponent(account)}`);
+}
+
+export function labelLensPosts(config, lensId, posts) {
+  return call(config, "POST", `/lenses/${encodeURIComponent(lensId)}/label`, { posts });
+}
+
+export function sendLensReads(config, lensId, sessionId, reads) {
+  return call(config, "POST", `/lenses/${encodeURIComponent(lensId)}/reads`, { session_id: sessionId, reads });
+}
+
+export function sendLensBaseline(config, lensId, sessionId, posts) {
+  return call(config, "POST", `/lenses/${encodeURIComponent(lensId)}/baseline`, { session_id: sessionId, posts });
+}
+
+export function dueRepolls(config, account) {
+  return call(config, "GET", `/lenses/repolls/due?account=${encodeURIComponent(account)}`);
+}
+
+export function doneRepolls(config, account, postIds) {
+  return call(config, "POST", "/lenses/repolls/done", { account, post_ids: postIds });
 }

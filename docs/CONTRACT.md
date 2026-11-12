@@ -100,7 +100,7 @@ Request body, at most 128 KB. The extension splits larger captures. In productio
 {
   "account": "sdotgu",
   "session_id": "uuid",
-  "mode": "passive | active",
+  "mode": "passive | active | fetch",
   "captured_at": "ISO time",
   "batches": [
     {
@@ -114,7 +114,9 @@ Request body, at most 128 KB. The extension splits larger captures. In productio
 }
 ```
 
-`thread` appears only on TweetDetail batches. `related_ids` lists the posts X recommended under the permalink ("Discover more"), in X's order; none of them is in `op_self_thread_ids` or `reply_ids`, and a post X shows both there and in the conversation is a reply. It is optional, for extensions from before it, and stored as `x_threads.related_ids_json` (NULL when not sent). `batch_id` is the idempotency key. The Worker records it with a uniqueness constraint in the same D1 batch as the writes, and a repeated `batch_id` writes no sightings and leaves counters unchanged, so retries and lost responses are safe. The Worker upserts posts, always overwriting `metrics` with the latest values, and writes one sighting row per post per batch. A post first seen on the `bookmarks` surface sets `bookmarked = 1`.
+A lens session's body also carries `lens_id`, which must name a stored lens; its sightings record it. Each post may carry `author_followed` (true, false or null), whether the capturing account follows the author, from X's user object; sightings record it as 1, 0 or NULL. Both are optional, so an extension from before lenses still ingests ([docs/LENS.md](LENS.md)).
+
+`mode` is `passive` for what Sam scrolled himself, `active` for a scheduled session, and `fetch` for a fetch-mode run, which issues X's read operations itself instead of scrolling. A fetch-mode TweetDetail thread covers both reply orders, Relevance and then Recency. `thread` appears only on TweetDetail batches. `related_ids` lists the posts X recommended under the permalink ("Discover more"), in X's order; none of them is in `op_self_thread_ids` or `reply_ids`, and a post X shows both there and in the conversation is a reply. It is optional, for extensions from before it, and stored as `x_threads.related_ids_json` (NULL when not sent). `batch_id` is the idempotency key. The Worker records it with a uniqueness constraint in the same D1 batch as the writes, and a repeated `batch_id` writes no sightings and leaves counters unchanged, so retries and lost responses are safe. The Worker upserts posts, always overwriting `metrics` with the latest values, and writes one sighting row per post per batch. A post first seen on the `bookmarks` surface sets `bookmarked = 1`.
 
 The response is `{ "posts_upserted", "sightings", "new_posts", "candidates_created", "duplicate_batch_ids" }`.
 
@@ -122,9 +124,26 @@ Account `test` is reserved for synthetic checks. The Worker never lists its post
 
 `POST /ingest/x/status` takes `{ "account", "session_id", "status": "ok | login_wall | rate_limited | challenge | error", "detail" }`. For any status other than `ok`, `GET /x/detail-queue` returns `{ "pause_until": "<ISO time 24 h later>" }` and extension sessions stop until then.
 
-`POST /x/sessions/start { account, session_id }` (INGEST_TOKEN) reserves an active session. The extension must get 200 before it opens any X window; any other answer, including a network failure, means no session. The Worker answers 423 `{ "pause_until" }` in three cases. First, any status other than `ok` was reported for that account in the last 24 hours. Second, an earlier reservation is more than 30 minutes old and never reported a status; the Worker records it as a crash and pauses 24 hours from detection. Third, another reservation for the account is still open (under 30 minutes, no status); `pause_until` is then that reservation's `reserved_at` plus 30 minutes, after which the crash rule applies. A repeated start with the same `session_id` returns 200, so a retry after a lost response is safe, and a refused start reserves nothing. A reservation stays open until `POST /ingest/x/status` closes it, so after a browser restart the extension reports its own open session before starting another. This guard makes the pause hold even if the extension loses its own state.
+`POST /x/sessions/start { account, session_id, mode? }` (INGEST_TOKEN) reserves an active session, or with `mode: "fetch"` a fetch-mode run (extension/README.md, "Fetch mode"); `mode` defaults to `active`, any other value is a 400, and both kinds share the guard below. The extension must get 200 before it opens any X window; any other answer, including a network failure, means no session. The Worker answers 423 `{ "pause_until" }` in three cases. First, any status other than `ok` was reported for that account in the last 24 hours. Second, an earlier reservation is more than 30 minutes old and never reported a status; the Worker records it as a crash and pauses 24 hours from detection. Third, another reservation for the account is still open (under 30 minutes, no status); `pause_until` is then that reservation's `reserved_at` plus 30 minutes, after which the crash rule applies. A repeated start with the same `session_id` returns 200, so a retry after a lost response is safe, and a refused start reserves nothing. A reservation stays open until `POST /ingest/x/status` closes it, so after a browser restart the extension reports its own open session before starting another. This guard makes the pause hold even if the extension loses its own state.
 
 `GET /x/detail-queue?account=` returns `{ "post_ids": [up to 5], "pause_until": null }`. These are candidates whose thread has not been captured yet. The extension opens each one's permalink during its next active session.
+
+## Lenses
+
+Lens routes, described in [docs/LENS.md](LENS.md). The reader in the extension calls them with INGEST_TOKEN.
+
+| Route | Token | Body or query | Answer |
+|---|---|---|---|
+| `POST /lenses` | admin | `{ id, account, charter, exemplar_ids: [≥10 stored post ids], project_terms? }` | `{ id, account, exemplars, missing_exemplars, open_at, glance_at }` |
+| `GET /lenses?account=` | ingest, runner | | `{ lenses: [{ id, account, charter, open_at, glance_at }] }` |
+| `POST /lenses/:id/label` | ingest | `{ posts: [1–40 { id, text, author_handle, author_followed? }] }` | `{ source: "model" | "centroid", note, labels: [{ id, action, taste, novelty, project }] }` |
+| `POST /lenses/:id/reads` | ingest | `{ session_id, reads: [1–500 { post_id, action, dwell_ms, taste?, novelty?, project?, label_source, at }] }` | `{ stored, flagged }`; a repeated (session_id, post_id) is ignored, and each `open` schedules re-polls at 1 h, 6 h, 24 h, 72 h and 7 d |
+| `GET /lenses/repolls/due?account=` | ingest | | `{ post_ids: [up to 50] }` |
+| `POST /lenses/repolls/done` | ingest | `{ account, post_ids }` | `{ done }`, every step due by now |
+| `POST /lenses/:id/baseline` | ingest | `{ session_id, posts: [1–100 { id, text, author_handle }] }` | `{ lens_id, posts, purity }` |
+| `GET /lenses/:id/scorecard?vs=sdotgu` | runner | | purity per session and baseline, lead ratio, lead hours, flag precision |
+
+`action` is always `skip`, `glance` or `open`. The reader never likes, follows or marks anything, so there is no other action.
 
 ## `POST /inbox/x`
 

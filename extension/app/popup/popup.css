@@ -203,6 +203,11 @@ button.primary {
   font-weight: 600;
 }
 
+button.secondary.wide {
+  width: 100%;
+  margin-top: 8px;
+}
+
 button.secondary {
   padding: 5px 12px;
   border: 1px solid var(--line);
@@ -260,6 +265,17 @@ input {
   background: var(--surface);
   color: var(--text);
   font-size: 12px;
+}
+
+label.check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text);
+}
+
+label.check input {
+  width: auto;
 }
 
 .form-row {
