@@ -369,7 +369,22 @@ async function send(r, operation, url) {
   return fetcher(r, "get", { operation, url });
 }
 
-async function fetcher(r, name, arg) {
+// The fetcher's own GET gives up after 20 s (content/fetcher.js). The call
+// into the tab has no limit of its own: on Nov 12, while the disk was full,
+// one call never returned and the run sat on it for 39 minutes until its
+// window was closed. 45 s covers the GET plus a slow tab; past that the call
+// fails, which stops the run like any request that fails outright.
+const FETCHER_CALL_MS = 45_000;
+
+function fetcher(r, name, arg) {
+  let timer;
+  const late = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`fetcher ${name}: the x.com tab did not answer within ${FETCHER_CALL_MS / 1000} s`)), FETCHER_CALL_MS);
+  });
+  return Promise.race([callFetcher(r, name, arg), late]).finally(() => clearTimeout(timer));
+}
+
+async function callFetcher(r, name, arg) {
   const [injection] = await chrome.scripting.executeScript({
     target: { tabId: r.tabId },
     func: async (command) => {
