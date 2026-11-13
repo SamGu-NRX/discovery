@@ -38,6 +38,10 @@ The lead's own run had 4 mailbox and 1 session failure, so the set varies, as a 
 
 One additive sequence: `0001`–`0008` (already in production), `0009_hub`, `0010_routing`, `0020_knowledge`, `0030_lenses`. None drops, renames or rewrites a table. `0030` adds two columns to `x_sightings`; the others add tables, columns, mailbox agents and routes. `0003`–`0008` are unchanged.
 
+`0031_lens_backgrounds` has never shipped. Production is at `0030`, and 0031 changed during review before any database applied it; a database that applied an earlier 0031 has to be recreated. It is additive: two tables (`lens_backgrounds`, `lens_background_attempts`), an index on `x_sightings (account, seen_at)`, two columns on `lenses` and one on `lens_baselines`.
+
+After 0031 is applied, each existing lens answers 409 until its account has a background: run `POST /lenses/backgrounds/refresh {"account": "<lens account>", "source_account": "sdotgu"}` (runner token) once per lens account.
+
 ## Bindings (`worker/wrangler.jsonc`)
 
 | Binding | Kind | Name |
@@ -48,7 +52,10 @@ One additive sequence: `0001`–`0008` (already in production), `0009_hub`, `001
 | `VOICE` | R2 | `discovery-voice` |
 | `WATCHER` | Durable Object, SQLite (migration tag `v1`) | `WatcherDO` |
 | `BRIDGE_WAIT` | Durable Object, SQLite (migration tag `v2`, new) | `BridgeWaitDO` |
-| cron | trigger | `*/15 * * * *` |
+| cron | trigger | `*/15 * * * *` (watchers, approvals, mailbox, voice) |
+| cron | trigger | `37 * * * *` (lens background refresh only) |
+
+The lens refresh runs on its own cron, so it has a scheduled invocation's 50 D1 calls to itself and the mailbox work on `*/15` cannot crowd it out, or the reverse. That is 2 of the 5 cron triggers Workers Free allows per account.
 
 ## Secrets
 
@@ -108,7 +115,7 @@ The script, in order:
 
 1. Creates the D1 database if missing (it exists).
 2. Creates the R2 buckets `discovery-voice` and `x-knowledge` if missing.
-3. Applies `0009`, `0010`, `0020` and `0030` remotely, and stops if any migration is still pending.
+3. Applies `0009`, `0010`, `0020`, `0030` and `0031` remotely, and stops if any migration is still pending.
 4. Deploys the Worker, which also creates the `BridgeWaitDO` class.
 5. Sets every secret it finds a file for (table above).
 6. Waits until the admin token works, then re-registers the production watchers, which is idempotent.

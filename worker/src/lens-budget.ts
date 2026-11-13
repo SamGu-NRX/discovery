@@ -24,8 +24,8 @@ export interface Limits {
 }
 
 export const ROUTE_LIMITS: Limits = { d1: 40, d1Reserve: 0, external: 40, internal: 500, bundleReads: 10 };
-// The whole cron invocation: its watcher lookup, proposal expiry and
-// cron_runs row as well as the lens refresh, 40 of the 50.
+// The lens cron's invocation (LENS_CRON in src/index.ts), which does nothing
+// else: candidate query, refresh, attempt row and cron_runs row, 40 of the 50.
 export const CRON_LIMITS: Limits = { d1: 40, d1Reserve: 2, external: 30, internal: 500, bundleReads: 10 };
 
 export class Budget {

@@ -39,8 +39,10 @@
     { "tag": "v1", "new_sqlite_classes": ["WatcherDO"] },
     { "tag": "v2", "new_sqlite_classes": ["BridgeWaitDO"] }
   ],
-  // The single dispatcher cron (Workers Free allows 5 per account). Each
-  // watcher's Durable Object alarm drives its checks; this sweep catches lost
-  // alarms, expires stale proposals and records itself for /health.
-  "triggers": { "crons": ["*/15 * * * *"] }
+  // Two crons, of the 5 Workers Free allows per account. */15 is the
+  // dispatcher: each watcher's Durable Object alarm drives its checks, and
+  // this sweep catches lost alarms, runs the approval, mailbox and voice work
+  // and records itself for /health. "37 * * * *" retakes lens backgrounds in
+  // an invocation of its own (LENS_CRON in src/index.ts), off the */15 marks.
+  "triggers": { "crons": ["*/15 * * * *", "37 * * * *"] }
 }

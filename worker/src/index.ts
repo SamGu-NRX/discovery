@@ -495,14 +495,14 @@ export default {
     }
   },
 
-  // The one cron (Workers Free allows five per account). Watchers schedule
-  // themselves; this catches lost alarms and records the run for /health.
+  // Two crons (Workers Free allows five per account). LENS_CRON retakes lens
+  // backgrounds and nothing else; the */15 cron catches watchers' lost alarms
+  // and runs the approval, mailbox and voice work. Both record the run for
+  // /health.
   async scheduled(controller: ScheduledController, env: Env): Promise<void> {
     const now = Date.now();
-    // One budget for the whole run (src/lens-budget.ts): the lens refresh is
-    // charged together with the cron's own D1 calls.
-    const lx = lensEnv(env, CRON_LIMITS);
-    const { results } = await lx.db.prepare(
+    if (controller.cron === LENS_CRON) return lensCron(env, controller.cron, now);
+    const { results } = await env.DB.prepare(
       "SELECT id, next_check_at FROM watchers WHERE enabled = 1 AND next_check_at < ? ORDER BY id",
     )
       .bind(now - BACKSTOP_GRACE_MS)
@@ -513,27 +513,39 @@ export default {
       const r = await stub(env, w.id).checkNow("backstop");
       console.log(`[backstop] ${w.id} re-armed, next check in ${r.next_interval_s}s`);
     }
-    // expireProposals (src/proposals.ts) is one UPDATE on the raw binding.
-    lx.budget.d1("expire proposals");
     const expired = await expireProposals(env, now);
     const requestsExpired = await expireApprovalRequests(env, now);
     const backfilled = await backfillApprovalRequests(env, now);
     const mail = await mailboxCron(env, now);
     const voice = await voiceCron(env, now);
-    // Lens backgrounds (src/lens.ts): one due account per run. A failure is
-    // the account's own, recorded in lens_background_attempts; this catch is
-    // for the lookup around it, so the run is still recorded below.
-    try {
-      // The cron_runs row below is the one D1 call after it.
-      const bg = await refreshDueBackgrounds(lx, now, 1);
-      if (bg?.done) console.log(`[cron] lens background retaken: ${bg.account} v${bg.done.version}`);
-      if (bg?.error) console.log(`[cron] lens background of ${bg.account} failed: ${bg.error}`);
-    } catch (err) {
-      console.log(`[cron] lens backgrounds: ${(err as Error).message}`);
-    }
-    await lx.db.prepareReserved("INSERT INTO cron_runs (ts, cron, overdue_checked, notifications_retried) VALUES (?1, ?2, ?3, 0)")
+    await env.DB.prepare("INSERT INTO cron_runs (ts, cron, overdue_checked, notifications_retried) VALUES (?1, ?2, ?3, 0)")
       .bind(now, controller.cron, results.length)
       .run();
     console.log(`[cron] done overdue_checked=${results.length} proposals_expired=${expired} mail_tasks_expired=${mail.expired} mail_tasks_requeued=${mail.requeued} wakes_retried=${mail.retried} requests_expired=${requestsExpired} requests_backfilled=${backfilled} voice_retried=${voice}`);
   },
 } satisfies ExportedHandler<Env>;
+
+// The lens background refresh (src/lens.ts) runs in its own scheduled
+// invocation, so it has the invocation's 50 D1 calls to itself: on the */15
+// cron the hub's mailbox work issues an unbounded number of raw D1 calls
+// before it, and the two together could go past 50. Hourly at :37, off the
+// */15 marks; one due account per run. Not exported: workerd takes every
+// named export of the entry module as a handler or class, and refuses to
+// start on a string.
+const LENS_CRON = "37 * * * *";
+
+async function lensCron(env: Env, cron: string, now: number): Promise<void> {
+  const lx = lensEnv(env, CRON_LIMITS);
+  // A failure is the account's own, recorded in lens_background_attempts;
+  // this catch is for the lookup around it, so the run is still recorded.
+  try {
+    // The cron_runs row below is the one D1 call after it.
+    const bg = await refreshDueBackgrounds(lx, now, 1);
+    if (bg?.done) console.log(`[lens cron] background retaken: ${bg.account} v${bg.done.version}`);
+    if (bg?.error) console.log(`[lens cron] background of ${bg.account} failed: ${bg.error}`);
+    if (!bg) console.log("[lens cron] no lens account due");
+  } catch (err) {
+    console.log(`[lens cron] ${(err as Error).message}`);
+  }
+  await lx.db.prepareReserved("INSERT INTO cron_runs (ts, cron, overdue_checked, notifications_retried) VALUES (?1, ?2, 0, 0)").bind(now, cron).run();
+}

@@ -463,15 +463,16 @@ export async function refreshBackground(env: LensEnv, req: Request) {
   return takeBackground(env, account, source, hours as number, max as number);
 }
 
-// From the cron: retakes one lens account's background per run. One query
+// From the lens cron (LENS_CRON in src/index.ts, hourly in an invocation of
+// its own): retakes one lens account's background per run. One query
 // picks it: among accounts whose background is over a day old and that saw
 // at least 50 posts with text in the last day, the one tried longest ago, so
 // an account that keeps failing goes to the back and ineligible accounts
 // cost nothing. Each attempt, its error and its D1 calls are recorded in
 // lens_background_attempts. One account per run keeps the cron inside its
-// budget; it runs every 15 minutes. `env` is the cron's: its D1 calls before
-// this one are already on the budget, and `laterD1Calls` are those it makes
-// after, so the recorded count is the whole invocation's.
+// budget. `env` is the cron's: any D1 calls it made before this one are
+// already on the budget, and `laterD1Calls` are those it makes after, so the
+// recorded count is the whole invocation's.
 export async function refreshDueBackgrounds(env: LensEnv, now: number, laterD1Calls: number) {
   const due = await env.db.prepare(
     `SELECT l.account FROM (SELECT DISTINCT account FROM lenses) l
