@@ -5,7 +5,7 @@
 
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
-import { startStack } from "../scripts/harness.mjs";
+import { freshFetch, startStack } from "../scripts/harness.mjs";
 
 const FIXTURE_PORT = 8852;
 let s;
@@ -58,18 +58,37 @@ const ingest = (account, posts, { lens_id, session = `s-${account}`, surface = "
     { token: "ingest" },
   );
 
+// Every lens scores against its account's background (src/lens.ts). The
+// tests take one from a mixed set of posts another account saw.
+const BG_TEXTS = ["a recipe for soup", "football tonight", "agent notes", "claude says hi", "weather and coffee"];
+let bgSeq = 0;
+async function background(account, texts = BG_TEXTS) {
+  bgSeq += 1;
+  // A refresh within an hour of the last one is refused; tests that refit an
+  // account age its earlier backgrounds first.
+  await s.d1(`UPDATE lens_backgrounds SET created_at = created_at - 2 * 3600000 WHERE account = '${account}'`);
+  const src = `bgsrc-${account}-${bgSeq}`;
+  await ingest(src, Array.from({ length: 60 }, (_, i) => post(String(9_950_000 + bgSeq * 100 + i), texts[i % texts.length])));
+  return s.call("POST", "/lenses/backgrounds/refresh", { account, source_account: src }, { token: "runner" });
+}
+
 const ON_TOPIC = ["MCP servers for agent harnesses", "Claude Code harness with MCP and memory", "Codex agent harness notes", "agent memory in the harness, MCP tools"];
 const exemplarIds = Array.from({ length: 12 }, (_, i) => String(9_100_000 + i));
 
 async function makeLens(id = "harness", account = "lensacct") {
   await ingest("seed", exemplarIds.map((x, i) => post(x, ON_TOPIC[i % ON_TOPIC.length])));
+  await background(account);
   return s.call("POST", "/lenses", { id, account, charter: "Agent harnesses: Claude Code, Codex, T3 Code, MCP, agent memory.", exemplar_ids: exemplarIds, project_terms: ["T3 Code", "MCP"] });
 }
 
 test("a lens's thresholds come from its exemplars, and a lens needs at least 10 stored exemplars", async () => {
   const lens = await makeLens();
   assert.equal(lens.exemplars, 12);
-  assert.ok(lens.open_at > lens.glance_at && lens.glance_at > 0.5, JSON.stringify(lens));
+  assert.ok(lens.open_at > lens.glance_at, JSON.stringify(lens));
+  assert.equal(lens.thresholds_source, "exemplars", "no baseline yet");
+  const bare = await s.call("POST", "/lenses", { id: "nobg", account: "never-seen", charter: "c", exemplar_ids: exemplarIds }, { raw: true });
+  assert.equal(bare.status, 400);
+  assert.match((await bare.json()).error, /has no background yet/);
   const few = await s.call("POST", "/lenses", { id: "tiny", account: "x", charter: "c", exemplar_ids: exemplarIds.slice(0, 3).concat(["9999999"]) }, { raw: true });
   assert.equal(few.status, 400);
   assert.match((await few.json()).error, /needs at least 10/);
@@ -175,8 +194,8 @@ test("ingest records the lens and whether the account follows the author, and re
 });
 
 test("the scorecard reports purity per session beside the baseline, lead ratio, lead hours and flag precision", async () => {
+  await background("scoreacct");
   await s.call("POST", "/lenses", { id: "score", account: "scoreacct", charter: "c", exemplar_ids: exemplarIds });
-  const lensRow = (await s.d1("SELECT glance_at FROM lenses WHERE id = 'score'"))[0];
 
   // Baseline: two of four posts are on topic.
   const base = await s.call(
@@ -186,6 +205,7 @@ test("the scorecard reports purity per session beside the baseline, lead ratio, 
     { token: "ingest" },
   );
   assert.equal(base.purity, 0.5);
+  const lensRow = (await s.d1("SELECT glance_at FROM lenses WHERE id = 'score'"))[0];
 
   // A session: three of four skimmed posts near the centroid.
   const at = new Date().toISOString();
@@ -215,4 +235,258 @@ test("the scorecard reports purity per session beside the baseline, lead ratio, 
   assert.equal(card.lead_hours.n, 1);
   assert.ok(Math.abs(card.lead_hours.median - 3) < 0.01, `lead ${card.lead_hours.median} h`);
   assert.equal(card.lead_hours.earlier_share, 1);
+});
+
+test("the signal table scores each post against every lens, with who opened it, lead hours and view growth", async () => {
+  // Two lenses on one account: harness (agent words) and kitchen (recipes).
+  await makeLens("harness", "sigacct");
+  const kitchenIds = Array.from({ length: 10 }, (_, i) => String(9_700_000 + i));
+  await ingest("seed", kitchenIds.map((x, i) => post(x, i % 2 ? "a recipe for football night" : "a recipe")));
+  await s.call("POST", "/lenses", { id: "kitchen", account: "sigacct", charter: "Cooking.", exemplar_ids: kitchenIds });
+
+  const at = new Date().toISOString();
+  const read = (post_id, taste) => ({ post_id, action: "open", dwell_ms: 20000, taste, label_source: "centroid", at });
+  await s.call("POST", "/lenses/harness/reads", { session_id: "sig-h", reads: [read("9800001", 0.9)] }, { token: "ingest" });
+  await s.call("POST", "/lenses/kitchen/reads", { session_id: "sig-k", reads: [read("9800002", 0.9)] }, { token: "ingest" });
+
+  // The lens account saw the harness post first, at 100 views; sdotgu-sig
+  // saw it 3 hours later, and a re-poll found 450 views.
+  await ingest("sigacct", [post("9800001", "MCP agent harness with memory", { metrics: { views: 100 } }), post("9800002", "soup recipe, a second recipe, and football", { metrics: { views: 50 } })], { session: "sig-first" });
+  await ingest("seed", [post("9800003", "New MCP server for the agent harness")]);
+  await s.d1("UPDATE x_sightings SET seen_at = seen_at - 5 * 3600000 WHERE session_id = 'sig-first'");
+  await ingest("sdotgu-sig", [post("9800001", "MCP agent harness with memory", { metrics: { views: 300 } })], { session: "sig-theirs" });
+  await s.d1("UPDATE x_sightings SET seen_at = (SELECT seen_at FROM x_sightings WHERE session_id = 'sig-first' AND post_id = '9800001') + 3 * 3600000 WHERE session_id = 'sig-theirs'");
+  await ingest("sigacct", [post("9800001", "MCP agent harness with memory", { metrics: { views: 450 } })], { session: "sig-repoll" });
+
+  const table = await s.call("GET", "/lenses/signals?account=sigacct&vs=sdotgu-sig", undefined, { token: "runner" });
+  assert.deepEqual(table.lenses.map((l) => l.id), ["harness", "kitchen"]);
+  const row = Object.fromEntries(table.posts.map((r) => [r.id, r]));
+  assert.deepEqual(Object.keys(row).sort(), ["9800001", "9800002"], "only opened posts, by default");
+  assert.deepEqual(row["9800001"].opened_by, ["harness"]);
+  assert.deepEqual(row["9800001"].near_lenses, ["harness"], "near the harness centroid, not the kitchen one");
+  assert.deepEqual(row["9800002"].near_lenses, ["kitchen"]);
+  assert.ok(row["9800001"].lenses.harness.taste > row["9800001"].lenses.kitchen.taste);
+  assert.ok(Math.abs(row["9800001"].lead_hours - 3) < 0.01, `lead ${row["9800001"].lead_hours} h`);
+  assert.equal(row["9800001"].views.first.views, 100);
+  assert.equal(row["9800001"].views.latest.views, 450);
+  assert.equal(row["9800001"].views.growth, 4.5);
+  assert.equal(row["9800002"].lead_hours, null, "sdotgu-sig never saw the recipe");
+
+  // Named posts are scored whether or not a lens read them; unknown ids are listed.
+  const named = await s.call("GET", "/lenses/signals?account=sigacct&ids=9800003,9800002,1234", undefined, { token: "runner" });
+  assert.deepEqual(named.posts.map((r) => [r.id, r.near_lenses, r.opened_by]), [["9800003", ["harness"], []], ["9800002", ["kitchen"], ["kitchen"]]]);
+  assert.deepEqual(named.missing, ["1234"]);
+
+  assert.equal((await s.call("GET", "/lenses/signals?account=nobody", undefined, { raw: true, token: "runner" })).status, 404);
+  assert.equal((await s.call("GET", "/lenses/signals?account=sigacct", undefined, { raw: true, token: "ingest" })).status, 403, "runner token only");
+  assert.equal((await s.call("GET", "/lenses/signals?limit=0", undefined, { raw: true, token: "runner" })).status, 400);
+});
+
+test("tastes subtract the account's background: a post raw cosine counts as near is skipped, and an on-topic one is opened", async () => {
+  // Every post here leans on one shared word, as real posts share most of
+  // their embedding (raw bge cosines sat between 0.67 and 0.84 on Nov 12).
+  // With the fixture embedding, raw cosine puts the recipe post at 0.954,
+  // above these exemplars' glance_at of 0.941; subtracting the background
+  // puts it at -0.73. The on-topic post is 0.968 raw (below open_at, 0.977)
+  // and 0.815 centered (above open_at, 0.671).
+  const F = "football football football football ";
+  const ex = ["agent", "mcp", "harness", "agent mcp harness memory codex", "claude"].map((t) => F + t);
+  const ids = Array.from({ length: 10 }, (_, i) => String(9_900_000 + i));
+  await ingest("seed", ids.map((x, i) => post(x, ex[i % ex.length])));
+  await background("centeracct", ["recipe", "agent", "recipe recipe", "football", "claude"].map((t) => F + t));
+  const lens = await s.call("POST", "/lenses", { id: "centered", account: "centeracct", charter: "Agent harnesses.", exemplar_ids: ids });
+
+  await s.control("label-reply", { mode: "garbage" }); // centroid labels
+  const { labels } = await s.call(
+    "POST",
+    "/lenses/centered/label",
+    { posts: [{ id: "9910001", text: F + "agent mcp harness", author_handle: "a" }, { id: "9910002", text: F + "recipe", author_handle: "b" }] },
+    { token: "ingest" },
+  );
+  await s.control("label-reply", { mode: "echo" });
+  assert.equal(labels[0].action, "open", JSON.stringify({ lens, labels }));
+  assert.equal(labels[1].action, "skip", JSON.stringify({ lens, labels }));
+  assert.ok(labels[1].taste < 0, `recipe taste ${labels[1].taste}`);
+});
+
+test("the first baseline sets open_at and glance_at at its 90th and 70th percentiles; later baselines leave them", async () => {
+  await makeLens("based", "baseacct");
+  const texts = ["MCP agent harness", "Codex agent harness notes", "Claude Code harness with MCP and memory", "agent memory", "agent tips", "claude", "recipe", "football", "a recipe for soup", "weather"];
+  const posts = texts.map((text, i) => ({ id: String(9_920_000 + i), text, author_handle: "a" }));
+  const first = await s.call("POST", "/lenses/based/baseline", { session_id: "b1", posts }, { token: "ingest" });
+  assert.equal(first.thresholds_set, true);
+  const tastes = JSON.parse((await s.d1("SELECT tastes_json FROM lens_baselines WHERE session_id = 'b1'"))[0].tastes_json).sort((a, b) => a - b);
+  const row = (await s.d1("SELECT open_at, glance_at, thresholds_source FROM lenses WHERE id = 'based'"))[0];
+  assert.equal(row.thresholds_source, "baseline");
+  assert.equal(row.open_at, tastes[8], "the 90th percentile of ten (lower nearest rank)");
+  assert.equal(row.glance_at, tastes[6], "the 70th percentile");
+  assert.equal(first.purity, 0.4, "tastes at or above the 70th percentile: 4 of 10");
+
+  const second = await s.call("POST", "/lenses/based/baseline", { session_id: "b2", posts: posts.slice(5) }, { token: "ingest" });
+  assert.equal(second.thresholds_set, false);
+  assert.deepEqual((await s.d1("SELECT open_at, glance_at FROM lenses WHERE id = 'based'"))[0], { open_at: row.open_at, glance_at: row.glance_at });
+});
+
+test("the cron retakes a lens account's background from its own posts once a day and refits its lenses", async () => {
+  await makeLens("daily", "cronacct");
+  const before = (await s.d1("SELECT background_version FROM lenses WHERE id = 'daily'"))[0].background_version;
+  await s.d1("UPDATE lens_backgrounds SET created_at = created_at - 2 * 3600000 WHERE account = 'cronacct'");
+  const tooFew = await s.call("POST", "/lenses/backgrounds/refresh", { account: "cronacct" }, { raw: true, token: "runner" });
+  assert.equal(tooFew.status, 400, "cronacct has seen nothing itself yet");
+  assert.match((await tooFew.json()).error, /needs at least 50/);
+
+  // A day of the account's own feed, and a background more than a day old.
+  await ingest("cronacct", Array.from({ length: 60 }, (_, i) => post(String(9_930_000 + i), BG_TEXTS[i % BG_TEXTS.length])));
+  await s.d1("UPDATE lens_backgrounds SET created_at = created_at - 25 * 3600000 WHERE account = 'cronacct'");
+  const res = await freshFetch(`${s.base}/__scheduled?cron=*/15+*+*+*+*`);
+  assert.equal(res.status, 200);
+  const latest = (await s.d1("SELECT version, source_account, posts FROM lens_backgrounds WHERE account = 'cronacct' ORDER BY version DESC LIMIT 1"))[0];
+  assert.equal(latest.version, before + 1);
+  assert.equal(latest.source_account, "cronacct");
+  assert.equal(latest.posts, 60);
+  assert.equal((await s.d1("SELECT background_version FROM lenses WHERE id = 'daily'"))[0].background_version, before + 1);
+
+  // A background taken under a day ago is not retaken.
+  await freshFetch(`${s.base}/__scheduled?cron=*/15+*+*+*+*`);
+  assert.equal((await s.d1("SELECT max(version) AS v FROM lens_backgrounds WHERE account = 'cronacct'"))[0].v, before + 1);
+});
+
+// Review round 1 (lens-v1 ec85b64..fa3dd76). Each test below fails on fa3dd76.
+
+test("a refresh takes at most 500 posts, and an account's background is retaken at most once an hour", async () => {
+  await makeLens("capped", "capacct");
+  const big = await s.call("POST", "/lenses/backgrounds/refresh", { account: "capacct", source_account: "seed", max: 501 }, { raw: true, token: "runner" });
+  assert.equal(big.status, 400);
+  assert.match((await big.json()).error, /max must be 50 to 500/);
+  const again = await s.call("POST", "/lenses/backgrounds/refresh", { account: "capacct", source_account: "seed" }, { raw: true, token: "runner" });
+  assert.equal(again.status, 429, "makeLens took one moments ago");
+  assert.match((await again.json()).error, /one per hour/);
+});
+
+// A lens account whose background is over a day old, with `texts` as the
+// posts it saw in the last day.
+async function dueAccount(account, texts, idBase) {
+  await makeLens(`lens-${account}`, account);
+  await ingest(account, texts.map((t, i) => post(String(idBase + i), t)));
+  await s.d1(`UPDATE lens_backgrounds SET created_at = created_at - 25 * 3600000 WHERE account = '${account}'`);
+}
+const latestVersion = async (account) => (await s.d1(`SELECT max(version) AS v FROM lens_backgrounds WHERE account = '${account}'`))[0].v;
+const cron = () => freshFetch(`${s.base}/__scheduled?cron=*/15+*+*+*+*`);
+const feed = (n) => Array.from({ length: n }, (_, i) => BG_TEXTS[i % BG_TEXTS.length]);
+
+test("the cron's gate counts only posts with text, so an account that saw only empty posts does not stop the next one", async () => {
+  await dueAccount("aaa-empty", Array.from({ length: 60 }, () => ""), 9_960_000);
+  await dueAccount("aab-ok", feed(60), 9_960_100);
+  const v = await latestVersion("aab-ok");
+  assert.equal((await cron()).status, 200);
+  assert.equal(await latestVersion("aab-ok"), v + 1, "retaken in the same run");
+  assert.deepEqual(await s.d1("SELECT account FROM lens_background_attempts WHERE account = 'aaa-empty'"), [], "the empty account was never attempted");
+});
+
+test("an account whose refresh fails is recorded and goes to the back, and the next due account is retaken", async () => {
+  // The broken account's own posts make the embedding call fail, so its
+  // refresh fails before it writes anything, every time it is tried.
+  await dueAccount("aba-broken", feed(60).map((t) => `${t} EMBED-FAIL`), 9_961_000);
+  await dueAccount("abb-ok", feed(60), 9_961_100);
+  const v = await latestVersion("abb-ok");
+  await cron();
+  await cron();
+  // The claim the test names, checked first: the broken account, tried first,
+  // does not keep the healthy one from being retaken.
+  assert.equal(await latestVersion("abb-ok"), v + 1, "two runs reach the healthy account");
+  const failed = await s.d1("SELECT error FROM lens_background_attempts WHERE account = 'aba-broken'");
+  assert.equal(failed.length, 1);
+  assert.match(failed[0].error, /embeddings endpoint answered 500/);
+  assert.equal((await s.d1("SELECT error IS NULL AS ok FROM lens_background_attempts WHERE account = 'abb-ok'"))[0].ok, 1);
+});
+
+test("a refresh and the signal table make the same few D1 calls for 24 lenses as for one", async () => {
+  await makeLens("many-00", "manyacct");
+  await ingest("manysrc", feed(60).map((t, i) => post(String(9_964_500 + i), t)));
+  const refresh = async () => {
+    await s.d1("UPDATE lens_backgrounds SET created_at = created_at - 2 * 3600000 WHERE account = 'manyacct'");
+    return s.call("POST", "/lenses/backgrounds/refresh", { account: "manyacct", source_account: "manysrc" }, { token: "runner" });
+  };
+  const signals = () => s.call("GET", `/lenses/signals?account=manyacct&ids=${exemplarIds.join(",")}`, undefined, { token: "runner" });
+  const one = { refresh: (await refresh()).usage, signals: (await signals()).usage };
+  for (let i = 1; i < 24; i += 1) {
+    await s.call("POST", "/lenses", { id: `many-${String(i).padStart(2, "0")}`, account: "manyacct", charter: "c", exemplar_ids: exemplarIds });
+  }
+  const many = { refresh: await refresh(), signals: await signals() };
+  assert.equal(many.refresh.lenses.length, 24);
+  assert.equal(Object.keys(many.signals.posts[0].lenses).length, 24);
+  assert.equal(many.refresh.usage.d1_calls, one.refresh.d1_calls, JSON.stringify({ one, many: many.refresh.usage }));
+  assert.equal(many.signals.usage.d1_calls, one.signals.d1_calls, JSON.stringify({ one, many: many.signals.usage }));
+  assert.ok(many.refresh.usage.d1_calls < 50 && many.signals.usage.d1_calls < 50);
+});
+
+test("48 ineligible lens accounts ahead of a healthy one cost the cron nothing, and the healthy one is retaken in one run", async () => {
+  // 48 accounts that sort first and have never been tried, with a lens but
+  // no background and no posts of their own.
+  await s.d1(
+    `WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 48)
+     INSERT INTO lenses (id, account, charter, exemplar_ids_json, centroid_json, embed_model, open_at, glance_at, project_terms_json, created_at, updated_at, background_version, thresholds_source)
+     SELECT 'inel-' || printf('%02d', i), 'acc-inel-' || printf('%02d', i), charter, exemplar_ids_json, centroid_json, embed_model, open_at, glance_at, project_terms_json, created_at, updated_at, NULL, thresholds_source
+     FROM n JOIN lenses l ON l.id = 'capped'`,
+  );
+  await dueAccount("acd-healthy", feed(60), 9_964_000);
+  const v = await latestVersion("acd-healthy");
+  await cron();
+  assert.equal(await latestVersion("acd-healthy"), v + 1);
+  const attempt = (await s.d1("SELECT d1_calls FROM lens_background_attempts WHERE account = 'acd-healthy'"))[0];
+  // The whole invocation: the watcher lookup, the proposal expiry, the
+  // candidate query, the refresh's 6, the attempt row and the cron_runs row.
+  assert.equal(attempt.d1_calls, 11, `the run recorded ${attempt.d1_calls} D1 calls`);
+  assert.deepEqual(await s.d1("SELECT account FROM lens_background_attempts WHERE account LIKE 'acc-inel-%'"), []);
+});
+
+test("a lens's thresholds come from its earliest usable baseline when an older one cannot be rebuilt", async () => {
+  await makeLens("later", "lateracct");
+  const gone = Array.from({ length: 12 }, (_, i) => String(9_965_000 + i)); // never stored
+  await s.d1(`INSERT INTO lens_baselines (lens_id, session_id, at, post_ids_json, tastes_json, purity) VALUES ('later', 'lost', 1, '${JSON.stringify(gone)}', '[]', 0)`);
+  const posts = ["MCP agent harness", "Codex agent harness notes", "agent memory", "agent tips", "claude", "recipe", "football", "a recipe for soup", "weather", "codex mcp"].map((text, i) => ({
+    id: String(9_965_100 + i),
+    text,
+    author_handle: "a",
+  }));
+  const recorded = await s.call("POST", "/lenses/later/baseline", { session_id: "kept", posts }, { token: "ingest" });
+  assert.equal(recorded.thresholds_set, true, "the unusable older baseline does not count as the first");
+  const refit = await background("lateracct");
+  assert.equal(refit.lenses[0].thresholds_source, "baseline", JSON.stringify(refit));
+  const row = (await s.d1("SELECT open_at, glance_at FROM lenses WHERE id = 'later'"))[0];
+  assert.deepEqual(row, { open_at: refit.lenses[0].open_at, glance_at: refit.lenses[0].glance_at });
+});
+
+test("a stored zero background or a centroid of the wrong length fails the request instead of scoring raw cosines", async () => {
+  await makeLens("vectors", "vecacct");
+  const label = () => s.call("POST", "/lenses/vectors/label", { posts: [{ id: "9962001", text: "agent mcp", author_handle: "a" }] }, { raw: true, token: "ingest" });
+  assert.equal((await label()).status, 200);
+  const version = (await s.d1("SELECT background_version FROM lenses WHERE id = 'vectors'"))[0].background_version;
+  await s.d1(`UPDATE lens_backgrounds SET mean_json = '[0,0,0,0,0,0,0,0]' WHERE account = 'vecacct' AND version = ${version}`);
+  const zero = await label();
+  assert.equal(zero.status, 500);
+  assert.match((await zero.json()).error, /lens vectors: background .* norm at least/);
+
+  await background("vecacct");
+  await s.call("POST", "/lenses", { id: "vectors", account: "vecacct", charter: "c", exemplar_ids: exemplarIds });
+  await s.d1("UPDATE lenses SET centroid_json = '[1,0,0]' WHERE id = 'vectors'");
+  const short = await label();
+  assert.equal(short.status, 500);
+  assert.match((await short.json()).error, /centroid of lens vectors has 3 dimensions, expected 8/);
+});
+
+test("a baseline recorded before 0031 gets its text back from x_posts, and the refit keeps its thresholds from it", async () => {
+  await makeLens("legacy", "legacyacct");
+  const texts = ["MCP agent harness", "Codex agent harness notes", "Claude Code harness with MCP and memory", "agent memory", "agent tips", "claude", "recipe", "football", "a recipe for soup", "weather", "codex mcp", "harness memory"];
+  const ids = texts.map((_, i) => String(9_963_000 + i));
+  await ingest("legacyfeed", ids.map((id, i) => post(id, texts[i])));
+  await s.d1(`INSERT INTO lens_baselines (lens_id, session_id, at, post_ids_json, tastes_json, purity) VALUES ('legacy', 'old', 1, '${JSON.stringify(ids)}', '[]', 0)`);
+  const refit = await background("legacyacct");
+  assert.equal(refit.lenses[0].thresholds_source, "baseline", JSON.stringify(refit));
+  const row = (await s.d1("SELECT texts_json FROM lens_baselines WHERE lens_id = 'legacy' AND session_id = 'old'"))[0];
+  assert.deepEqual(
+    JSON.parse(row.texts_json).map((p) => p.id),
+    ids,
+    "written back in feed order",
+  );
 });

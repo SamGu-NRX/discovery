@@ -15,7 +15,8 @@ import { inbox, inboxExport, sightingsExport } from "./inbox";
 import { knowledgeErrorBody } from "./knowledge/common";
 import { KNOWLEDGE_ROUTES } from "./knowledge/routes";
 import { agentOf, listTasks, MailRefusal, mailboxCron, mailboxStatus, mcp, mcpByPath, restAck, restClaim, restComplete, restSend, room, setPaused } from "./mailbox";
-import { doneRepolls, dueRepolls, labelPosts, listLenses, recordBaseline, recordReads, scorecard, upsertLens } from "./lens";
+import { doneRepolls, dueRepolls, labelPosts, listLenses, recordBaseline, recordReads, refreshBackground, refreshDueBackgrounds, scorecard, signals, upsertLens } from "./lens";
+import { CRON_LIMITS, lensEnv, ROUTE_LIMITS } from "./lens-budget";
 import { handleDelivery, handleVerification, requestSubscription } from "./websub";
 import { addPositives, detailQueue, embed, ingest, ingestStatus, listPositives, listPosts, postContext, saveScores, startSession } from "./x";
 
@@ -196,14 +197,16 @@ const ROUTES: Route[] = [
   { method: "GET", path: /^\/admin\/x\/sightings$/, scopes: [], handler: (_r, env, url) => ok(sightingsExport(env, url)) },
   // Lenses (docs/LENS.md): the reader labels, reads, re-polls and baselines
   // with the ingest token; creating a lens is admin only.
-  { method: "POST", path: /^\/lenses$/, scopes: [], handler: (req, env) => ok(upsertLens(env, req)) },
-  { method: "GET", path: /^\/lenses$/, scopes: ["ingest", "runner"], handler: (_r, env, url) => ok(listLenses(env, url)) },
-  { method: "GET", path: /^\/lenses\/repolls\/due$/, scopes: ["ingest"], handler: (_r, env, url) => ok(dueRepolls(env, url)) },
-  { method: "POST", path: /^\/lenses\/repolls\/done$/, scopes: ["ingest"], handler: (req, env) => ok(doneRepolls(env, req)) },
-  { method: "POST", path: /^\/lenses\/([a-z0-9-]+)\/label$/, scopes: ["ingest"], handler: (req, env, _u, [id]) => ok(labelPosts(env, id, req)) },
-  { method: "POST", path: /^\/lenses\/([a-z0-9-]+)\/reads$/, scopes: ["ingest"], handler: (req, env, _u, [id]) => ok(recordReads(env, id, req)) },
-  { method: "POST", path: /^\/lenses\/([a-z0-9-]+)\/baseline$/, scopes: ["ingest"], handler: (req, env, _u, [id]) => ok(recordBaseline(env, id, req)) },
-  { method: "GET", path: /^\/lenses\/([a-z0-9-]+)\/scorecard$/, scopes: ["runner"], handler: (_r, env, url, [id]) => ok(scorecard(env, id, url)) },
+  { method: "POST", path: /^\/lenses$/, scopes: [], handler: (req, env) => ok(upsertLens(lensEnv(env, ROUTE_LIMITS), req)) },
+  { method: "GET", path: /^\/lenses$/, scopes: ["ingest", "runner"], handler: (_r, env, url) => ok(listLenses(lensEnv(env, ROUTE_LIMITS), url)) },
+  { method: "POST", path: /^\/lenses\/backgrounds\/refresh$/, scopes: ["runner"], handler: (req, env) => ok(refreshBackground(lensEnv(env, ROUTE_LIMITS), req)) },
+  { method: "GET", path: /^\/lenses\/signals$/, scopes: ["runner"], handler: (_r, env, url) => ok(signals(lensEnv(env, ROUTE_LIMITS), url)) },
+  { method: "GET", path: /^\/lenses\/repolls\/due$/, scopes: ["ingest"], handler: (_r, env, url) => ok(dueRepolls(lensEnv(env, ROUTE_LIMITS), url)) },
+  { method: "POST", path: /^\/lenses\/repolls\/done$/, scopes: ["ingest"], handler: (req, env) => ok(doneRepolls(lensEnv(env, ROUTE_LIMITS), req)) },
+  { method: "POST", path: /^\/lenses\/([a-z0-9-]+)\/label$/, scopes: ["ingest"], handler: (req, env, _u, [id]) => ok(labelPosts(lensEnv(env, ROUTE_LIMITS), id, req)) },
+  { method: "POST", path: /^\/lenses\/([a-z0-9-]+)\/reads$/, scopes: ["ingest"], handler: (req, env, _u, [id]) => ok(recordReads(lensEnv(env, ROUTE_LIMITS), id, req)) },
+  { method: "POST", path: /^\/lenses\/([a-z0-9-]+)\/baseline$/, scopes: ["ingest"], handler: (req, env, _u, [id]) => ok(recordBaseline(lensEnv(env, ROUTE_LIMITS), id, req)) },
+  { method: "GET", path: /^\/lenses\/([a-z0-9-]+)\/scorecard$/, scopes: ["runner"], handler: (_r, env, url, [id]) => ok(scorecard(lensEnv(env, ROUTE_LIMITS), id, url)) },
   { method: "POST", path: /^\/candidates\/claim$/, scopes: ["runner"], handler: async (req, env) => ok(claimCandidates(env, await body(req))) },
   { method: "POST", path: /^\/candidates\/([^/]+)\/complete$/, scopes: ["runner"], handler: async (req, env, _u, [id]) => ok(completeCandidate(env, id, await body(req))) },
   // Mailbox (src/mailbox.ts). The admin token speaks as agent "sam".
@@ -496,7 +499,10 @@ export default {
   // themselves; this catches lost alarms and records the run for /health.
   async scheduled(controller: ScheduledController, env: Env): Promise<void> {
     const now = Date.now();
-    const { results } = await env.DB.prepare(
+    // One budget for the whole run (src/lens-budget.ts): the lens refresh is
+    // charged together with the cron's own D1 calls.
+    const lx = lensEnv(env, CRON_LIMITS);
+    const { results } = await lx.db.prepare(
       "SELECT id, next_check_at FROM watchers WHERE enabled = 1 AND next_check_at < ? ORDER BY id",
     )
       .bind(now - BACKSTOP_GRACE_MS)
@@ -507,12 +513,25 @@ export default {
       const r = await stub(env, w.id).checkNow("backstop");
       console.log(`[backstop] ${w.id} re-armed, next check in ${r.next_interval_s}s`);
     }
+    // expireProposals (src/proposals.ts) is one UPDATE on the raw binding.
+    lx.budget.d1("expire proposals");
     const expired = await expireProposals(env, now);
     const requestsExpired = await expireApprovalRequests(env, now);
     const backfilled = await backfillApprovalRequests(env, now);
     const mail = await mailboxCron(env, now);
     const voice = await voiceCron(env, now);
-    await env.DB.prepare("INSERT INTO cron_runs (ts, cron, overdue_checked, notifications_retried) VALUES (?1, ?2, ?3, 0)")
+    // Lens backgrounds (src/lens.ts): one due account per run. A failure is
+    // the account's own, recorded in lens_background_attempts; this catch is
+    // for the lookup around it, so the run is still recorded below.
+    try {
+      // The cron_runs row below is the one D1 call after it.
+      const bg = await refreshDueBackgrounds(lx, now, 1);
+      if (bg?.done) console.log(`[cron] lens background retaken: ${bg.account} v${bg.done.version}`);
+      if (bg?.error) console.log(`[cron] lens background of ${bg.account} failed: ${bg.error}`);
+    } catch (err) {
+      console.log(`[cron] lens backgrounds: ${(err as Error).message}`);
+    }
+    await lx.db.prepareReserved("INSERT INTO cron_runs (ts, cron, overdue_checked, notifications_retried) VALUES (?1, ?2, ?3, 0)")
       .bind(now, controller.cron, results.length)
       .run();
     console.log(`[cron] done overdue_checked=${results.length} proposals_expired=${expired} mail_tasks_expired=${mail.expired} mail_tasks_requeued=${mail.requeued} wakes_retried=${mail.retried} requests_expired=${requestsExpired} requests_backfilled=${backfilled} voice_retried=${voice}`);

@@ -66,6 +66,75 @@ Every open is a flag. The Worker schedules metric re-polls for it 1 h, 6 h, 24 h
    ```
 3. In the lens account's own Chrome profile, open the popup's Connection section, enter the Worker URL, the token and the lens id, and tick "Next session records the baseline". Run a session. Afterwards, Active mode reads every 3 hours.
 
+## Cross-lens signals
+
+`GET /lenses/signals?account=&vs=sdotgu&ids=&limit=` (runner token) scores posts against every lens at once. Each row is a post any lens opened, newest read first, or a post named in `ids`. A row carries:
+
+- each lens's taste, and whether it reaches that lens's near and open thresholds;
+- which lenses opened it;
+- when a lens account and `vs` first saw it, and the hours between;
+- its views at the first and latest sample, which the re-polls add to.
+
+A post near two lenses, or flagged by a lens before `vs` saw it, stands out in this table.
+
+## Measured on captured posts (Nov 12)
+
+No lens has run on a live account. These checks replay what fetch mode captured on @sdotgu: 10,142 posts from ten bundles, embedded locally with the same bge-base-en-v1.5 model (`scripts/local-embeddings.py`).
+
+**Raw cosine scoring does not separate topics.** `scripts/lens-replay.mjs` and `scripts/lens-centering.py` used two test lenses.
+
+- "harness": 38 Nov 12 saves that the archive tagged with harness topics.
+- "design": 23 UI-design saves, picked by hand.
+
+Every post's taste falls between about 0.67 and 0.84, so each lens's near threshold passes most of the corpus. All 50 top posts of each lens count as near the other lens.
+
+Subtracting the corpus mean vector before the cosine fixes the separation:
+
+| | Raw | Mean subtracted |
+|---|---|---|
+| Harness taste, 10th to 90th percentile | 0.675 to 0.786 | −0.338 to 0.349 |
+| Posts near harness / near design | 54% / 80% | 5.3% / 1.6% |
+| Posts near both lenses | 49.6% | 0.9% |
+| Top 50 of each lens near the other | 50 / 50 | 21 / 21 |
+| Held-out exemplars vs all posts, AUC (harness / design) | 0.69 / 0.64 | 0.94 / 0.97 |
+| Held-out exemplars vs the other lens's, AUC | 0.64 / 0.81 | 0.85 / 0.75 |
+
+With the mean subtracted, thresholds taken from exemplar percentiles open 1% of these posts, not the 10% the reader aims for.
+
+`lens.ts` now works this way:
+- It keeps one background per lens account in `lens_backgrounds`, versioned, and each lens records the version it was fitted against. The background is the mean unit embedding of up to 500 posts the account saw in the last 24 hours. The cron retakes it once a day when the account saw at least 50 posts with text, one account per run. A single query picks that account: of the eligible ones, the one tried longest ago, so ineligible accounts cost nothing. Each attempt, its error and its D1 calls are recorded in `lens_background_attempts`. `POST /lenses/backgrounds/refresh` takes the first one, from another account's posts while the lens account has seen nothing. It takes at most 500 posts, at most once an hour per account.
+- Workers Free allows 50 D1 calls, 50 external subrequests and 1,000 internal ones per invocation (`src/lens-budget.ts`). A lens request takes at most 40 of each of the first two and 500 internal; the cron takes 30, 30 and 500. Past its share, a request fails with 503. Lens code reaches D1 only through a wrapper that counts every call. A refresh makes 6 D1 calls and the signal table 3, whatever the number of lenses (measured with 1 and with 24). The refresh and signals responses report their usage.
+- Thin posts read at most 10 knowledge bundles per request. Thin posts past the 10th read embed as their own text, as does any post whose bundle read fails. Embedding requests do not follow redirects.
+- A zero or near-zero vector, or vectors of different lengths, fail the request (`src/lens-vec.ts`); a stored zero mean would otherwise score raw cosines.
+- A lens's thresholds come from its earliest usable baseline. A baseline recorded before migration 0031 counts when its text can be rebuilt from `x_posts`; the rebuilt text is written back.
+- Migration 0031 has never shipped. Production is at 0030, and 0031 was changed in review before any database applied it. A database that applied an earlier 0031 has to be recreated.
+- Every taste is the cosine after subtracting that mean.
+- A lens's first baseline sets `open_at` and `glance_at` to the 90th and 70th percentiles of the baseline's tastes. Until then, the exemplar median and 10th percentile stand in. `thresholds_source` says which applies. The 70th percentile makes the baseline's purity about 0.3 by construction. No live session has checked these percentiles yet.
+
+**First charter, "agent harnesses".** The charter reads: "Agent harnesses: how Claude Code, Codex, T3 Code and other coding-agent harnesses are set up and run, including subagents and orchestration, model routing and effort, MCP tools, skills and instruction files, memory, sessions and long-running agents."
+
+Its exemplars are the 32 Oct 26 saves whose archive findings carry a harness topic. Scoring therefore never sees the 170 Nov 12 saves it is checked on (`scripts/lens-score-saves.py`). Each save is scored on its post text, as the reader labels a feed post.
+
+The gold is the archive lead's disposition of the 170 Nov 12 saves. 98 were kept as bearing on Sam's model and tool setup. 47 of the kept carry a harness topic.
+
+| Mean subtracted | Labeled | Precision vs kept | Precision vs harness | Recall of harness |
+|---|---|---|---|---|
+| open (at or above open_at) | 17 | 0.94 | 0.82 | 0.30 |
+| near (at or above glance_at) | 86 | 0.81 | 0.47 | 0.85 |
+
+Without the mean subtraction, open labels 28 saves at precision 0.89 vs kept and 0.71 vs harness, and near labels 83 at 0.735 and 0.46. The AUC of harness saves against the rest is 0.83, against 0.82 raw.
+
+The lens misses seven harness saves. Two of them have little post text. "@theo" carries its substance in a screenshot's text, and "use hex by @kitlangton" in its parent post. Neither links a page. The other five are long posts that score below `glance_at`.
+
+**Thin posts with link context.** A post under 15 words (links and @mentions not counted), or one made up mostly of links, is embedded together with the title and first prose paragraph of the page it links (`src/lens-text.ts`). The Worker takes these from the knowledge store's bundle when the `KNOWLEDGE` bucket is bound. The re-score takes them from the archive's raw files. 27 of the 170 saves got link context. None of the 32 exemplars is thin. Mean subtracted, before and after:
+
+| | Labeled | Precision vs kept | Recall of kept | Precision vs harness | Recall of harness |
+|---|---|---|---|---|---|
+| open, before / after | 17 / 17 | 0.94 / 0.94 | 0.16 / 0.16 | 0.82 / 0.82 | 0.30 / 0.30 |
+| near, before / after | 86 / 89 | 0.81 / 0.80 | 0.71 / 0.72 | 0.47 / 0.45 | 0.85 / 0.85 |
+
+The AUC of kept saves against skipped ones moves from 0.80 to 0.82, and harness against the rest stays at 0.83. Link context reaches neither thin miss. Reaching them would take the parent post's text and a screenshot's text, which `lens.ts` does not add.
+
 ## Not yet checked
 
 - Nothing has run on a live account: @_sgu_ is not signed in on the Zephyrus yet. The tests use the fixture x.com and a stand-in model.

@@ -169,6 +169,9 @@ export function createFixture() {
       req.on("end", () => {
         const b = JSON.parse(raw);
         if (url.pathname === "/v1/embeddings") {
+          // A batch holding this marker fails, so a test can make one
+          // account's refresh fail before it writes anything.
+          if (b.input.some((t) => t.includes("EMBED-FAIL"))) return send(500, "fixture embedding failure");
           return send(200, JSON.stringify({ data: b.input.map((t, index) => ({ index, embedding: embedding(t) })) }), { "content-type": "application/json" });
         }
         state.chats.push(b);

@@ -25,10 +25,16 @@ export const DEFAULT_LIMITS = Object.freeze({
   jitterMs: 1000,
   // Requests per run, primes included.
   runCap: 400,
-  // TweetDetail requests per post: both reply orders, branches and upstream.
-  detailCapPerPost: 40,
+  // TweetDetail requests per post: both reply orders, the parent's
+  // conversation, branches and upstream. On Nov 12 run 2 used 30 requests
+  // and 6 branches per post and lost 4 of the judged keeps on Mollick's
+  // 252-reply essay, replies and branches it never reached; the archive's
+  // queue then ran 60 saves at 80 and 15, and only 1 reached 80
+  // (docs/x-direct/COMPARISON.md). At 80 a 400-request run still covers at
+  // least 5 saves.
+  detailCapPerPost: 80,
   // Reply branches opened per post (see branchCandidates).
-  branchesPerPost: 6,
+  branchesPerPost: 15,
   // SearchTimeline pages per query and product.
   searchPagesPerQuery: 5,
   // Linked URLs searched per post.
@@ -101,7 +107,7 @@ export function parseJobs(input) {
     }
     if (job?.type === "context") {
       if (!Array.isArray(job.ids) || !job.ids.length || !job.ids.every(isPostId)) throw new Error(`${at}.ids must be post id strings`);
-      const known = ["ids", "type", "rankings", "branches", "quotes", "mentions", "links", "conversation", "upstream"];
+      const known = ["ids", "type", "rankings", "parent", "branches", "quotes", "mentions", "links", "conversation", "upstream"];
       for (const key of Object.keys(job)) if (!known.includes(key)) throw new Error(`${at}.${key} is not a context option`);
       const rankings = job.rankings ?? ["Relevance", "Recency"];
       if (!Array.isArray(rankings) || !rankings.every((r) => ["Relevance", "Recency", "Likes"].includes(r))) {
@@ -116,6 +122,7 @@ export function parseJobs(input) {
         type: "context",
         ids: [...new Set(job.ids)],
         rankings,
+        parent: flag("parent"),
         branches: flag("branches"),
         quotes: flag("quotes"),
         mentions: flag("mentions"),
@@ -328,6 +335,10 @@ function postRecord(id) {
     id,
     orders: {},
     thread: null,
+    // The conversation of the post this one answers, when it is a reply:
+    // { id, ...walk }, or { id, skipped: reason }. null for a post that
+    // answers nothing or a job without `parent`.
+    parent: null,
     // In the order they were opened: { id, ...walk }.
     branches: [],
     branchesSkipped: [],
@@ -443,6 +454,24 @@ async function detailFor(run, io, job, record) {
     for (const a of done.ancestors) if (!ancestors.includes(a)) ancestors.push(a);
   }
   if (run.threadStates[id]) record.thread = extendThread(run.threadStates[id], [], id).thread;
+
+  // A saved reply often sits in a conversation whose replies are about the
+  // post it answers, not about the reply itself. On Nov 12 Emil's save
+  // (2120252783953871317) answered his own 86-reply post, and 16 of its 22
+  // judged keeps were replies to that post, which the computer-use pilot read
+  // and fetch mode did not: it had the parent from the ancestors above the
+  // save and never opened the parent's own permalink. One Relevance walk
+  // there reads what the pilot read.
+  const parentId = run.posts[id]?.in_reply_to_id ?? null;
+  if (job.parent && parentId) {
+    // A parent that is itself a save in this run gets its own walks.
+    if (run.context[parentId]) record.parent = { id: parentId, skipped: "saved in this run" };
+    else if (record.detailRequests >= run.limits.detailCapPerPost) record.parent = { id: parentId, skipped: "per-post cap" };
+    else {
+      const done = await walkPermalink(run, io, record, { focalId: parentId, rankingMode: "Relevance", note: `${id} parent ${parentId}` });
+      record.parent = { id: parentId, ...done.walk };
+    }
+  }
 
   if (job.branches && record.thread) {
     const candidates = branchCandidates(run, record);
