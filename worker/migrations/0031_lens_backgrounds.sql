@@ -23,7 +23,10 @@ CREATE TABLE lens_backgrounds (
 CREATE TABLE lens_background_attempts (
   account TEXT PRIMARY KEY,
   at INTEGER NOT NULL,
-  error TEXT
+  error TEXT,
+  -- D1 calls the cron run made, this attempt's write included (Free allows
+  -- 50 per invocation; src/lens-budget.ts).
+  d1_calls INTEGER NOT NULL
 );
 
 -- The background a lens's centroid and thresholds were fitted against, and

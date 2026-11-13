@@ -76,7 +76,17 @@ export async function startStack({ port, fixturePort, inspectorPort, logFile, pe
   async function call(method, path, body, { raw = false, token = "admin" } = {}) {
     const headers = { "content-type": "application/json" };
     if (token !== "none") headers.authorization = `Bearer ${vars[`${token.toUpperCase()}_TOKEN`]}`;
-    const res = await fetch(base + path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
+    // wrangler dev closes idle keep-alive connections, and a request written
+    // onto one it has just closed fails with "other side closed" (undici
+    // UND_ERR_SOCKET) before the Worker sees it; the lens tests hit this after
+    // the seconds-long `wrangler d1 execute` calls. Such a request is sent once
+    // more. A repeat the Worker had already handled would answer differently
+    // (a second refresh is 429), so this cannot turn a failure into a pass.
+    const send = () => fetch(base + path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
+    const res = await send().catch((err) => {
+      if (err?.cause?.code === "UND_ERR_SOCKET") return send();
+      throw err;
+    });
     if (raw) return res;
     const text = await res.text();
     const data = text ? JSON.parse(text) : null;

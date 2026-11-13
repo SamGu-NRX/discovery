@@ -384,18 +384,75 @@ test("the cron's gate counts only posts with text, so an account that saw only e
 });
 
 test("an account whose refresh fails is recorded and goes to the back, and the next due account is retaken", async () => {
-  await dueAccount("aba-broken", feed(60), 9_961_000);
+  // The broken account's own posts make the embedding call fail, so its
+  // refresh fails before it writes anything, every time it is tried.
+  await dueAccount("aba-broken", feed(60).map((t) => `${t} EMBED-FAIL`), 9_961_000);
   await dueAccount("abb-ok", feed(60), 9_961_100);
-  // A lens with no exemplars left cannot be refit, so the account's refresh fails.
-  await s.d1("UPDATE lenses SET exemplar_ids_json = '[]' WHERE account = 'aba-broken'");
   const v = await latestVersion("abb-ok");
   await cron();
+  await cron();
+  // The claim the test names, checked first: the broken account, tried first,
+  // does not keep the healthy one from being retaken.
+  assert.equal(await latestVersion("abb-ok"), v + 1, "two runs reach the healthy account");
   const failed = await s.d1("SELECT error FROM lens_background_attempts WHERE account = 'aba-broken'");
   assert.equal(failed.length, 1);
-  assert.match(failed[0].error, /lens vectors: mean: no vectors/);
-  await cron();
-  assert.equal(await latestVersion("abb-ok"), v + 1, "the second run takes the account the first did not reach");
+  assert.match(failed[0].error, /embeddings endpoint answered 500/);
   assert.equal((await s.d1("SELECT error IS NULL AS ok FROM lens_background_attempts WHERE account = 'abb-ok'"))[0].ok, 1);
+});
+
+test("a refresh and the signal table make the same few D1 calls for 24 lenses as for one", async () => {
+  await makeLens("many-00", "manyacct");
+  await ingest("manysrc", feed(60).map((t, i) => post(String(9_964_500 + i), t)));
+  const refresh = async () => {
+    await s.d1("UPDATE lens_backgrounds SET created_at = created_at - 2 * 3600000 WHERE account = 'manyacct'");
+    return s.call("POST", "/lenses/backgrounds/refresh", { account: "manyacct", source_account: "manysrc" }, { token: "runner" });
+  };
+  const signals = () => s.call("GET", `/lenses/signals?account=manyacct&ids=${exemplarIds.join(",")}`, undefined, { token: "runner" });
+  const one = { refresh: (await refresh()).usage, signals: (await signals()).usage };
+  for (let i = 1; i < 24; i += 1) {
+    await s.call("POST", "/lenses", { id: `many-${String(i).padStart(2, "0")}`, account: "manyacct", charter: "c", exemplar_ids: exemplarIds });
+  }
+  const many = { refresh: await refresh(), signals: await signals() };
+  assert.equal(many.refresh.lenses.length, 24);
+  assert.equal(Object.keys(many.signals.posts[0].lenses).length, 24);
+  assert.equal(many.refresh.usage.d1_calls, one.refresh.d1_calls, JSON.stringify({ one, many: many.refresh.usage }));
+  assert.equal(many.signals.usage.d1_calls, one.signals.d1_calls, JSON.stringify({ one, many: many.signals.usage }));
+  assert.ok(many.refresh.usage.d1_calls < 50 && many.signals.usage.d1_calls < 50);
+});
+
+test("48 ineligible lens accounts ahead of a healthy one cost the cron nothing, and the healthy one is retaken in one run", async () => {
+  // 48 accounts that sort first and have never been tried, with a lens but
+  // no background and no posts of their own.
+  await s.d1(
+    `WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 48)
+     INSERT INTO lenses (id, account, charter, exemplar_ids_json, centroid_json, embed_model, open_at, glance_at, project_terms_json, created_at, updated_at, background_version, thresholds_source)
+     SELECT 'inel-' || printf('%02d', i), 'acc-inel-' || printf('%02d', i), charter, exemplar_ids_json, centroid_json, embed_model, open_at, glance_at, project_terms_json, created_at, updated_at, NULL, thresholds_source
+     FROM n JOIN lenses l ON l.id = 'capped'`,
+  );
+  await dueAccount("acd-healthy", feed(60), 9_964_000);
+  const v = await latestVersion("acd-healthy");
+  await cron();
+  assert.equal(await latestVersion("acd-healthy"), v + 1);
+  const attempt = (await s.d1("SELECT d1_calls FROM lens_background_attempts WHERE account = 'acd-healthy'"))[0];
+  assert.ok(attempt.d1_calls < 50, `the run made ${attempt.d1_calls} D1 calls`);
+  assert.deepEqual(await s.d1("SELECT account FROM lens_background_attempts WHERE account LIKE 'acc-inel-%'"), []);
+});
+
+test("a lens's thresholds come from its earliest usable baseline when an older one cannot be rebuilt", async () => {
+  await makeLens("later", "lateracct");
+  const gone = Array.from({ length: 12 }, (_, i) => String(9_965_000 + i)); // never stored
+  await s.d1(`INSERT INTO lens_baselines (lens_id, session_id, at, post_ids_json, tastes_json, purity) VALUES ('later', 'lost', 1, '${JSON.stringify(gone)}', '[]', 0)`);
+  const posts = ["MCP agent harness", "Codex agent harness notes", "agent memory", "agent tips", "claude", "recipe", "football", "a recipe for soup", "weather", "codex mcp"].map((text, i) => ({
+    id: String(9_965_100 + i),
+    text,
+    author_handle: "a",
+  }));
+  const recorded = await s.call("POST", "/lenses/later/baseline", { session_id: "kept", posts }, { token: "ingest" });
+  assert.equal(recorded.thresholds_set, true, "the unusable older baseline does not count as the first");
+  const refit = await background("lateracct");
+  assert.equal(refit.lenses[0].thresholds_source, "baseline", JSON.stringify(refit));
+  const row = (await s.d1("SELECT open_at, glance_at FROM lenses WHERE id = 'later'"))[0];
+  assert.deepEqual(row, { open_at: refit.lenses[0].open_at, glance_at: refit.lenses[0].glance_at });
 });
 
 test("a stored zero background or a centroid of the wrong length fails the request instead of scoring raw cosines", async () => {
