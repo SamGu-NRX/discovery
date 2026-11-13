@@ -1,0 +1,26 @@
+{
+ "blobs": {
+  "local": 2583,
+  "already_in_prod": 2583,
+  "sent": 0,
+  "sent_mb": 0.0,
+  "over_95_mib": []
+ },
+ "fetches": {
+  "sent": 360,
+  "waiting_for_blob": 0
+ },
+ "derivations": {
+  "sent": 1036,
+  "waiting_for_blob": 0
+ },
+ "verdicts": {
+  "sent": 9235,
+  "waiting_for_blob": 0
+ },
+ "wall_s": 48.4,
+ "bundles": {
+  "local_latest": 80,
+  "registered": 70
+ }
+}
