@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 from urllib.parse import urlsplit
 
+from . import models
 from .api import canonical_json
 from .ctx import Ctx
 from .links import TEXT_MAX
@@ -174,6 +175,9 @@ def build(ctx: Ctx, payload: dict) -> dict:
         "links": links,
         "repos": sorted(repos.values(), key=lambda r: r["url"]),
     }
+    bundle["verdict"] = assess(ctx, bundle)
+    card = make_card(bundle)
+    bundle["card"] = card
     md = render_md(bundle)
     json_sha = ctx.api.put_bytes(canonical_json(bundle).encode("utf-8"), "application/json")
     md_sha = ctx.api.put_text(md, "text/markdown; charset=utf-8")
@@ -189,9 +193,107 @@ def build(ctx: Ctx, payload: dict) -> dict:
             "saved_by": bundle["saved_by"],
             "author": post["author_handle"],
             "search_text": search_text(bundle)[:SEARCH_MAX],
+            "card": card,
         },
     )
     return {"post_id": post["id"], "json_sha": json_sha, "md_sha": md_sha, "registered": reg, "completeness": completeness, "missing": len(missing)}
+
+
+VERDICT_SCHEMA = {
+    "type": "object",
+    "properties": {"label": {"type": "string", "enum": ["try", "read", "reference", "skip"]}, "why": {"type": "string"}, "action": {"type": "string"}},
+    "required": ["label", "why", "action"],
+}
+SAVE_TEXT_MAX = 9000  # characters of the save shown to the verdict model
+
+
+def _save_text(b: dict) -> str:
+    """The save as the verdict model sees it: verbatim text first, then what
+    the pipeline read from its media and links, each part cut short."""
+    parts = [f"@{b['author']['handle']}: {b['post']['text']}"]
+    parts += [f"(thread) {t['text'][:600]}" for t in b["thread"] if not t["is_save"]][:6]
+    if b.get("quoted"):
+        parts.append(f"(quoted @{b['quoted'].get('author_handle')}) {(b['quoted'].get('text') or '')[:600]}")
+    parts += [f"(reply @{r['author_handle']}) {r['text'][:300]}" for r in b["replies"][:6]]
+    for m in b["media"]:
+        if "image" in m:
+            parts.append(f"(image) {(m['image'].get('description') or '')[:300]} Text: {(m['image'].get('text') or '')[:500]}")
+        if "video" in m:
+            parts.append(f"(video) {(m['video']['read'].get('description') or '')[:500]}")
+    for l in b["links"]:
+        parts.append(f"(link {l['status']}) {l.get('title') or l['url']}: {(l.get('text') or '')[:400]}")
+    for r in b["repos"]:
+        parts.append(f"(repo {r['url']}, {r.get('stars')} stars, last commit {r.get('last_commit_at')}) {r.get('description') or ''}")
+    return "\n".join(parts)[:SAVE_TEXT_MAX]
+
+
+def assess(ctx: Ctx, b: dict) -> dict:
+    """One model call per save: is it something to try, read, keep or skip,
+    and why. The morning brief is written from these."""
+    text = models.prompt("save-verdict-v1").replace("{brief}", models.prompt("interest-brief-v1")).replace("{save}", _save_text(b))
+
+    def build(cap: dict):
+        if cap["prompt_v"] != "save-verdict-v1":
+            return None
+        return models.Request(text=text, schema=VERDICT_SCHEMA, max_output_tokens=600, thinking=False)
+
+    res = models.run(ctx, "save_verdict", build)
+    v = json.loads(res.output)
+    if v.get("label") not in ("try", "read", "reference", "skip"):
+        raise ValueError(f"save_verdict label {v.get('label')!r} is not try|read|reference|skip")
+    return {"label": v["label"], "why": str(v.get("why", ""))[:300], "action": str(v.get("action", ""))[:200], "by": res.by.as_dict()}
+
+
+CARD_MAX = 4000  # bytes; the Worker refuses a card over 4 KiB
+
+
+def _cut(s: str | None, n: int) -> str:
+    s = " ".join((s or "").split())
+    return s if len(s) <= n else s[: n - 1] + "…"
+
+
+def make_card(b: dict) -> dict:
+    """The save as GET /k/digest returns it (docs/KNOWLEDGE.md, "Daily loop")."""
+    gaps = [m for m in b["missing"] if m["what"] in ("media", "link")]
+    status = b["completeness"]
+    if gaps and all("blocked" in m["reason"] for m in gaps):
+        status = "blocked"
+    repo_by_url = {r["url"]: r for r in b["repos"]}
+    links = []
+    for l in b["links"][:5]:
+        item = {"url": l.get("final_url") or l["url"], "title": _cut(l.get("title"), 80) or None, "status": l["status"]}
+        r = repo_by_url.get(l.get("repo") or "")
+        if r:
+            item["repo"] = {"name": r.get("full_name") or r["url"].split("github.com/")[-1], "stars": r.get("stars"), "last_commit": r.get("last_commit_at")}
+        links.append(item)
+    for r in b["repos"]:
+        if len(links) < 5 and not any((x.get("repo") or {}).get("name") == r.get("full_name") for x in links):
+            links.append({"url": r["url"], "title": _cut(r.get("description"), 80) or None, "status": "ok",
+                          "repo": {"name": r.get("full_name") or r["url"].split("github.com/")[-1], "stars": r.get("stars"), "last_commit": r.get("last_commit_at")}})
+    a = b["author"]
+    card = {
+        "post_id": b["post_id"],
+        "url": b["url"],
+        "author": f"@{a['handle']}" + (f" ({a['name']})" if a.get("name") else ""),
+        "created_at": b.get("created_at"),
+        "saved_by": b["saved_by"],
+        "status": status,
+        "missing": [_cut(f"{m['what']} {m['ref']}: {m['reason']}", 160) for m in gaps[:3]],
+        "excerpt": _cut(b["post"]["text"], 280),
+        "verdict": b["verdict"],
+        "context": [_cut(f"@{r['author_handle']}: {r['text']}", 200) for r in b["replies"][:3]],
+        "links": links,
+        "media": {"photos": sum(1 for m in b["media"] if m["kind"] == "photo"), "videos": sum(1 for m in b["media"] if m["kind"] in ("video", "gif"))},
+    }
+    # Shrink the longest parts until the card fits.
+    while len(canonical_json(card).encode("utf-8")) > CARD_MAX:
+        if card["context"]:
+            card["context"].pop()
+        elif len(card["links"]) > 1:
+            card["links"].pop()
+        else:
+            card["excerpt"] = _cut(card["excerpt"], max(40, len(card["excerpt"]) // 2))
+    return card
 
 
 def _add_repo(ctx: Ctx, repos: dict, meta: dict, text_sha: str | None, via: str) -> None:
@@ -273,6 +375,10 @@ def render_md(b: dict) -> str:
     out += [f"  - {m['what']}: {json.dumps(m['ref'])}  # {m['reason']}" for m in b["missing"]]
     out += ["---", ""]
     out += [f"# @{a['handle']}" + (f" ({a['name']})" if a.get("name") else "") + f" · {_when(b.get('created_at'))}", "", f"<{b['url']}>", "", _quote(b["post"]["text"]), ""]
+
+    v = b.get("verdict")
+    if v:
+        out += [f"**{v['label']}**: {v['why']}" + (f" Next: {v['action']}" if v.get("action") else "") + f" ({_by(v['by'])})", ""]
 
     media_by_id = {m["id"]: m for m in b["media"]}
     save_media = next((t["media"] for t in b["thread"] if t["is_save"]), [])

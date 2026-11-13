@@ -9,7 +9,7 @@ import threading
 import time
 import traceback
 
-from . import bundle, gate, links, media, video
+from . import bundle, gate, intake, links, media, video
 from .api import KError
 from .canon import canonical_url, url_hash
 from .config import Config
@@ -31,7 +31,14 @@ def enqueue(ctx: Ctx, kind: str, key: str, payload: dict, deps: list[str] | None
 def save_job(ctx: Ctx, payload: dict) -> dict:
     """Gate the expansion, then fan out one job per media item and kept link,
     and a bundle job that waits for all of them."""
-    exp = ctx.api.get_json(payload["expansion_sha"])
+    if "intake_sha" in payload:
+        # Filed by POST /k/intake: the daily job's body, turned into the
+        # expansion the gate and the bundle read.
+        exp = intake.expansion(ctx.api.get_json(payload["intake_sha"]))
+        expansion_sha = ctx.api.put_json(exp)
+    else:
+        expansion_sha = payload["expansion_sha"]
+        exp = ctx.api.get_json(expansion_sha)
     decided = gate.run_gate(ctx, exp)
     gate_sha = ctx.api.put_json(decided)
 
@@ -82,7 +89,7 @@ def save_job(ctx: Ctx, payload: dict) -> dict:
         ctx,
         "bundle",
         exp["post"]["id"],
-        {"post_id": exp["post"]["id"], "expansion_sha": payload["expansion_sha"], "gate_sha": gate_sha, "children": children},
+        {"post_id": exp["post"]["id"], "expansion_sha": expansion_sha, "gate_sha": gate_sha, "children": children},
         deps=ids,
         again=True,
     )
