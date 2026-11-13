@@ -558,3 +558,57 @@ test("the fetch page's Clear error pause lifts a pause made only of failed reque
   assert.equal(after.pauseClears.at(-1).until, until);
   await page.close();
 });
+
+test("daily fetch: a manual run on daily.html takes the newest saves, keeps the bundle, and moves the account's boundary; it waits for an archive fetch page", async () => {
+  await configure({ mode: "passive", account: "fixtureuser" });
+  await worker.evaluate(async () => {
+    const keys = (await chrome.storage.local.getKeys()).filter((k) => k.startsWith("pageSignal:"));
+    await chrome.storage.local.remove([...keys, "backOffReportedUntil", "pendingBackOff", "pauseUntil", "dailyFetch", "dailyBundles"]);
+    await chrome.storage.local.set({ lastAccount: "fixtureuser" });
+    await chrome.storage.session.remove(["activeSession", "fetchRun", "dailyJob"]);
+  });
+
+  // An archive fetch page open: the daily run does not start beside it.
+  const archive = await context.newPage();
+  await archive.goto(`chrome-extension://${extensionId}/fetch/fetch.html`);
+  const refused = await context.newPage();
+  await refused.goto(`chrome-extension://${extensionId}/fetch/daily.html?auto=daily-now&newest=2`);
+  await refused.waitForFunction(() => /daily fetch not started/.test(document.getElementById("status").textContent));
+  assert.match(await refused.textContent("#status"), /a fetch page is open \(the archive's queue\)/);
+  await refused.close();
+  await archive.close();
+
+  const page = await context.newPage();
+  await page.goto(`chrome-extension://${extensionId}/fetch/daily.html?auto=daily-now&newest=2`);
+  assert.equal(await page.title(), "X daily fetch", "the archive runner looks for \"X fetch mode\" windows");
+  await page.waitForFunction(() => /daily fetch (finished|stopped)/.test(document.getElementById("status").textContent), null, { timeout: 120_000 });
+  const status = await page.textContent("#status");
+  assert.match(status, /daily fetch finished; 2 saves taken, boundary now 401/);
+
+  const { dailyFetch, dailyBundles } = await worker.evaluate(() => chrome.storage.local.get(["dailyFetch", "dailyBundles"]));
+  const state = dailyFetch.fixtureuser;
+  assert.equal(state.boundary, "401");
+  assert.equal(state.lastDay, undefined, "a manual run leaves today's scheduled run in place");
+  assert.equal(state.last.taken, 2);
+  assert.equal(state.last.stop, null);
+  assert.equal(state.last.delivery.delivered, false);
+  assert.equal(dailyBundles.length, 1);
+  assert.deepEqual(dailyBundles[0].bundle.newSaves.taken, ["402", "401"]);
+  assert.equal(dailyBundles[0].bundle.context["402"].parent, null, "the daily job asks for the parent walk; a save that answers nothing has none");
+  await page.close();
+
+  // A scheduled run, as startDaily leaves it at 07:00: the job in session
+  // storage, the page opened with auto=daily. It runs from the stored
+  // boundary, uses up the day, and closes itself.
+  await worker.evaluate(() => chrome.storage.session.set({ dailyJob: { account: "fixtureuser", at: Date.now(), boundary: "402" } }));
+  const scheduled = await context.newPage();
+  const closed = scheduled.waitForEvent("close", { timeout: 120_000 });
+  await scheduled.goto(`chrome-extension://${extensionId}/fetch/daily.html?auto=daily`);
+  await closed;
+  const after = (await worker.evaluate(() => chrome.storage.local.get("dailyFetch"))).dailyFetch.fixtureuser;
+  assert.equal(after.boundary, "401");
+  assert.equal(after.last.taken, 1, `401 is the only save above 402: ${JSON.stringify(after)}`);
+  assert.equal(after.last.manual, false);
+  assert.match(String(after.lastDay), /^\d{4}-\d{2}-\d{2}$/, `a scheduled run uses up the day: ${JSON.stringify(after)}`);
+  assert.deepEqual(await worker.evaluate(() => chrome.storage.session.get("dailyJob")), {}, "the job is claimed once");
+});

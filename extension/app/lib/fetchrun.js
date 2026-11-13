@@ -107,33 +107,50 @@ export function parseJobs(input) {
     }
     if (job?.type === "context") {
       if (!Array.isArray(job.ids) || !job.ids.length || !job.ids.every(isPostId)) throw new Error(`${at}.ids must be post id strings`);
-      const known = ["ids", "type", "rankings", "parent", "branches", "quotes", "mentions", "links", "conversation", "upstream"];
-      for (const key of Object.keys(job)) if (!known.includes(key)) throw new Error(`${at}.${key} is not a context option`);
-      const rankings = job.rankings ?? ["Relevance", "Recency"];
-      if (!Array.isArray(rankings) || !rankings.every((r) => ["Relevance", "Recency", "Likes"].includes(r))) {
-        throw new Error(`${at}.rankings must list Relevance, Recency or Likes`);
-      }
-      const flag = (key) => {
-        const v = job[key] ?? true;
-        if (typeof v !== "boolean") throw new Error(`${at}.${key} must be true or false`);
-        return v;
-      };
-      return {
-        type: "context",
-        ids: [...new Set(job.ids)],
-        rankings,
-        parent: flag("parent"),
-        branches: flag("branches"),
-        quotes: flag("quotes"),
-        mentions: flag("mentions"),
-        links: flag("links"),
-        conversation: flag("conversation"),
-        upstream: flag("upstream"),
-      };
+      const { ids, type, ...options } = job;
+      return { type: "context", ids: [...new Set(ids)], ...contextOptions(options, at) };
     }
-    throw new Error(`${at}.type must be bookmarks_until or context, got ${JSON.stringify(job?.type)}`);
+    if (job?.type === "new_saves") {
+      const known = ["type", "boundary", "maxPages", "maxSaves", "newest", "context"];
+      for (const key of Object.keys(job)) if (!known.includes(key)) throw new Error(`${at}.${key} is not a new_saves option`);
+      if (job.boundary !== null && !isPostId(job.boundary)) throw new Error(`${at}.boundary must be a post id string, or null for a first run`);
+      const maxPages = job.maxPages ?? 5;
+      if (!Number.isInteger(maxPages) || maxPages < 1 || maxPages > 20) throw new Error(`${at}.maxPages must be 1..20`);
+      const maxSaves = job.maxSaves ?? 4;
+      if (!Number.isInteger(maxSaves) || maxSaves < 1 || maxSaves > 20) throw new Error(`${at}.maxSaves must be 1..20`);
+      const newest = job.newest ?? 0;
+      if (!Number.isInteger(newest) || newest < 0 || newest > 20) throw new Error(`${at}.newest must be 0..20`);
+      if (newest && job.boundary !== null) throw new Error(`${at}.newest is for a first run, with boundary null`);
+      return { type: "new_saves", boundary: job.boundary, maxPages, maxSaves, newest, context: contextOptions(job.context ?? {}, `${at}.context`) };
+    }
+    throw new Error(`${at}.type must be bookmarks_until, context or new_saves, got ${JSON.stringify(job?.type)}`);
   });
   return { jobs: out, limits };
+}
+
+// What to collect around each post, for context and new_saves jobs.
+function contextOptions(options, at) {
+  const known = ["rankings", "parent", "branches", "quotes", "mentions", "links", "conversation", "upstream"];
+  for (const key of Object.keys(options)) if (!known.includes(key)) throw new Error(`${at}.${key} is not a context option`);
+  const rankings = options.rankings ?? ["Relevance", "Recency"];
+  if (!Array.isArray(rankings) || !rankings.every((r) => ["Relevance", "Recency", "Likes"].includes(r))) {
+    throw new Error(`${at}.rankings must list Relevance, Recency or Likes`);
+  }
+  const flag = (key) => {
+    const v = options[key] ?? true;
+    if (typeof v !== "boolean") throw new Error(`${at}.${key} must be true or false`);
+    return v;
+  };
+  return {
+    rankings,
+    parent: flag("parent"),
+    branches: flag("branches"),
+    quotes: flag("quotes"),
+    mentions: flag("mentions"),
+    links: flag("links"),
+    conversation: flag("conversation"),
+    upstream: flag("upstream"),
+  };
 }
 
 /**
@@ -162,6 +179,8 @@ export async function runJobs(jobs, limits, io) {
     context: {},
     stop: null,
     lastRequestAt: null,
+    // Posts whose context is complete (new_saves reads it); not in the bundle.
+    completed: new Set(),
     // Thread state per permalink, across every walk that opens it: the
     // Worker keeps one thread row per root and overwrites it, so each batch
     // must carry everything known about that root.
@@ -179,6 +198,7 @@ export async function runJobs(jobs, limits, io) {
   try {
     for (const job of jobs) {
       if (job.type === "bookmarks_until") await bookmarksUntil(run, io, job);
+      else if (job.type === "new_saves") await newSaves(run, io, job);
       else await context(run, io, job);
     }
   } catch (err) {
@@ -192,7 +212,7 @@ export async function runJobs(jobs, limits, io) {
     }
   }
   run.endedAt = io.now();
-  const { lastRequestAt, reprimes, primedFor, threadStates, searchPageLoads, ...out } = run;
+  const { lastRequestAt, reprimes, primedFor, threadStates, searchPageLoads, completed, ...out } = run;
   return out;
 }
 
@@ -330,6 +350,43 @@ async function bookmarksUntil(run, io, job) {
   state.wallMs = io.now() - started;
 }
 
+// The saves made since the last daily run (lib/daily.js): Bookmarks down to
+// `boundary`, the newest save that run handled, then context for the saves
+// above it, oldest first and at most maxSaves. `handled` is the newest save
+// whose context is complete together with every older one taken: a run the
+// request cap, a rate wait or an X signal cuts short still moves the
+// boundary past what it finished, and the rest waits for the next run. A
+// boundary X no longer lists (the save was removed) is not guessed past: no
+// context is fetched, `found` is false, and the caller decides.
+// boundary null is a first run: one page of Bookmarks, context for its
+// `newest` saves (0 by default), and its top post becomes the boundary.
+async function newSaves(run, io, job) {
+  const first = job.boundary === null;
+  await bookmarksUntil(run, io, { boundary: job.boundary ?? "0", after: 0, maxPages: first ? 1 : job.maxPages });
+  const { ids, boundaryIndex } = run.bookmarks;
+  const fresh = first ? ids.slice(0, job.newest) : boundaryIndex === null ? [] : ids.slice(0, boundaryIndex);
+  const taken = fresh.slice(-job.maxSaves).reverse();
+  run.newSaves = {
+    boundary: job.boundary,
+    found: first ? null : boundaryIndex !== null,
+    top: ids[0] ?? null,
+    new: fresh,
+    taken,
+    handled: first && !taken.length ? (ids[0] ?? null) : null,
+  };
+  if (!taken.length) return;
+  try {
+    await context(run, io, { type: "context", ids: taken, ...job.context });
+  } finally {
+    let handled = null;
+    for (const id of taken) {
+      if (!run.completed.has(id)) break;
+      handled = id;
+    }
+    run.newSaves.handled = handled;
+  }
+}
+
 function postRecord(id) {
   return {
     id,
@@ -374,6 +431,8 @@ async function context(run, io, job) {
       record.error = err.message;
     }
     record.wallMs += io.now() - started;
+    // A post that needs no search is complete once its permalinks are read.
+    if (!searchesFor(run, job, record).length) run.completed.add(record.id);
   }
   const searches = records.flatMap((record) => searchesFor(run, job, record));
   if (!searches.length) return;
@@ -383,6 +442,7 @@ async function context(run, io, job) {
     await search(run, io, s);
     s.record.wallMs += io.now() - started;
   }
+  for (const record of records) run.completed.add(record.id);
 }
 
 // One permalink in one reply order, followed through every cursor until

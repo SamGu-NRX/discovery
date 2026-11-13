@@ -2,6 +2,7 @@
 // into contract batches, sends them to the Worker, and runs scheduled sessions.
 
 import { captureToBatch } from "./lib/capture.js";
+import { DAILY_ALARM, dailyEnabled, dailyJobs, dailyWindow, nextDailyState, planAttempt, skippedDay } from "./lib/daily.js";
 import { acquireFetchRun, beatFetchRun, fetchRunHeldAnywhere, releaseFetchRun } from "./lib/fetchlock.js";
 import { focalTweetIdFromUrl, operationFromUrl } from "./lib/ops.js";
 import { dropStoredSince, enqueue, flush } from "./lib/outbox.js";
@@ -24,6 +25,7 @@ import {
   loadConfig,
   localDay,
   PAGE_SIGNAL_PREFIX,
+  pausedOrPausing,
   pendingPageSignals,
   recordProblem,
   setLocal,
@@ -44,6 +46,9 @@ async function setUp() {
   await chrome.alarms.create(FLUSH_ALARM, { periodInMinutes: 1 });
   await chrome.alarms.create(REPOLL_ALARM, { periodInMinutes: 60 });
   if (!(await chrome.alarms.get(SESSION_ALARM))) await scheduleNext();
+  // Chrome may start inside the 07:00–07:45 window; startDaily runs it then,
+  // or sets the alarm for the next start.
+  await startDaily().catch((err) => recordProblem("daily", err.message));
 }
 
 // Serializes passive back-off reporting: one report per pause.
@@ -65,6 +70,8 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     await flush().catch((err) => recordProblem("worker", err.message));
     await drainPageSignals().catch((err) => recordProblem("x", err.message));
     await backOffLock(sendPendingBackOff).catch((err) => recordProblem("worker", err.message));
+  } else if (alarm.name === DAILY_ALARM) {
+    await startDaily().catch((err) => recordProblem("daily", err.message));
   } else if (alarm.name === REPOLL_ALARM) {
     await startRepolls().catch((err) => recordProblem("lens", `re-poll: ${err.message}`));
   } else if (alarm.name === SESSION_ALARM) {
@@ -143,6 +150,12 @@ async function handle(message, sender) {
       if (sessionInfo() !== null) return { clearable: false, why: "a session is running" };
       if (await fetchRunHeldAnywhere()) return { clearable: false, why: "a fetch run is going" };
       return clearErrorPause(errorPauseVerdict);
+    case "daily-claim":
+      if (!fromExtensionPage) return { error: "only the daily page claims the daily run" };
+      return claimDaily(message);
+    case "daily-result":
+      if (!fromExtensionPage) return { error: "only the daily page reports the daily run" };
+      return recordDaily(message);
     case "fetch-signal":
       // X told a fetch run to back off: the same pause and report as a 429
       // seen in any tab.
@@ -361,4 +374,113 @@ let flushTimer = null;
 function scheduleFlush() {
   clearTimeout(flushTimer);
   flushTimer = setTimeout(() => flush().catch((err) => recordProblem("worker", err.message)), 3000);
+}
+
+// ---- the daily new-saves run (lib/daily.js) -------------------------------
+
+// One decision at a time: the alarm, Chrome starting, a claim, a result.
+const dailyLock = createLock();
+
+async function dailyStates() {
+  return getLocal("dailyFetch", {});
+}
+
+async function setDailyState(account, state) {
+  await setLocal({ dailyFetch: { ...(await dailyStates()), [account]: state } });
+}
+
+// Why a daily run cannot start now, or null. The archive's runner keeps a
+// fetch page open for its whole queue and between jobs, so an open
+// fetch.html counts as its run going even when no request is in flight;
+// the daily run never starts beside it.
+async function dailyBusy() {
+  if (await pausedOrPausing()) return `the extension is paused after an X signal (until ${await getLocal("pauseUntil", "a pending signal is handled")})`;
+  if (sessionInfo() !== null) return "a capture session is running";
+  if (await fetchRunHeldAnywhere()) return "a fetch run is going (the archive's)";
+  const pages = await chrome.runtime.getContexts({ contextTypes: ["TAB"] });
+  if (pages.some((c) => c.documentUrl?.includes("/fetch/fetch.html"))) return "a fetch page is open (the archive's queue)";
+  return null;
+}
+
+// From the alarm and from Chrome starting: runs today's daily fetch, waits,
+// retries in 15 minutes, or gives the day up, and sets the alarm for the
+// next step. The day's job goes to session storage for the page to claim.
+function startDaily() {
+  return dailyLock(async () => {
+    const now = Date.now();
+    const config = await loadConfig();
+    const account = await getLocal("lastAccount", null);
+    if (!dailyEnabled(config, account)) {
+      await chrome.alarms.create(DAILY_ALARM, { when: dailyWindow(now).tomorrow });
+      return;
+    }
+    const states = await dailyStates();
+    const state = states[account] ?? null;
+    const { dailyJob } = await chrome.storage.session.get("dailyJob");
+    // A page opened under 10 minutes ago that has not claimed yet, or a run
+    // already going from it, is today's run.
+    if (dailyJob && now - dailyJob.at < 10 * 60_000) return;
+    const plan = planAttempt(state, now, await dailyBusy());
+    if (plan.action === "run") {
+      await chrome.storage.session.set({ dailyJob: { account, at: now, boundary: state?.boundary ?? null } });
+      await setLocal({ dailyWaiting: null });
+      await chrome.windows.create({ url: chrome.runtime.getURL("fetch/daily.html?auto=daily"), focused: false, type: "normal", width: 900, height: 700 });
+      await chrome.alarms.create(DAILY_ALARM, { when: dailyWindow(now).tomorrow });
+    } else if (plan.action === "give_up") {
+      await setDailyState(account, skippedDay(state, plan.cause, now));
+      await setLocal({ dailyWaiting: null });
+      await recordProblem("daily", `daily fetch skipped today: ${plan.cause}`);
+      await chrome.alarms.create(DAILY_ALARM, { when: plan.at });
+    } else {
+      await setLocal({ dailyWaiting: plan.action === "retry" ? { since: new Date(now).toISOString(), cause: plan.cause, next: new Date(plan.at).toISOString() } : null });
+      await chrome.alarms.create(DAILY_ALARM, { when: plan.at });
+    }
+  });
+}
+
+// The daily page asks for its job. A scheduled page gets the one
+// startDaily stored; a manual test run (daily-now) is built here, and is
+// refused rather than queued while anything else is busy.
+function claimDaily({ manual, newest }) {
+  return dailyLock(async () => {
+    if (!manual) {
+      const { dailyJob } = await chrome.storage.session.get("dailyJob");
+      if (!dailyJob || Date.now() - dailyJob.at > 10 * 60_000) return { refused: "no daily run is scheduled for this page" };
+      return { account: dailyJob.account, jobs: dailyJobs(dailyJob.boundary) };
+    }
+    const account = await getLocal("lastAccount", null);
+    if (!account) return { refused: "open x.com once while logged in, so the account is known" };
+    const busy = await dailyBusy();
+    if (busy) return { refused: busy };
+    const n = Number.isInteger(newest) && newest > 0 ? Math.min(newest, 20) : 0;
+    const boundary = n ? null : ((await dailyStates())[account]?.boundary ?? null);
+    return { account, jobs: dailyJobs(boundary, { newest: n }) };
+  });
+}
+
+// The daily page's result: the account's next state, and a problem when
+// the run stopped. A scheduled page refused at its own start (something got
+// busy in between) is retried as busy, inside the window.
+function recordDaily({ manual, account, result }) {
+  return dailyLock(async () => {
+    const now = Date.now();
+    await chrome.storage.session.remove("dailyJob");
+    const states = await dailyStates();
+    const prev = states[account] ?? null;
+    if (result?.refused) {
+      if (!manual) {
+        const plan = planAttempt(prev, now, result.refused);
+        if (plan.action === "give_up") {
+          await setDailyState(account, skippedDay(prev, plan.cause, now));
+          await recordProblem("daily", `daily fetch skipped today: ${plan.cause}`);
+        }
+        if (plan.at) await chrome.alarms.create(DAILY_ALARM, { when: plan.at });
+      }
+      return { ok: true, boundary: prev?.boundary ?? null };
+    }
+    const { state, problem } = nextDailyState(prev, result, now, { manual: Boolean(manual) });
+    await setDailyState(account, state);
+    if (problem) await recordProblem("daily", problem);
+    return { ok: true, boundary: state.boundary };
+  });
 }

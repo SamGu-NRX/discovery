@@ -28,6 +28,7 @@
       <div id="row-running" hidden><dt>Running</dt><dd id="running" class="value"></dd></div>
       <div><dt>Last session</dt><dd id="last-session"></dd></div>
       <div id="row-next" hidden><dt>Next</dt><dd id="next-session" class="value"></dd></div>
+      <div id="row-daily" hidden><dt>Daily fetch</dt><dd id="daily"></dd></div>
       <div id="row-pause" hidden><dt>Paused until</dt><dd id="pause" class="value warn"></dd></div>
       <div id="row-problem" hidden><dt>Problem</dt><dd id="problem" class="problem"></dd></div>
     </dl>
@@ -46,6 +47,7 @@
         <label for="lens">Lens (only on a lens account)</label>
         <input id="lens" type="text" placeholder="none" spellcheck="false" />
         <label class="check"><input id="lens-baseline" type="checkbox" /> Next session records the baseline</label>
+        <label class="check"><input id="daily-fetch" type="checkbox" /> Fetch new saves daily at 07:00 Chicago</label>
         <div class="form-row">
           <button type="submit" class="secondary">Save</button>
           <span id="save-note" class="help" role="status"></span>

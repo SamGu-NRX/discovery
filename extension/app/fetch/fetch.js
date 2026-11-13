@@ -5,6 +5,7 @@
 
 import { FetchRefused, parseTemplate } from "../lib/fetchops.js";
 import { parseJobs, runJobs } from "../lib/fetchrun.js";
+import { deliveryOf, keepBundle } from "../lib/knowledge.js";
 import { getLocal, loadConfig, pausedOrPausing } from "../lib/store.js";
 import { doneRepolls, postStatus, reserveSession } from "../lib/worker-api.js";
 import { bookmarksUrl, historyBookmarksUrl, isMintedXUrl, permalinkUrl, searchUrl, xPath } from "../lib/xurl.js";
@@ -64,7 +65,55 @@ async function init() {
     if (reply?.clearable) setStatus(`pause cleared (${reply.basis})`, "ok");
     else setStatus(`pause not cleared: ${reply?.why ?? reply?.error ?? "no answer"}`, "bad");
   });
-  if (new URLSearchParams(location.search).get("auto") === "repoll") await autoRepoll();
+  const params = new URLSearchParams(location.search);
+  if (params.get("auto") === "repoll") await autoRepoll();
+  // daily.html is this page under its own title, so nothing that looks for
+  // "X fetch mode" windows takes it for an archive run.
+  else if (location.pathname.endsWith("/daily.html") && ["daily", "daily-now"].includes(params.get("auto"))) await autoDaily(params);
+}
+
+// The daily new-saves run (lib/daily.js) on daily.html.
+// - auto=daily: the service worker opened the page at 07:00 Chicago and
+//   holds the job; the page closes itself when done.
+// - auto=daily-now[&newest=N]: a manual test run, opened by hand. With
+//   newest, it takes the newest N saves and starts the boundary there;
+//   without, it runs from the stored boundary. It stays open with its status.
+// Either way the bundle is kept for the knowledge store (lib/knowledge.js)
+// and the service worker records the result, moving the boundary past the
+// saves the run finished.
+async function autoDaily(params) {
+  const manual = params.get("auto") === "daily-now";
+  const newest = Number(params.get("newest") ?? 0);
+  $("to-worker").checked = false;
+  const finish = (text, tone) => {
+    setStatus(text, tone);
+    if (!manual) setTimeout(() => window.close(), 5000);
+  };
+  const claim = await chrome.runtime.sendMessage({ type: "daily-claim", manual, newest });
+  if (!claim?.jobs) return finish(`daily fetch not started: ${claim?.refused ?? claim?.error ?? "no answer from the service worker"}`, "bad");
+  $("job").value = JSON.stringify(claim.jobs, null, 2);
+  const owner = crypto.randomUUID();
+  const refusal = await refuseToStart(owner);
+  if (refusal) {
+    await chrome.runtime.sendMessage({ type: "daily-result", manual, account: claim.account, result: { refused: refusal } });
+    return finish(`daily fetch not started: ${refusal}`, "bad");
+  }
+  let result;
+  try {
+    const bundle = await run(parseJobs(claim.jobs), owner);
+    lastBundle = bundle;
+    $("download").disabled = false;
+    const kept = await keepBundle(bundle, { account: claim.account, manual });
+    result = { newSaves: bundle.newSaves ?? null, stop: bundle.stop, requests: bundle.requests, delivery: deliveryOf(kept) };
+  } catch (err) {
+    result = { newSaves: null, stop: { reason: "error", detail: err.message }, requests: 0, delivery: null };
+  } finally {
+    await chrome.runtime.sendMessage({ type: "fetch-release", owner }).catch(() => {});
+  }
+  const answer = await chrome.runtime.sendMessage({ type: "daily-result", manual, account: claim.account, result });
+  const saves = result.newSaves;
+  const what = saves ? `${saves.taken.length} saves taken, boundary now ${answer?.boundary ?? "unchanged"}` : "no saves read";
+  finish(`daily fetch ${result.stop ? `stopped: ${result.stop.reason}: ${result.stop.detail}` : "finished"}; ${what}; bundle kept, not yet delivered`, result.stop ? "bad" : "ok");
 }
 
 // Opened by the service worker's hourly re-poll (background.js,

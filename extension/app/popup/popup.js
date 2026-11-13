@@ -1,3 +1,5 @@
+import { dailyEnabled } from "../lib/daily.js";
+import { keptBundles } from "../lib/knowledge.js";
 import { loadConfig } from "../lib/store.js";
 
 const $ = (id) => document.getElementById(id);
@@ -27,7 +29,7 @@ const GRANTED = [/^https:\/\/[^/]+\.workers\.dev$/];
 async function render() {
   const config = await loadConfig();
   const local = await chrome.storage.local.get([
-    "stats", "lastSession", "nextSessionAt", "pauseUntil", "lastProblem", "lastAccount",
+    "stats", "lastSession", "nextSessionAt", "pauseUntil", "lastProblem", "lastAccount", "dailyFetch", "dailyWaiting",
   ]);
   const { activeSession: record } = await chrome.storage.session.get("activeSession");
   // A finished session kept only until its status reaches the Worker is not running.
@@ -73,6 +75,22 @@ async function render() {
   $("row-next").hidden = !showNext;
   if (showNext) $("next-session").textContent = until(local.nextSessionAt);
 
+  // The daily new-saves run (lib/daily.js): its last run or skip, a wait in
+  // progress, and bundles kept for the knowledge store.
+  const daily = dailyEnabled(config, local.lastAccount);
+  $("row-daily").hidden = !daily;
+  if (daily) {
+    const last = local.dailyFetch?.[local.lastAccount]?.last;
+    const kept = (await keptBundles()).filter((b) => !b.delivered).length;
+    const parts = [];
+    if (local.dailyWaiting) parts.push(`waiting (${local.dailyWaiting.cause}); next try ${clock(local.dailyWaiting.next)}`);
+    else if (!last) parts.push("07:00 Chicago; no run yet");
+    else if (last.skipped) parts.push(`skipped ${ago(last.at)}: ${last.skipped}`);
+    else parts.push(`${ago(last.at)} · ${last.taken} saves${last.stop ? ` · stopped: ${last.stop}` : ""}${last.waiting ? ` · ${last.waiting} waiting` : ""}`);
+    if (kept) parts.push(`${kept} bundle${kept > 1 ? "s" : ""} kept, not yet delivered`);
+    $("daily").textContent = parts.join(" · ");
+  }
+
   const problem = local.lastProblem;
   const recentProblem = problem && Date.now() - Date.parse(problem.at) < 24 * 3600_000;
   $("row-problem").hidden = !recentProblem;
@@ -95,6 +113,7 @@ async function render() {
   if (document.activeElement !== $("worker-url")) $("worker-url").value = config.workerUrl;
   if (document.activeElement !== $("lens")) $("lens").value = config.lensId ?? "";
   $("lens-baseline").checked = config.lensBaseline;
+  $("daily-fetch").checked = daily;
   $("token").placeholder = config.ingestToken ? `Saved, ends in ${config.ingestToken.slice(-4)}` : "Paste the INGEST token";
 }
 
@@ -183,7 +202,7 @@ $("connection-form").addEventListener("submit", async (event) => {
     return;
   }
   const token = $("token").value.trim();
-  await updateConfig({ workerUrl: origin, ...(token ? { ingestToken: token } : {}), lensId: lensId || null, lensBaseline: $("lens-baseline").checked });
+  await updateConfig({ workerUrl: origin, ...(token ? { ingestToken: token } : {}), lensId: lensId || null, lensBaseline: $("lens-baseline").checked, dailyFetch: $("daily-fetch").checked });
   $("token").value = "";
   note.textContent = `Saved.${warning}`;
 });
