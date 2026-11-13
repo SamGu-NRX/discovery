@@ -31,7 +31,7 @@ $env:KNOWLEDGE_TOKEN = "<from ~/.agent-secrets/discovery-knowledge>"
 | `CF_ACCOUNT_ID`, `CF_BROWSER_TOKEN` | optional | ladder rung 2's Cloudflare Browser Rendering; without them rung 2 goes straight to r.jina.ai |
 | `GITHUB_TOKEN` | optional | raises the GitHub API limit from 60 requests an hour |
 | `KWORKER_CHROME_PROFILE` | optional | rung 4's Chrome profile, default `%LOCALAPPDATA%\kworker\chrome-profiles\pipeline`. It holds no logins, and kworker never types into a page |
-| `KWORKER_MODEL_CACHE` | optional | where whisper and embedding weights are downloaded, default `~/.cache/kworker`. Model weights only, never pipeline state |
+| `KWORKER_MODEL_CACHE` | optional | where whisper and embedding weights are downloaded, default `%LOCALAPPDATA%\kworker\models` (not `~/.cache`, which the Zephyrus's disk cleanup clears). Model weights only, never pipeline state |
 
 ## What each job does
 

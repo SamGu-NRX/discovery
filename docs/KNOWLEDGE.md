@@ -159,4 +159,15 @@ npx wrangler secret put GEMINI_API_KEY       # free-tier key; optional
 npx wrangler deploy
 ```
 
-For kworker's S3 path, create an R2 API token scoped to Object Read & Write on `x-knowledge` only (dashboard, R2, Manage API tokens) and store its access key id and secret on the Zephyrus in Windows Credential Manager. kworker reads them from the environment at start; they never enter the repo, D1 or R2.
+For kworker's S3 path, create an R2 API token scoped to Object Read & Write on `x-knowledge` only (dashboard, R2, Manage API tokens).
+
+### Credentials on the Zephyrus
+
+kworker reads two generic credentials from Windows Credential Manager when the matching environment variable is unset. They never enter the repo, D1, R2, a log or a message.
+
+| Target name | User name | Password | Replaces |
+| --- | --- | --- | --- |
+| `discovery-knowledge-token` | anything (`kworker`) | the production `KNOWLEDGE_TOKEN` | `KNOWLEDGE_TOKEN` |
+| `discovery-r2-s3` | the R2 API token's access key id | its secret access key | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` |
+
+Add one in Control Panel, Credential Manager, Windows Credentials, "Add a generic credential", or from a terminal with `cmdkey /generic:discovery-knowledge-token /user:kworker /pass` (it prompts for the password, so the token never sits in shell history). `R2_S3_ENDPOINT` (`https://<account id>.r2.cloudflarestorage.com`) is not secret and stays an environment variable.

@@ -52,3 +52,27 @@ def test_site_owns_repo(site, repo, owns):
     from kworker.links import site_owns_repo
 
     assert site_owns_repo(site, repo) is owns
+
+
+def test_no_x_refuses_x_pages_and_apis_not_the_media_cdn():
+    from types import SimpleNamespace
+
+    from kworker.api import Stats
+    from kworker.ctx import Ctx, XFetchRefused
+
+    ctx = Ctx(SimpleNamespace(no_x=True), None, Stats(), None, None)
+    for url in ("https://cdn.syndication.twimg.com/tweet-result?id=1", "https://x.com/a/status/1", "https://t.co/abc"):
+        with pytest.raises(XFetchRefused):
+            ctx.fetch("GET", url)
+    assert ctx.stats.fetches == {}
+    ctx._allowed("https://video.twimg.com/a.mp4")  # the media CDN stays open
+    ctx._allowed("https://api.fxtwitter.com/status/1")  # and fxtwitter, the lead's live source
+
+
+def test_long_data_uris_are_replaced_short_ones_kept():
+    from kworker.links import strip_data_uris
+
+    csv = "data:text/csv;charset=utf-8," + "a%2Cb%0A" * 500
+    out = strip_data_uris(f"[Download task data CSV]({csv}) and an icon data:image/png;base64,iVBORw0KGgo=")
+    assert out.startswith("[Download task data CSV](data:text/csv (inline file, 4,000 characters, not kept))")
+    assert "data:image/png;base64,iVBORw0KGgo=" in out

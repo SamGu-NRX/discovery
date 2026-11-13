@@ -7,6 +7,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import time
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -86,7 +87,21 @@ class KClient:
     # ---- plumbing ----
 
     def call(self, method: str, path: str, body: Any = None, **kw) -> Any:
-        r = self.http.request(method, path, json=body, **kw)
+        # Every /k/ write is idempotent (insert-or-ignore, upsert, a blob
+        # under its own hash), so a request the Worker dropped is sent again.
+        # A stage-a run lost a save to "Your worker restarted mid-request".
+        for attempt in range(4):
+            try:
+                r = self.http.request(method, path, json=body, **kw)
+            except (httpx.ConnectError, httpx.ReadError, httpx.RemoteProtocolError):
+                if attempt == 3:
+                    raise
+                time.sleep(2 * (attempt + 1))
+                continue
+            if r.status_code in (502, 503, 504) and attempt < 3:
+                time.sleep(2 * (attempt + 1))
+                continue
+            break
         if r.status_code >= 400:
             try:
                 err = r.json()

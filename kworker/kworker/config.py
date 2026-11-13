@@ -8,6 +8,8 @@ import socket
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import wincred
+
 
 class ConfigError(RuntimeError):
     pass
@@ -35,6 +37,13 @@ class Config:
     github_token: str | None
     chrome_profile: Path
     model_cache: Path
+    # Files an archive already downloaded: media by file name (sha-checked
+    # before use) and fxtwitter records by post id. They spare X the fetch.
+    media_dirs: tuple[Path, ...] = ()
+    x_cache: tuple[Path, ...] = ()
+    # Refuse every request to X's hosts (KWORKER_NO_X=1), so a run over an
+    # archive cannot compete with the archive's own fetch queue.
+    no_x: bool = False
 
     @property
     def cliproxy(self) -> bool:
@@ -55,6 +64,10 @@ def _need(name: str) -> str:
 
 def load() -> Config:
     s3_parts = {k: _get(k) for k in ("R2_S3_ENDPOINT", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY")}
+    if s3_parts["R2_S3_ENDPOINT"] and not (s3_parts["R2_ACCESS_KEY_ID"] or s3_parts["R2_SECRET_ACCESS_KEY"]):
+        cred = wincred.read(R2_CREDENTIAL)
+        if cred:
+            s3_parts["R2_ACCESS_KEY_ID"], s3_parts["R2_SECRET_ACCESS_KEY"] = cred
     given = [k for k, v in s3_parts.items() if v]
     if given and len(given) != len(s3_parts):
         missing = sorted(set(s3_parts) - set(given))
@@ -67,7 +80,7 @@ def load() -> Config:
     local = Path(os.environ.get("LOCALAPPDATA") or Path.home() / ".local" / "share")
     return Config(
         base_url=_need("KNOWLEDGE_URL").rstrip("/"),
-        token=_need("KNOWLEDGE_TOKEN"),
+        token=_token(),
         owner=_get("KWORKER_OWNER") or f"kworker@{socket.gethostname()}",
         # The gateway Claude Code itself uses on this machine, unless overridden.
         cliproxy_url=(_get("CLIPROXY_URL") or _get("ANTHROPIC_BASE_URL") or "").rstrip("/") or None,
@@ -80,6 +93,34 @@ def load() -> Config:
         # Outside the repo, so wiping kworker/ does not delete the profile, and
         # separate from every profile another thread drives.
         chrome_profile=Path(_get("KWORKER_CHROME_PROFILE") or local / "kworker" / "chrome-profiles" / "pipeline"),
-        # Model weights only (whisper, embeddings). Pipeline state never lives here.
-        model_cache=Path(_get("KWORKER_MODEL_CACHE") or Path.home() / ".cache" / "kworker"),
+        # Model weights only (whisper, embeddings); pipeline state never lives
+        # here. Not under ~/.cache: the Zephyrus's disk cleanup clears that
+        # folder (2026-11-12), and the weights then download again.
+        model_cache=Path(_get("KWORKER_MODEL_CACHE") or local / "kworker" / "models"),
+        media_dirs=_paths("KWORKER_MEDIA_DIRS"),
+        x_cache=_paths("KWORKER_X_CACHE"),
+        no_x=_get("KWORKER_NO_X") == "1",
     )
+
+
+# Windows Credential Manager targets (generic credentials) on the Zephyrus,
+# read when the environment does not carry the value; docs/KNOWLEDGE.md,
+# "Credentials on the Zephyrus".
+TOKEN_CREDENTIAL = "discovery-knowledge-token"
+R2_CREDENTIAL = "discovery-r2-s3"
+
+
+def _token() -> str:
+    v = _get("KNOWLEDGE_TOKEN")
+    if v:
+        return v
+    cred = wincred.read(TOKEN_CREDENTIAL)
+    if cred and cred[1]:
+        return cred[1]
+    raise ConfigError(f"KNOWLEDGE_TOKEN is not set and Windows Credential Manager has no generic credential {TOKEN_CREDENTIAL!r}")
+
+
+def _paths(name: str) -> tuple[Path, ...]:
+    """Read-only folders another process filled (an archive's media, its
+    fxtwitter records). kworker reads from them and never writes."""
+    return tuple(Path(p) for p in (_get(name) or "").split(os.pathsep) if p)

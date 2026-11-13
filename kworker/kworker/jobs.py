@@ -37,13 +37,20 @@ def save_job(ctx: Ctx, payload: dict) -> dict:
 
     children: list[dict] = []
     seen_media = set()
-    for t in exp["thread"]:
-        for m in t.get("media", []):
+    quoted = exp.get("quoted") or {}
+    owners = [(t["id"], t.get("media", [])) for t in exp["thread"]] + [(quoted.get("id") or "quoted", quoted.get("media") or [])]
+    for owner, items in owners:
+        for m in items:
             if m["source_url"] in seen_media:
                 continue
             seen_media.add(m["source_url"])
             kind = "video" if m["kind"] in ("video", "gif") else "image"
-            children.append({"kind": kind, "key": url_hash(canonical_url(m["source_url"])), "source_url": m["source_url"], "media_kind": m["kind"], "post_id": t["id"]})
+            child = {"kind": kind, "key": url_hash(canonical_url(m["source_url"])), "source_url": m["source_url"], "media_kind": m["kind"], "post_id": owner}
+            if exp.get("live"):
+                child["live"] = True
+            # Where the archive already has the file (read-only, sha-checked).
+            child.update({k: m[k] for k in ("sha256", "local_file") if m.get(k)})
+            children.append(child)
 
     wanted: list[tuple[str, str]] = []  # (url, from)
     for l in exp["post"]["links"]:
@@ -65,7 +72,7 @@ def save_job(ctx: Ctx, payload: dict) -> dict:
         if host in _MEDIA_HOSTS or canon in seen_links:
             continue
         seen_links.add(canon)
-        children.append({"kind": "link", "key": url_hash(canon), "url": url, "from": src})
+        children.append({"kind": "link", "key": url_hash(canon), "url": url, "from": src, **({"live": True} if exp.get("live") else {})})
 
     ids = []
     for c in children:
@@ -101,8 +108,29 @@ def _heartbeat(cfg: Config, job: dict, stop: threading.Event) -> None:
             c.post(f"/k/jobs/{job['id']}/heartbeat", json={"owner": cfg.owner, "lease_token": job["lease_token"], "ttl_s": ttl})
 
 
+# kworker stops claiming below this much free space on the drive its
+# scratch files and the local Worker state share. C: on the Zephyrus filled up
+# on 2026-11-12 and swings by about 30 GB within minutes, so the margin is wide.
+MIN_FREE_BYTES = 15 * 1024**3
+
+
+class DiskLow(RuntimeError):
+    pass
+
+
+def check_disk(path: str | None = None) -> int:
+    import shutil
+    import tempfile
+
+    free = shutil.disk_usage(path or tempfile.gettempdir()).free
+    if free < MIN_FREE_BYTES:
+        raise DiskLow(f"blocked: {free / 1024**3:.1f} GB free, under the {MIN_FREE_BYTES // 1024**3} GB kworker needs before claiming a job")
+    return free
+
+
 def run_one(cfg: Config, kinds: list[str]) -> dict | None:
     """Claims and runs one job. None when nothing is claimable."""
+    check_disk()
     with job_ctx(cfg) as ctx:
         # A short first lease; the heartbeat extends it to the kind's TTL, so a
         # crashed worker's job is free again within ten minutes.

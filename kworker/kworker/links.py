@@ -20,16 +20,30 @@ import httpx
 
 from .api import canonical_json
 from .canon import canonical_url, is_immutable, url_hash
-from .ctx import Ctx
+from .ctx import X_HOSTS, Ctx
 from .models import cached_code
 
-EXTRACTOR = ("code/trafilatura", "trafilatura-2.3.1+v1")
+EXTRACTOR = ("code/trafilatura", "trafilatura-2.3.1+v2")  # v2: long data: URIs replaced
 # Characters of a page's extracted text kept in a bundle, in full in both
 # bundle.json and bundle.md. The first blind grade marked a page cut at 6,000
 # characters as not preserved. 200,000 keeps bundle.json well under the 1 MiB
 # knowledge_bundle reads.
 TEXT_MAX = 200_000
 THIN = 400  # extracted characters below which a page is probably a JS shell
+# A data: URI this long is a file inlined into the page, not text. The second
+# blind grade flagged a CSV download link on postplan.dev that filled a
+# bundle.md with one enormous line.
+DATA_URI_MAX = 200
+_DATA_URI = re.compile(r"data:([\w.+-]+/[\w.+-]+)?((?:;[\w.+-]+(?:=[\w.+-]+)?)*),([^\s)\]\"'<>]{%d,})" % DATA_URI_MAX)
+
+
+def strip_data_uris(text: str) -> str:
+    """Replaces each long inline data: URI with a note of its type and size."""
+
+    def note(m: re.Match) -> str:
+        return f"data:{m.group(1) or 'text/plain'} (inline file, {len(m.group(3)):,} characters, not kept)"
+
+    return _DATA_URI.sub(note, text)
 
 _GH_REPO = re.compile(r"https?://(?:www\.)?github\.com/([A-Za-z0-9-]+)/([A-Za-z0-9_.-]+)")
 _GH_NOT_OWNERS = {
@@ -153,6 +167,12 @@ def _xml(text: str, tag: str, nth: int) -> str:
 
 
 def x_post(ctx: Ctx, status_id: str, url: str) -> Fetched:
+    cached = None if ctx.live else _x_from_cache(ctx, status_id, url)
+    if cached is not None:
+        return cached
+    fx = _x_from_fxtwitter(ctx, status_id, url)
+    if fx is not None:
+        return fx
     # The token react-tweet computes for the public syndication endpoint.
     token = _syndication_token(status_id)
     r = ctx.fetch("GET", f"https://cdn.syndication.twimg.com/tweet-result?id={status_id}&token={token}&lang=en")
@@ -165,6 +185,40 @@ def x_post(ctx: Ctx, status_id: str, url: str) -> Fetched:
     doc = f"@{user.get('screen_name')} ({user.get('name')}), {j.get('created_at')}:\n\n{j.get('text', '')}"
     meta = {"x_post": {"id": status_id, "author_handle": user.get("screen_name"), "text": j.get("text"), "created_at": j.get("created_at")}}
     return _adapter(url, "x_syndication", meta, doc, "X syndication JSON")
+
+
+def _x_from_cache(ctx: Ctx, status_id: str, url: str) -> Fetched | None:
+    """An fxtwitter record the archive already holds (KWORKER_X_CACHE), so a
+    run over archived saves adds nothing to X's load."""
+    for d in ctx.cfg.x_cache:
+        p = d / f"{status_id}.json"
+        if not p.is_file():
+            continue
+        t = json.loads(p.read_text(encoding="utf-8")).get("tweet") or {}
+        if not t.get("text") and not t.get("raw_text"):
+            continue
+        author = t.get("author") or {}
+        text = t.get("text") or (t.get("raw_text") or {}).get("text", "")
+        ctx.stats.cache_hits["x_archive"] += 1
+        doc = f"@{author.get('screen_name')} ({author.get('name')}), {t.get('created_at')}:\n\n{text}"
+        meta = {"x_post": {"id": status_id, "author_handle": author.get("screen_name"), "text": text, "created_at": t.get("created_at")}}
+        return _adapter(url, "x_fxtwitter_archive", meta, doc, "fxtwitter record from the archive")
+    return None
+
+
+def _x_from_fxtwitter(ctx: Ctx, status_id: str, url: str) -> Fetched | None:
+    """fxtwitter's public API, the source the archive itself used."""
+    r = ctx.fetch("GET", f"https://api.fxtwitter.com/status/{status_id}")
+    if r.status_code != 200:
+        return None
+    t = r.json().get("tweet") or {}
+    if not t:
+        return None
+    author = t.get("author") or {}
+    text = t.get("text") or (t.get("raw_text") or {}).get("text", "")
+    doc = f"@{author.get('screen_name')} ({author.get('name')}), {t.get('created_at')}:\n\n{text}"
+    meta = {"x_post": {"id": status_id, "author_handle": author.get("screen_name"), "text": text, "created_at": t.get("created_at")}}
+    return _adapter(url, "x_fxtwitter", meta, doc, "fxtwitter API")
 
 
 def _syndication_token(status_id: str) -> str:
@@ -317,9 +371,16 @@ def rung3(ctx: Ctx, canon: str) -> Fetched:
 
 
 def rung4(ctx: Ctx, canon: str) -> Fetched:
+    from playwright.sync_api import Error as PlaywrightError
+
     from .browser import render
 
-    html, final, status = render(ctx, canon)
+    try:
+        html, final, status = render(ctx, canon)
+    except PlaywrightError as e:
+        # A timeout or an unresolvable host is this rung's result, not a job
+        # failure (stage a lost two link jobs to it).
+        raise RuntimeError(f"browser: {str(e).splitlines()[0][:200]}") from e
     f = Fetched(4, "ok", final, html.encode("utf-8"), "text/html; charset=utf-8", status, note="Playwright, headed Chrome profile pipeline")
     if status in (404, 410):
         f.status, f.note = "not_found", f"HTTP {status} in the browser"
@@ -339,16 +400,16 @@ def extract(ctx: Ctx, content_sha: str, data: bytes, mime: str, url: str) -> tup
 
     def compute() -> tuple[bytes, str]:
         if mime == ADAPTER_MIME:
-            return json.loads(data)["doc"].encode("utf-8"), "text/markdown; charset=utf-8"
+            return strip_data_uris(json.loads(data)["doc"]).encode("utf-8"), "text/markdown; charset=utf-8"
         if "html" not in mime:
-            return data, "text/markdown; charset=utf-8"
+            return strip_data_uris(data.decode("utf-8", "replace")).encode("utf-8"), "text/markdown; charset=utf-8"
         import trafilatura
 
         html = data.decode("utf-8", "replace")
         text = trafilatura.extract(html, url=url, output_format="markdown", include_links=True, include_tables=True, favor_recall=True) or ""
         meta = trafilatura.extract_metadata(html, default_url=url)
         title = meta.title if meta and meta.title else ""
-        return (f"# {title}\n\n{text}" if title else text).encode("utf-8"), "text/markdown; charset=utf-8"
+        return strip_data_uris(f"# {title}\n\n{text}" if title else text).encode("utf-8"), "text/markdown; charset=utf-8"
 
     sha, _ = cached_code(ctx, "extract", content_sha, EXTRACTOR[0], EXTRACTOR[1], compute)
     text = ctx.api.get_blob(sha).decode("utf-8")
@@ -366,7 +427,9 @@ def link_job(ctx: Ctx, payload: dict) -> dict:
     h = url_hash(canon)
     prior = ctx.api.lookup_fetches([h]).get(h)
     revalidate = payload.get("revalidate", False)
-    if prior and prior["status"] in ("ok", "not_found", "blocked") and (prior["immutable"] or not revalidate):
+    live = payload.get("live", False)
+    ctx.live = live
+    if prior and prior["status"] in ("ok", "not_found", "blocked") and (prior["immutable"] or not revalidate) and not live:
         ctx.stats.cache_hits["fetch"] += 1
         return _result(ctx, payload, canon, prior, cached=True)
 
@@ -377,9 +440,15 @@ def link_job(ctx: Ctx, payload: dict) -> dict:
     got: Fetched | None = None
     rungs = [(0, lambda: rung0(ctx, canon)), (1, lambda: rung1(ctx, canon, prior)), (2, lambda: rung2(ctx, canon)), (3, lambda: rung3(ctx, canon)), (4, lambda: rung4(ctx, canon))]
     worst: Fetched | None = None
+    on_x = host in X_HOSTS
     for n, fn in rungs:
         if n < start and n != 0:
             attempts.append({"rung": n, "skipped": f"domain_policy start_rung {start}"})
+            continue
+        if n > 0 and on_x and ctx.cfg.no_x:
+            # Proxies and the browser would still load X; only the archive's
+            # own record (rung 0) may answer.
+            attempts.append({"rung": n, "status": "blocked", "note": "X fetches are off (KWORKER_NO_X=1)"})
             continue
         t0 = time.monotonic()
         try:
