@@ -6,7 +6,7 @@
 import { FetchRefused, parseTemplate } from "../lib/fetchops.js";
 import { parseJobs, runJobs } from "../lib/fetchrun.js";
 import { getLocal, loadConfig, pausedOrPausing } from "../lib/store.js";
-import { postStatus, reserveSession } from "../lib/worker-api.js";
+import { doneRepolls, postStatus, reserveSession } from "../lib/worker-api.js";
 import { bookmarksUrl, historyBookmarksUrl, isMintedXUrl, permalinkUrl, searchUrl, xPath } from "../lib/xurl.js";
 
 const $ = (id) => document.getElementById(id);
@@ -57,6 +57,38 @@ async function init() {
     setStatus("stopping after the current request…");
   });
   $("download").addEventListener("click", () => lastBundle && download(lastBundle));
+  if (new URLSearchParams(location.search).get("auto") === "repoll") await autoRepoll();
+}
+
+// Opened by the service worker's hourly re-poll (background.js,
+// startRepolls): one TweetDetail per due post, batches to the Worker, the
+// posts that were fetched marked done, then the tab closes. No bundle is
+// downloaded.
+async function autoRepoll() {
+  const { repollJob: job } = await chrome.storage.session.get("repollJob");
+  await chrome.storage.session.remove("repollJob");
+  if (!job?.ids?.length || Date.now() - job.at > 10 * 60_000) return window.close();
+  // The lens may have been cleared since the alarm queued this.
+  if ((await loadConfig()).lensId !== job.lensId) return window.close();
+  $("to-worker").checked = true;
+  const parsed = parseJobs({
+    limits: { detailCapPerPost: 1 },
+    jobs: [{ type: "context", ids: job.ids, rankings: ["Relevance"], branches: false, upstream: false, quotes: false, mentions: false, links: false, conversation: false }],
+  });
+  const owner = crypto.randomUUID();
+  const refusal = await refuseToStart(owner);
+  if (refusal) {
+    setStatus(`re-poll skipped: ${refusal}`, "bad");
+    return setTimeout(() => window.close(), 5000);
+  }
+  try {
+    const bundle = await run(parsed, owner);
+    const fetched = Object.values(bundle.context).filter((c) => c.detailRequests > 0 && !c.error).map((c) => c.id);
+    if (fetched.length) await doneRepolls(await loadConfig(), job.account, fetched);
+  } finally {
+    await chrome.runtime.sendMessage({ type: "fetch-release", owner }).catch(() => {});
+    window.close();
+  }
 }
 
 function setStatus(text, tone = "") {

@@ -19,7 +19,13 @@
       selectTab(e.currentTarget);
       graphql("HomeTimeline", { cursor: "page2" }, true);
     });
-    graphql("HomeTimeline", {}, false);
+    // Like X, one article per post, each with a time link to its permalink.
+    graphql("HomeTimeline", {}, false).then((text) => {
+      const entries = JSON.parse(text).data.home.home_timeline_urt.instructions.flatMap((i) => i.entries ?? []);
+      const idOf = (c) => { const r = c?.tweet_results?.result; return r?.rest_id ?? r?.tweet?.rest_id; };
+      const ids = entries.flatMap((e) => (e.entryId.startsWith("promoted-") ? [] : e.content?.items ? e.content.items.map((i) => idOf(i.item?.itemContent)) : [idOf(e.content?.itemContent)])).filter(Boolean);
+      document.querySelector("main").insertAdjacentHTML("afterbegin", ids.map((id) => '<article style="height:420px"><a href="/u/status/' + id + '"><time>1h</time></a></article>').join(""));
+    });
     // A login prompt that appears over the timeline later, on the same URL.
     if (location.hash === "#late-login") {
       setTimeout(() => document.body.insertAdjacentHTML("beforeend", '<input type="password" name="password">'), 9000);

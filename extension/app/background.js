@@ -27,9 +27,11 @@ import {
   setLocal,
   updatePageState,
 } from "./lib/store.js";
-import { pauseFrom, postStatus } from "./lib/worker-api.js";
+import { dueRepolls, pauseFrom, postStatus } from "./lib/worker-api.js";
 
 const FLUSH_ALARM = "flush";
+// Lens metric re-polls (docs/LENS.md): checked hourly.
+const REPOLL_ALARM = "lens-repoll";
 // X's GraphQL error code for "Rate limit exceeded"; it can arrive with HTTP 200.
 const RATE_LIMIT_CODE = 88;
 
@@ -38,6 +40,7 @@ chrome.runtime.onStartup.addListener(() => setUp());
 
 async function setUp() {
   await chrome.alarms.create(FLUSH_ALARM, { periodInMinutes: 1 });
+  await chrome.alarms.create(REPOLL_ALARM, { periodInMinutes: 60 });
   if (!(await chrome.alarms.get(SESSION_ALARM))) await scheduleNext();
 }
 
@@ -60,6 +63,8 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     await flush().catch((err) => recordProblem("worker", err.message));
     await drainPageSignals().catch((err) => recordProblem("x", err.message));
     await backOffLock(sendPendingBackOff).catch((err) => recordProblem("worker", err.message));
+  } else if (alarm.name === REPOLL_ALARM) {
+    await startRepolls().catch((err) => recordProblem("lens", `re-poll: ${err.message}`));
   } else if (alarm.name === SESSION_ALARM) {
     const result = (await intervalElapsed()) ? await startSession("alarm") : { started: false };
     if (!result.started) await scheduleNext();
@@ -202,10 +207,12 @@ async function handleCapture(message, tabId) {
     account,
     session_id: session ? session.id : await passiveSessionId(),
     mode: inSession ? "active" : "passive",
+    // A lens session's captures name the lens (docs/LENS.md).
+    lensId: session?.lensId ?? null,
     batch: result.batch,
   });
   if (!queued) return { ignored: true };
-  if (session) noteSessionCapture(session.id, { operation, postIds });
+  if (session) noteSessionCapture(session.id, { operation, postIds, posts: result.batch.posts });
   scheduleFlush();
   return { posts: postIds.length };
 }
@@ -305,6 +312,27 @@ async function sendPendingBackOff() {
   } catch (err) {
     await recordProblem("worker", `back-off status not reported yet: ${err.message}`);
   }
+}
+
+// Opens the fetch page in a background tab to re-fetch the metrics of a lens
+// account's flagged posts that are due. The page runs one TweetDetail per
+// post through fetch mode, with all of fetch mode's limits, tells the Worker
+// they are done, and closes itself. Nothing happens without a lens, a Worker,
+// or posts due, or while the extension is paused.
+async function startRepolls() {
+  const config = await loadConfig();
+  if (!config.lensId || !config.workerUrl || !config.ingestToken || config.mode === "off") return;
+  const account = await getLocal("lastAccount", null);
+  if (!account || (await getLocal("pauseUntil", null)) > new Date().toISOString()) return;
+  // One re-poll at a time: a job still waiting for its tab, or a fetch run
+  // going, waits for the next hour.
+  const { repollJob, fetchRun } = await chrome.storage.session.get(["repollJob", "fetchRun"]);
+  if (repollJob && Date.now() - repollJob.at < 10 * 60_000) return;
+  if (fetchRun && Date.now() - fetchRun.heartbeatAt < 120_000) return;
+  const { post_ids: ids = [] } = await dueRepolls(config, account);
+  if (!ids.length) return;
+  await chrome.storage.session.set({ repollJob: { account, lensId: config.lensId, ids, at: Date.now() } });
+  await chrome.tabs.create({ url: chrome.runtime.getURL("fetch/fetch.html?auto=repoll"), active: false });
 }
 
 // Passive captures share one session id per local day.

@@ -32,7 +32,7 @@ let context;
 let worker;
 let mock;
 let extensionId;
-const site = { homeIsLoginWall: false, homeRedirect: null, homeWithoutTimeline: false, graphqlStatus: 200, clicks: [], pages: [], requests: 0 };
+const site = { lensAccount: "fixtureuser", lensLabels: "ok", homeIsLoginWall: false, homeRedirect: null, homeWithoutTimeline: false, graphqlStatus: 200, clicks: [], pages: [], requests: 0 };
 // K in app/lib/session.js: the most requests a session window may make to X
 // before X shows it a timeline.
 const K = 50;
@@ -346,6 +346,66 @@ test("fetch mode: pages learn the templates, every request is a paced GET of a r
   await page.close();
 });
 
+test("a lens session reads the home feed by dwell alone, opens its one on-topic post, and sends its reads and lens-tagged batches", async () => {
+  await configure({ mode: "passive", account: "fixtureuser", lensId: "harness", lensMaxPosts: 5, lensMaxMinutes: 3 });
+  await worker.evaluate(async () => {
+    const keys = (await chrome.storage.local.getKeys()).filter((k) => k.startsWith("pageSignal:"));
+    await chrome.storage.local.remove([...keys, "backOffReportedUntil", "pendingBackOff"]);
+    await chrome.storage.session.remove(["activeSession", "fetchRun"]);
+  });
+  const startedAt = mock.requests.length;
+  const popup = await context.newPage();
+  await popup.goto(`chrome-extension://${extensionId}/popup/popup.html`);
+  await popup.click("#run");
+  const status = await mock.waitFor((r) => r.path === "/ingest/x/status", { after: startedAt, timeoutMs: 180_000 });
+  assert.equal(status.body.status, "ok", status.body.detail);
+
+  const run = mock.requests.slice(startedAt);
+  const reads = run.filter((r) => r.path === "/lenses/harness/reads").flatMap((r) => r.body.reads);
+  assert.deepEqual(reads.map((r) => [r.post_id, r.action]).sort(), [["101", "open"], ["102", "skip"], ["103", "skip"], ["104", "skip"], ["105", "skip"]]);
+  assert.match(status.body.detail, /lens harness: 5 read, 1 opened/);
+  const open = reads.find((r) => r.post_id === "101");
+  assert.ok(open.dwell_ms >= 30_000 && open.dwell_ms <= 50_000, `feed plus permalink dwell was ${open.dwell_ms} ms`);
+  assert.ok(reads.filter((r) => r.action === "skip").every((r) => r.dwell_ms >= 750 && r.dwell_ms <= 1250));
+  assert.ok(run.filter((r) => r.path === "/lenses/harness/reads").every((r) => r.body.session_id === status.body.session_id));
+  assert.ok(site.pages.includes("/i/status/101"), "the open post was read on its permalink");
+  assert.ok(!site.pages.includes("/i/bookmarks"), "a lens session reads only its feed");
+  const ingests = run.filter((r) => r.path === "/ingest/x" && r.body.session_id === status.body.session_id);
+  // Captures before the lens was verified for this account go untagged;
+  // those after (the permalink's) carry it.
+  assert.ok(ingests.some((r) => r.body.lens_id === "harness"));
+  assert.ok(ingests.every((r) => r.body.lens_id === undefined || r.body.lens_id === "harness"));
+  assert.deepEqual(site.clicks, []);
+  await popup.close();
+  await configure({ lensId: null });
+});
+
+test("a lens of another account, or labels the reader cannot use, end the session without pausing X and without lens-tagged batches", async () => {
+  for (const [name, change, detail] of [
+    ["another account's lens", { lensAccount: "someoneelse" }, /lens harness is not a lens of @fixtureuser/],
+    ["an action the reader does not know", { lensLabels: "bad" }, /labels are unusable: action "like"/],
+  ]) {
+    Object.assign(site, { lensAccount: "fixtureuser", lensLabels: "ok" }, change);
+    await configure({ mode: "passive", account: "fixtureuser", lensId: "harness", lensMaxPosts: 5, lensMaxMinutes: 3 });
+    await worker.evaluate(() => chrome.storage.session.remove(["activeSession", "fetchRun"]));
+    const startedAt = mock.requests.length;
+    const popup = await context.newPage();
+    await popup.goto(`chrome-extension://${extensionId}/popup/popup.html`);
+    await popup.click("#run");
+    const status = await mock.waitFor((r) => r.path === "/ingest/x/status", { after: startedAt, timeoutMs: 120_000 });
+    assert.equal(status.body.status, "ok", name);
+    assert.match(status.body.detail, detail, name);
+    const pauseUntil = await worker.evaluate(async () => (await chrome.storage.local.get("pauseUntil")).pauseUntil);
+    assert.ok(!pauseUntil || Date.parse(pauseUntil) < Date.now(), `${name}: X is not paused`);
+    const run = mock.requests.slice(startedAt);
+    assert.ok(!run.some((r) => r.path === "/ingest/x" && r.body.lens_id), `${name}: no batch carries the lens`);
+    assert.ok(!run.some((r) => r.path === "/lenses/harness/reads" && r.body.reads.some((x) => !["skip", "glance", "open"].includes(x.action))), name);
+    await popup.close();
+  }
+  Object.assign(site, { lensAccount: "fixtureuser", lensLabels: "ok" });
+  await configure({ lensId: null });
+});
+
 async function startFakeX(dir) {
   const key = join(dir, "key.pem");
   const cert = join(dir, "cert.pem");
@@ -432,6 +492,13 @@ function startMockWorker() {
       res.setHeader("content-type", "application/json");
       if (req.url.startsWith("/x/detail-queue")) return res.end(JSON.stringify({ post_ids: ["200"], pause_until: null }));
       if (req.url === "/x/sessions/start") return res.end("{}");
+      // Lens routes (docs/LENS.md): one lens for the fixture account; 101 is
+      // labeled open, every other post skip.
+      if (req.url.startsWith("/lenses?account=")) return res.end(JSON.stringify({ lenses: [{ id: "harness", account: site.lensAccount }] }));
+      if (req.url === "/lenses/harness/label") {
+        const labels = record.body.posts.map((p) => ({ id: p.id, action: site.lensLabels === "bad" ? "like" : p.id === "101" ? "open" : "skip", taste: p.id === "101" ? 0.9 : 0.1, novelty: 1, project: 0 }));
+        return res.end(JSON.stringify({ source: "model", labels }));
+      }
       if (req.url === "/ingest/x") return res.end(JSON.stringify({ posts_upserted: 0, sightings: 0, new_posts: 0, candidates_created: 0 }));
       return res.end("{}");
     });

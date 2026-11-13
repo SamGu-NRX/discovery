@@ -9,6 +9,10 @@
 //   /gone.xml   always 404, like the YouTube channel feed since 2026-11-04
 //   /t3-webhook stand-in for the T3 webhook; records each POST body and
 //               answers with state.webhookStatus
+//   /v1/embeddings, /v1/chat/completions  OpenAI-compatible stand-ins for the
+//               lens model adapter (src/lens.ts). An embedding counts topic
+//               words, so tests can say which posts sit near a centroid; the
+//               chat answer depends on state.labelReply.
 //
 // Usage: node fixtures/server.mjs [port]   (default 8799)
 
@@ -30,6 +34,15 @@ export function createFixture() {
     hits: [],
     webhooks: [],
     webhookStatus: 200,
+    // echo: label by topic words; garbage: answer with text that is not JSON.
+    labelReply: "echo",
+    chats: [],
+  };
+  // Axes of the stand-in embedding; every text also gets a small constant.
+  const AXES = ["agent", "claude", "codex", "mcp", "harness", "memory", "recipe", "football"];
+  const embedding = (text) => {
+    const lower = text.toLowerCase();
+    return AXES.map((w) => lower.split(w).length - 1 + 0.01);
   };
 
   const atom = () =>
@@ -70,11 +83,36 @@ export function createFixture() {
           case "/control/webhook-status":
             state.webhookStatus = b.status;
             return send(200, "{}");
+          case "/control/label-reply":
+            state.labelReply = b.mode;
+            return send(200, "{}");
+          case "/control/chats":
+            return send(200, JSON.stringify(state.chats));
           case "/control/atom":
             return send(200, atom(), { "content-type": "application/atom+xml" });
           default:
             return send(404, "unknown control");
         }
+      });
+      return;
+    }
+
+    if ((url.pathname === "/v1/embeddings" || url.pathname === "/v1/chat/completions") && req.method === "POST") {
+      let raw = "";
+      req.on("data", (c) => (raw += c));
+      req.on("end", () => {
+        const b = JSON.parse(raw);
+        if (url.pathname === "/v1/embeddings") {
+          // A batch holding this marker fails, so a test can make one
+          // account's refresh fail before it writes anything.
+          if (b.input.some((t) => t.includes("EMBED-FAIL"))) return send(500, "fixture embedding failure");
+          return send(200, JSON.stringify({ data: b.input.map((t, index) => ({ index, embedding: embedding(t) })) }), { "content-type": "application/json" });
+        }
+        state.chats.push(b);
+        const { posts } = JSON.parse(b.messages[1].content);
+        const action = (t) => (/mcp/i.test(t) ? "open" : /agent/i.test(t) ? "glance" : "skip");
+        const content = state.labelReply === "garbage" ? "I think these are good posts." : JSON.stringify({ labels: posts.map((p) => ({ id: p.id, action: action(p.text) })) });
+        send(200, JSON.stringify({ choices: [{ message: { role: "assistant", content } }] }), { "content-type": "application/json" });
       });
       return;
     }

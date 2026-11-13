@@ -291,6 +291,11 @@ function normalizeTweet(ctx, t) {
   if (typeof name !== "string") fail("author name");
   const authorId = user.rest_id ?? legacy.user_id_str;
   if (typeof authorId !== "string" || !authorId) fail("author rest_id");
+  // Whether the logged-in account follows the author: relationship_perspectives
+  // in current payloads, legacy.following in older ones, null when X sends
+  // neither (a lens reads this as a signal, never as a requirement).
+  const following = user.relationship_perspectives?.following ?? user.legacy?.following;
+  const authorFollowed = typeof following === "boolean" ? following : null;
 
   const note = t.note_tweet?.note_tweet_results?.result;
   let text;
@@ -354,6 +359,7 @@ function normalizeTweet(ctx, t) {
       in_reply_to_id: inReplyTo,
       quoted_id: quotedId,
       retweet_of_id: retweetOf,
+      author_followed: authorFollowed,
       urls,
       media,
       metrics: {

@@ -267,6 +267,17 @@ input {
   font-size: 12px;
 }
 
+label.check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text);
+}
+
+label.check input {
+  width: auto;
+}
+
 .form-row {
   display: flex;
   align-items: center;
