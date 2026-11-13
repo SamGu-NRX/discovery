@@ -108,10 +108,16 @@ export function knowledgeTool(env: Env, name: string, args: Record<string, unkno
   return blob(env, args);
 }
 
+const DIGEST_ARGS = new Set(["since", "cursor", "limit"]);
+
 // The page is built as JSON text for the route; MCP needs it as an object
 // for structuredContent. Parsing at most 30 KiB costs well under a
 // millisecond.
 async function digestTool(env: Env, a: Record<string, unknown>) {
+  // The inputSchema says additionalProperties: false; a misspelt argument
+  // (lmit) would otherwise be dropped and the call run with the default.
+  const unknown = Object.keys(a).filter((k) => !DIGEST_ARGS.has(k));
+  if (unknown.length) invalid(`unknown argument ${unknown.join(", ")}: knowledge_digest takes since, cursor and limit`);
   return JSON.parse(await digestPage(env, { since: a.since, cursor: a.cursor, limit: a.limit }, "card_untrusted"));
 }
 

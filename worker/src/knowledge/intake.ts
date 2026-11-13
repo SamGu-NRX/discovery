@@ -116,7 +116,7 @@ export interface DigestArgs {
 
 // since: epoch milliseconds or the documented ISO form, inside Date's range.
 function sinceMs(raw: unknown): number {
-  if (raw === undefined || raw === null || raw === "") invalid("since must be set: an ISO time (2026-11-13T07:00:00Z) or epoch milliseconds");
+  if (raw === undefined || raw === "") invalid("since must be set: an ISO time (2026-11-13T07:00:00Z) or epoch milliseconds");
   let ms: number;
   if (typeof raw === "number") {
     if (!Number.isInteger(raw) || raw < 0) invalid("since in epoch milliseconds must be a whole number of at least 0");
@@ -129,14 +129,15 @@ function sinceMs(raw: unknown): number {
   return ms;
 }
 
+// undefined is an omitted argument; null is a value, and refused.
 function limitOf(raw: unknown): number {
-  if (raw === undefined || raw === null) return 50;
+  if (raw === undefined) return 50;
   if (typeof raw !== "number" || !Number.isInteger(raw) || raw < 1 || raw > DIGEST_LIMIT) invalid(`limit must be an integer from 1 to ${DIGEST_LIMIT}`);
   return raw;
 }
 
 function cursorOf(raw: unknown): [number, string] | null {
-  if (raw === undefined || raw === null) return null;
+  if (raw === undefined) return null;
   const m = typeof raw === "string" ? CURSOR.exec(raw) : null;
   if (!m) invalid("cursor must be the next_cursor of an earlier page");
   return [Number(m[1]), m[2]];
@@ -175,7 +176,7 @@ function legacyCard(r: CardRow): string {
 export async function digest(env: Env, url: URL): Promise<Response> {
   const q = url.searchParams;
   const limit = q.get("limit");
-  const page = await digestPage(env, { since: q.get("since"), cursor: q.get("cursor"), limit: limit === null ? null : Number(limit) });
+  const page = await digestPage(env, { since: q.get("since") ?? undefined, cursor: q.get("cursor") ?? undefined, limit: limit === null ? undefined : Number(limit) });
   return new Response(page, { headers: { "content-type": "application/json" } });
 }
 

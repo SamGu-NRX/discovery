@@ -341,13 +341,34 @@ test("knowledge_digest returns the route's pages card for card, through every ma
   for (const since of [String(t), iso]) assert.deepEqual((await toolPages(since, 2)).map(withoutUntil), route, since);
 });
 
-test("knowledge_digest pages stay within 30 KiB of UTF-8 and reach every save once", async () => {
-  const ids = Array.from({ length: 12 }, (_, i) => `19000000000000013${String(i).padStart(2, "0")}`);
-  for (const id of ids) expect(await bundleWithCard(id, { post_id: id, excerpt: "é".repeat(1900) }), 201);
-  const t = 4105100000000;
+test("knowledge_digest counts a page's bytes under the tool's own field name", async () => {
+  // Review of 4eac53d, P3 2: twelve big cards needed two pages under either
+  // field name, so a page measured as "card" but sent as "card_untrusted"
+  // (10 more bytes per save) still passed. These eight cards fit one 30 KiB
+  // page as "card" and not as "card_untrusted".
+  const n = 8;
+  const ids = Array.from({ length: n }, (_, i) => `19000000000000014${String(i).padStart(2, "0")}`);
+  const t = 4105200000000;
+  const iso = new Date(t).toISOString();
+  const pending = expect(await k("GET", `/k/digest?since=${t}&limit=1`), 200).pending_saves;
+  // digestPage reserves room for the largest envelope, then adds each save
+  // and a comma.
+  const envelope = Buffer.byteLength(JSON.stringify({ since: iso, until: iso, pending_saves: pending, count: 100, truncated: true, next_cursor: "9".repeat(16) + "." + "9".repeat(19), saves: [] }));
+  const item = (card) => Buffer.byteLength(JSON.stringify({ version: 1, finished_at: iso, card })) + 1;
+  const cards = ids.map((id) => ({ post_id: id, excerpt: "" }));
+  const target = 30 * 1024 - 5 * n; // in (30 KiB - 10n, 30 KiB]
+  let extra = target - envelope - cards.reduce((sum, c) => sum + item(c), 0);
+  for (const c of cards) c.excerpt = "é".repeat(Math.floor(extra / n / 2)); // two bytes each
+  extra = target - envelope - cards.reduce((sum, c) => sum + item(c), 0);
+  cards[n - 1].excerpt += "a".repeat(extra);
+  assert.equal(envelope + cards.reduce((sum, c) => sum + item(c), 0), target);
+  for (const c of cards) expect(await bundleWithCard(c.post_id, c), 201);
   pinTime(ids, t);
+
+  const route = await allPages(t, 100);
+  assert.deepEqual(route.map((p) => p.ids), [ids], "as card, the eight fit one page");
   const pages = await toolPages(t, 100);
-  assert.ok(pages.length > 1, "twelve 3.9 KB cards cannot fit one page");
+  assert.ok(pages.length > 1, `as card_untrusted they need two pages; got ${pages.length}`);
   for (const p of pages) assert.ok(Buffer.byteLength(JSON.stringify(p)) <= 30 * 1024, `a page was ${Buffer.byteLength(JSON.stringify(p))} bytes`);
   assert.deepEqual(pages.flatMap((p) => p.saves.map((x) => x.card_untrusted.post_id)), ids);
 });
@@ -377,6 +398,11 @@ test("knowledge_digest refusals are tool results that name the argument", async 
     [{ since: 0, limit: 101 }, "limit"],
     [{ since: 0, cursor: "123" }, "cursor"],
     [{ since: 0, cursor: 5 }, "cursor"],
+    // An explicit null is a value, not an omitted argument (review of 4eac53d, P3 1).
+    [{ since: null }, "since"],
+    [{ since: 0, limit: null }, "limit"],
+    [{ since: 0, cursor: null }, "cursor"],
+    [{ since: 0, lmit: 5 }, "lmit"],
   ]) {
     const r = expect(await digestTool(args), 200).result;
     assert.equal(r.isError, true, JSON.stringify(args));
