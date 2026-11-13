@@ -148,22 +148,41 @@ test("payload changes to a waiting job all apply, however close together", async
   assert.deepEqual(flags, Array(20).fill(true));
 });
 
-test("a run requested during an attempt whose lease expires runs as a fresh job", async () => {
-  // Review of 7d6fe20, P1 1: the third expiry failed the job and stranded the
-  // pending run; posting the same intake again then changed nothing.
+test("a run requested during an attempt whose lease expires runs next, and the expiry still counts", async () => {
+  // Review of 7d6fe20, P1 1: an expiry failed the job and stranded the
+  // pending run. Review of 7854bef, P1 1: the promotion reset the expiry
+  // count, so a crashing job never failed.
   const id = "1900000000000000781";
   expect(await k("POST", "/k/intake", save(id), { token: "knowledge_intake" }), 201);
   const crashed = await claimKey("save", id, 0.05);
   const newer = expect(await k("POST", "/k/intake", save(id, { context: [{ id: "1900000000000000782", author_handle: "z", text: "later" }] }), { token: "knowledge_intake" }), 200);
-  // This expiry is its third: before the fix it failed the job.
-  s.d1(`UPDATE knowledge_jobs SET expired_leases = 2 WHERE id = '${crashed.id}'`);
   await sleep(100);
-  const fresh = await claimKey("save", id);
-  assert.ok(fresh, "the pending run was not claimable after the expiry");
-  assert.equal(fresh.payload.intake_sha, newer.intake_sha);
+  const next = await claimKey("save", id);
+  assert.ok(next, "the pending run was not claimable after the expiry");
+  assert.equal(next.payload.intake_sha, newer.intake_sha);
   const row = await jobOf(id);
-  assert.deepEqual([row.state, row.expired_leases, row.pending], ["claimed", 0, null]);
-  expect(await complete(fresh), 200);
+  assert.deepEqual([row.state, row.expired_leases, row.pending], ["claimed", 1, null]);
+  assert.notEqual(next.lease_token, crashed.lease_token);
+  expect(await complete(next), 200);
+});
+
+test("a job that keeps crashing with new work pending fails at the expiry limit and keeps that work", async () => {
+  // Review of 7854bef, P1 1: crash, a pending update, expiry, again and
+  // again, looped forever while each promotion reset the count.
+  const id = "1900000000000000791";
+  expect(await k("POST", "/k/intake", save(id), { token: "knowledge_intake" }), 201);
+  let held = await claimKey("save", id, 0.05);
+  let last;
+  for (let round = 1; round <= 5 && held; round++) {
+    last = expect(await k("POST", "/k/intake", save(id, { context: [{ id: `19000000000000007${90 + round}`, author_handle: "z", text: `update ${round}` }] }), { token: "knowledge_intake" }), 200);
+    await sleep(100);
+    held = await claimKey("save", id, 0.05);
+  }
+  const row = await jobOf(id);
+  assert.equal(row.state, "failed");
+  assert.equal(row.expired_leases, 3);
+  assert.equal(row.pending.payload.intake_sha, last.intake_sha);
+  assert.match(row.error, /kept in pending/);
 });
 
 test("deps that lead back to the job are refused, through other jobs and pending deps", async () => {

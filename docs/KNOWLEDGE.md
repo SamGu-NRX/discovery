@@ -76,7 +76,7 @@ kworker sends blobs up to 8 MiB through `PUT`, and larger ones through the S3 AP
 
 Kinds: `save`, `link`, `image`, `video`, `bundle`. The lease pattern is the one in `worker/src/candidates.ts`: a claim leases with a fresh random `lease_token`, an expired lease can be claimed again with a new token, completing needs the current token, and the third expired lease fails the job.
 
-- `POST /k/jobs { kind, key, payload, deps?, again? }` creates a job (201), or returns the existing `(kind, key)` row (200, `created: false`). Both answer `{ created, requeued, replaced, deferred, job }`. `deps` lists job ids that must be `done` or `failed` before this one can be claimed; an id that names no job is 422 `unknown_dep`. `runs` starts at 1. `again: true` on a `done` or `failed` job puts it back to `queued` with the new payload and deps, adds one to `runs`, clears `result`, `error` and `expired_leases`, and answers `requeued: true`. On a queued job it replaces the payload and deps in place (`replaced: true`). On a claimed job it keeps them as `pending` (`deferred: true`), and completing that attempt queues the job again with them in the same batch, so a save that ran again never leaves its bundle on old children. If the attempt's lease expires instead, the pending run is queued as a fresh run with its own expiry budget rather than failed with the old attempt. Deps that lead back to the job, directly or through other jobs' deps or pending deps, are 422 `dep_cycle`.
+- `POST /k/jobs { kind, key, payload, deps?, again? }` creates a job (201), or returns the existing `(kind, key)` row (200, `created: false`). Both answer `{ created, requeued, replaced, deferred, job }`. `deps` lists job ids that must be `done` or `failed` before this one can be claimed; an id that names no job is 422 `unknown_dep`. `runs` starts at 1. `again: true` on a `done` or `failed` job puts it back to `queued` with the new payload and deps, adds one to `runs`, clears `result`, `error` and `expired_leases`, and answers `requeued: true`. On a queued job it replaces the payload and deps in place (`replaced: true`). On a claimed job it keeps them as `pending` (`deferred: true`), and completing that attempt queues the job again with them in the same batch, so a save that ran again never leaves its bundle on old children. If the attempt's lease expires instead, the pending run is queued next; the expiry still counts against the job's three, so a job that keeps crashing fails, and the run requested during its last attempt stays readable in `pending`. Deps that lead back to the job, directly or through other jobs' deps or pending deps, are 422 `dep_cycle`.
 - `POST /k/jobs/claim { owner, kinds: [], ttl_s ≤ 3600, limit ≤ 10 }` → `{ jobs: [{ id, kind, key, payload, lease_token, lease_until, attempts, runs }] }`.
 - `POST /k/jobs/:id/heartbeat { owner, lease_token, ttl_s }` sets the lease to end `ttl_s` from now while `lease_token` is the current one, which includes an expired lease nobody has claimed again. → `{ id, lease_until }`.
 - `POST /k/jobs/:id/complete { owner, lease_token, state: "done"|"failed"|"queued", result?, error? }`. → the job row. `queued` hands the job back without a final state, clearing the owner and keeping `attempts`. Heartbeat and complete answer 409 `lease_lost` when the token is not the current lease, and 404 `job_missing` for an unknown id.
@@ -176,6 +176,7 @@ One save per request, at most 192 KiB of JSON. The `kintake` token may call this
 }
 ```
 
+- kworker never fetches `t.co` (it is X). Put every link's expansion in `links`; a `t.co` in `post.text` with no expansion there becomes a link gap on the card (except the one X adds at the end of a post with media).
 - `post`, `thread[]`, `upstream[]` and `post.quoted` are post objects. Required in each: `id` (numeric string), `url`, `author_handle`, and `text` (a string, `""` when the post has none). `media` (at most 20) and `links` (at most 50) are optional.
 - `thread`: the author's self-thread in order, the save included, when the job walked it. `upstream`: the posts the save replies to, nearest first (the reply-parent walk).
 - `context`: at most 120 posts around the save: replies, quotes, posts linking it. Each needs `id`, `author_handle`, `text`; `reply_to`, `quoted_id`, `view`, `created_at` and `links` (URL strings or `{ url, expanded }`) are optional. kworker's relevance gate decides which to keep, so send them unfiltered. Set `context_capped: true` when the job's 80-post cap cut the context short.
@@ -199,6 +200,11 @@ A card, written by kworker with the bundle (at most 4 KiB):
   "media": { "photos": 0, "videos": 0 }
 }
 ```
+
+## Known gaps
+
+- The dependency-cycle check (`refuseCycle`) runs before the write, not in the same statement, so two concurrent requests could each pass it and together form a cycle. One kworker drain runs at a time today, so it cannot happen yet; making the check part of the write's batch is the fix.
+- The test that payload changes to a waiting job all apply (`intake.test.mjs`) depends on two requests landing in one millisecond, which local D1 rarely produces, so it does not fail reliably on the code it guards against. Freezing the Worker's clock in that test would make it deterministic.
 
 ## Agent tools (mailbox MCP endpoint, read-only)
 

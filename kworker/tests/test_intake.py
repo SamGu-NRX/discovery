@@ -144,3 +144,23 @@ def test_a_saved_reply_is_judged_and_bundled_with_the_posts_it_answers(monkeypat
     md = stored["md"]
     assert md.index("## Replying to") < md.index("the root post") < md.index("the question")
     assert registered and registered[0]["card"]["verdict"]["label"] == "read"
+
+def test_a_t_co_only_in_the_text_is_followed_when_expanded_and_a_gap_when_not():
+    # Review of 7854bef, P1 2: a save whose only link was a bare t.co in its
+    # text came out with links [] and no gap recorded.
+    body = intake()
+    body["post"].update(text="new tool https://t.co/AbC123", media=[])
+    gaps = [m for m in expansion(body)["missing"] if m["what"] == "link"]
+    assert [m["ref"] for m in gaps] == ["https://t.co/AbC123"]
+    body["post"]["links"] = [{"url": "https://t.co/AbC123", "expanded": "https://example.com/tool"}]
+    e = expansion(body)
+    assert [l["expanded"] for l in e["post"]["links"]] == ["https://example.com/tool"]
+    assert not [m for m in e["missing"] if m["what"] == "link"]
+
+
+def test_the_trailing_media_t_co_is_not_a_gap():
+    body = intake()
+    body["post"]["text"] = "look at this https://t.co/Med1a"
+    assert not [m for m in expansion(body)["missing"] if m["what"] == "link"]
+    body["post"]["text"] = "see https://t.co/L1nk and https://t.co/Med1a"
+    assert [m["ref"] for m in expansion(body)["missing"] if m["what"] == "link"] == ["https://t.co/L1nk"]

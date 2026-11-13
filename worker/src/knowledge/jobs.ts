@@ -152,20 +152,26 @@ export async function claimJobs(env: Env, b: Record<string, unknown>) {
   // behind ones never tried.
   const [, , claimed] = await db.batch<JobRow>([
     // An expired attempt that had a run requested during it (pending_payload)
-    // is over: the pending run is queued as a fresh run with its own expiry
-    // budget, before the failure rule below can strand it.
+    // is over: the pending run is queued next. The expiry still counts, and
+    // expired_leases carries forward, so a job that keeps crashing reaches
+    // the failure rule below instead of looping through promotions.
     db
       .prepare(
         `UPDATE knowledge_jobs SET state = 'queued', payload = pending_payload, deps = pending_deps, pending_payload = NULL, pending_deps = NULL,
-           runs = runs + 1, expired_leases = 0, owner = NULL, lease_until = NULL, lease_token = NULL, result = NULL,
+           runs = runs + 1, expired_leases = expired_leases + 1, owner = NULL, lease_until = NULL, lease_token = NULL, result = NULL,
            error = 'the previous attempt''s lease expired; running the request that arrived during it', updated_at = ?1
-         WHERE state = 'claimed' AND lease_until < ?1 AND pending_payload IS NOT NULL`,
+         WHERE state = 'claimed' AND lease_until < ?1 AND pending_payload IS NOT NULL AND expired_leases + 1 < ?2`,
       )
-      .bind(now),
+      .bind(now, MAX_EXPIRED_LEASES),
+    // The failure keeps pending_payload, so a request that arrived during
+    // the last attempt stays readable on the failed job (and a later
+    // request runs it again).
     db
       .prepare(
         `UPDATE knowledge_jobs SET state = 'failed', owner = NULL, lease_until = NULL, lease_token = NULL, updated_at = ?1,
-           expired_leases = expired_leases + 1, error = 'lease expired ' || (expired_leases + 1) || ' times'
+           expired_leases = expired_leases + 1,
+           error = 'lease expired ' || (expired_leases + 1) || ' times' ||
+             CASE WHEN pending_payload IS NOT NULL THEN '; the run requested during the last attempt is kept in pending' ELSE '' END
          WHERE state = 'claimed' AND lease_until < ?1 AND expired_leases + 1 >= ?2`,
       )
       .bind(now, MAX_EXPIRED_LEASES),

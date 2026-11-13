@@ -25,6 +25,22 @@ def _links(items) -> list[dict]:
     return out
 
 
+_TCO = re.compile(r"https?://t\.co/\w+")
+
+
+def unexpanded_tco(post: dict) -> list[str]:
+    """t.co links in the post's text with no expansion in post.links. The
+    pipeline never fetches t.co (it is X), so each one is a gap the card must
+    show. X ends the text of a post with media with one more t.co, the
+    media's own link; that one is not a gap."""
+    found = list(dict.fromkeys(_TCO.findall(post.get("text") or "")))
+    covered = {l["url"] for l in _links(post.get("links"))}
+    gaps = [u for u in found if u not in covered]
+    if gaps and post.get("media") and (post.get("text") or "").rstrip().endswith(gaps[-1]):
+        gaps.pop()
+    return gaps
+
+
 def _thread_post(p: dict, is_save: bool) -> dict:
     return {"id": p["id"], "url": p["url"], "created_at": _iso(p.get("created_at")), "text": p.get("text") or "", "is_save": is_save, "media": _media(p.get("media")),
             "links": [l["expanded"] for l in _links(p.get("links"))]}
@@ -60,6 +76,7 @@ def expansion(intake: dict) -> dict:
         missing.append({"what": "reply_view", "ref": sid, "reason": "the daily job's context cap cut the replies short"})
     if post.get("reply_to") and not upstream:
         missing.append({"what": "upstream", "ref": sid, "reason": "the post this one replies to was not in the intake"})
+    missing += [{"what": "link", "ref": u, "reason": "a t.co link in the post's text that the intake did not expand; kworker does not fetch X"} for u in unexpanded_tco(post)]
     return {
         "schema": "kexpansion/1",
         "source": f"daily intake {intake['run_id']} from @{intake['account']}" + (f" at {intake['captured_at']}" if intake.get("captured_at") else ""),

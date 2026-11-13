@@ -50,9 +50,12 @@ def body(arch: Nov12, sid: str, res: dict[str, str] | None = None) -> dict:
     exp = arch.expansion(sid)
     raw = arch.posts[sid]
     post = _post({**exp["post"], "author_handle": exp["post"]["author_handle"]})
-    post.update(author_name=exp["post"].get("author_name"), created_at=exp["post"].get("created_at"),
-                links=[{"url": l["url"], "expanded": l["expanded"], **({"title": l["title"]} if l.get("title") else {})} for l in exp["post"]["links"]],
-                reply_to=raw.get("replying_to_status"))
+    links = [{"url": l["url"], "expanded": l["expanded"], **({"title": l["title"]} if l.get("title") else {})} for l in exp["post"]["links"]]
+    # The daily job takes post.links from X's entities, which expand every
+    # t.co in the text; the archive's link-resolutions.json does that here.
+    have = {l["url"] for l in links}
+    links += [l for l in _expanded(exp["post"]["text"], res) if l["url"] not in have]
+    post.update(author_name=exp["post"].get("author_name"), created_at=exp["post"].get("created_at"), links=links, reply_to=raw.get("replying_to_status"))
     q = exp.get("quoted")
     if q:
         qid = q.get("id") or (_ID.search(q.get("url") or "") or [None, None])[1]
