@@ -509,6 +509,23 @@ test("search page loads keep to their own budget per 15 minutes", async () => {
   assert.ok(result.rateWaits.some((w) => w.operation === "SearchTimeline"));
 });
 
+test("search page loads are at least searchPageGapMs apart, 60 s by default, and a job can only widen the gap", async () => {
+  const ids = ["500", "501", "502"];
+  const answer = (operation, v) => (operation === "TweetDetail" ? detail([{ type: "TimelineAddEntries", entries: [itemEntry(post(v.focalTweetId, "op"), "9000")] }]) : searchPage(["901"], null));
+  const job = { type: "context", ids, rankings: ["Relevance"], branches: false, mentions: false, links: false, conversation: false, upstream: false };
+  const g = harness(answer);
+  const result = await run({ jobs: [job] }, g);
+  assert.equal(result.stop, null);
+  assert.equal(result.limits.searchPageGapMs, 60_000);
+  assert.equal(result.limits.searchPageLoadsPerWindow, 8);
+  const pages = g.sends.filter((x) => x.page).map((x) => x.at);
+  assert.equal(pages.length, 3);
+  for (let i = 1; i < pages.length; i += 1) assert.ok(pages[i] - pages[i - 1] >= 60_000, `page loads ${i - 1} and ${i} were ${pages[i] - pages[i - 1]} ms apart`);
+  assert.equal(parseJobs({ limits: { searchPageGapMs: 1000 }, jobs: [job] }).limits.searchPageGapMs, 60_000, "a smaller gap is not taken");
+  assert.equal(parseJobs({ limits: { searchPageGapMs: 120_000 }, jobs: [job] }).limits.searchPageGapMs, 120_000);
+  assert.equal(parseJobs({ limits: { searchPageLoadsPerWindow: 30 }, jobs: [job] }).limits.searchPageLoadsPerWindow, 8, "30 per window is no longer allowed");
+});
+
 test("a new_saves run cut short still moves the boundary past the saves it finished, oldest first", async () => {
   // Bookmarks:-, Bookmarks:c1, TweetDetail:5, TweetDetail:4, then Stop.
   const log = [];

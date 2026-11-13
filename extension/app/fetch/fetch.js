@@ -5,10 +5,10 @@
 
 import { FetchRefused, parseTemplate } from "../lib/fetchops.js";
 import { parseJobs, runJobs } from "../lib/fetchrun.js";
-import { deliveryOf, keepBundle } from "../lib/knowledge.js";
 import { getLocal, loadConfig, pausedOrPausing } from "../lib/store.js";
+import { blankTabSettled } from "../lib/tabs.js";
 import { doneRepolls, postStatus, reserveSession } from "../lib/worker-api.js";
-import { bookmarksUrl, historyBookmarksUrl, isMintedXUrl, permalinkUrl, searchUrl, xPath } from "../lib/xurl.js";
+import { bookmarksUrl, historyBookmarksUrl, isMintedXUrl, loadedOnX, permalinkUrl, searchUrl, xPath } from "../lib/xurl.js";
 
 const $ = (id) => document.getElementById(id);
 const LOAD_TIMEOUT_MS = 30_000;
@@ -73,14 +73,14 @@ async function init() {
 }
 
 // The daily new-saves run (lib/daily.js) on daily.html.
-// - auto=daily: the service worker opened the page at 07:00 Chicago and
+// - auto=daily: the service worker opened the page at 05:00 Chicago and
 //   holds the job; the page closes itself when done.
 // - auto=daily-now[&newest=N]: a manual test run, opened by hand. With
 //   newest, it takes the newest N saves and starts the boundary there;
 //   without, it runs from the stored boundary. It stays open with its status.
-// Either way the bundle is kept for the knowledge store (lib/knowledge.js)
-// and the service worker records the result, moving the boundary past the
-// saves the run finished.
+// Either way the page hands the bundle to the service worker, which keeps
+// it, records the result (moving the boundary past the saves the run
+// finished) and files those saves with the knowledge store (lib/knowledge.js).
 async function autoDaily(params) {
   const manual = params.get("auto") === "daily-now";
   const newest = Number(params.get("newest") ?? 0);
@@ -99,21 +99,24 @@ async function autoDaily(params) {
     return finish(`daily fetch not started: ${refusal}`, "bad");
   }
   let result;
+  let bundle = null;
   try {
-    const bundle = await run(parseJobs(claim.jobs), owner);
+    bundle = await run(parseJobs(claim.jobs), owner);
     lastBundle = bundle;
     $("download").disabled = false;
-    const kept = await keepBundle(bundle, { account: claim.account, manual });
-    result = { newSaves: bundle.newSaves ?? null, stop: bundle.stop, requests: bundle.requests, delivery: deliveryOf(kept) };
+    result = { newSaves: bundle.newSaves ?? null, stop: bundle.stop, requests: bundle.requests };
   } catch (err) {
-    result = { newSaves: null, stop: { reason: "error", detail: err.message }, requests: 0, delivery: null };
+    result = { newSaves: null, stop: { reason: "error", detail: err.message }, requests: 0 };
   } finally {
     await chrome.runtime.sendMessage({ type: "fetch-release", owner }).catch(() => {});
   }
-  const answer = await chrome.runtime.sendMessage({ type: "daily-result", manual, account: claim.account, result });
+  setStatus("filing the saves with the knowledge store…");
+  const answer = await chrome.runtime.sendMessage({ type: "daily-result", manual, account: claim.account, result, bundle });
   const saves = result.newSaves;
   const what = saves ? `${saves.taken.length} saves taken, boundary now ${answer?.boundary ?? "unchanged"}` : "no saves read";
-  finish(`daily fetch ${result.stop ? `stopped: ${result.stop.reason}: ${result.stop.detail}` : "finished"}; ${what}; bundle kept, not yet delivered`, result.stop ? "bad" : "ok");
+  const d = answer?.delivery;
+  const filed = !d ? "not filed" : d.stopped ? `${d.filed} filed, then: ${d.stopped}` : `${d.filed} filed`;
+  finish(`daily fetch ${result.stop ? `stopped: ${result.stop.reason}: ${result.stop.detail}` : "finished"}; ${what}; ${filed}`, result.stop || d?.stopped ? "bad" : "ok");
 }
 
 // Opened by the service worker's hourly re-poll (background.js,
@@ -225,6 +228,7 @@ async function run({ jobs, limits }, owner) {
     const win = await chrome.windows.create({ url: "about:blank", focused: false, type: "normal", width: 1200, height: 900 });
     r.windowId = win.id;
     r.tabId = win.tabs[0].id;
+    await blankTabSettled(win.tabs[0]);
     await heartbeat(r);
 
     let rows = 0;
@@ -358,14 +362,18 @@ async function open(r, url) {
   r.expects = url.expects;
   r.opened = url.href;
   const completed = new Set();
-  const onUpdated = (tabId, info) => {
-    if (info.status === "complete") completed.add(tabId);
+  const onUpdated = (tabId, info, tab) => {
+    if (loadedOnX(info, tab)) completed.add(tabId);
   };
   chrome.tabs.onUpdated.addListener(onUpdated);
   try {
-    await chrome.tabs.update(r.tabId, { url: url.href });
-    const deadline = Date.now() + LOAD_TIMEOUT_MS;
-    while (!completed.has(r.tabId) && Date.now() < deadline && !r.stop) await sleep(250);
+    // A navigation that never lands on x.com (lib/tabs.js) is asked for once
+    // more; a second page load is all it can cost.
+    for (let attempt = 0; attempt < 2 && !completed.has(r.tabId) && !r.stop; attempt += 1) {
+      await chrome.tabs.update(r.tabId, { url: url.href });
+      const deadline = Date.now() + LOAD_TIMEOUT_MS;
+      while (!completed.has(r.tabId) && Date.now() < deadline && !r.stop) await sleep(250);
+    }
   } finally {
     chrome.tabs.onUpdated.removeListener(onUpdated);
   }
@@ -377,7 +385,7 @@ async function open(r, url) {
 async function onExpectedPage(r) {
   const tab = await chrome.tabs.get(r.tabId);
   const path = xPath(tab.url ?? "");
-  if (path === null || !r.expects(path)) throw new FetchRefused(`the fetch tab is on ${tab.url} after opening ${r.opened}`);
+  if (path === null || !r.expects(path)) throw new FetchRefused(`the fetch tab is on ${tab.url ?? (tab.pendingUrl ? `its way to ${tab.pendingUrl}` : "a page the extension cannot read")} after opening ${r.opened}`);
 }
 
 async function waitForTemplate(r, operation) {

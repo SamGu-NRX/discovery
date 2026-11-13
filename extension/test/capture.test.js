@@ -39,6 +39,7 @@ test("a timeline post normalizes to the contract's post shape", () => {
     retweet_of_id: null,
     author_followed: null,
     urls: ["https://expanded.example/link"],
+    links: [{ url: "https://t.co/abc", expanded: "https://expanded.example/link" }],
     media: [{ type: "photo", url: "https://pbs.twimg.com/media/F1aT_M9aAAEgJwi.jpg" }],
     metrics: { likes: 12, reposts: 3, replies: 4, quotes: 1, bookmarks: 9, views: 2300 },
     position: 0,

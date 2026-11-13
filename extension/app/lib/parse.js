@@ -315,9 +315,15 @@ function normalizeTweet(ctx, t) {
   if (!Array.isArray(noteUrls)) fail("note_tweet entity_set.urls");
   if (!Array.isArray(legacyUrls)) fail("legacy.entities.urls");
   const urls = [];
+  // Each t.co link in the text with its target, as X's entities give it. The
+  // knowledge store never opens t.co (that would be a request to X), so a
+  // t.co in the text without its pair here is a link it cannot follow.
+  // urls (targets only) stays as it was for the Worker's ingest.
+  const links = [];
   for (const u of [...noteUrls, ...legacyUrls]) {
     const url = u?.expanded_url;
     if (typeof url === "string" && url && !urls.includes(url)) urls.push(url);
+    if (typeof u?.url === "string" && u.url && typeof url === "string" && url && !links.some((l) => l.url === u.url)) links.push({ url: u.url, expanded: url });
   }
 
   const mediaList = legacy.extended_entities?.media ?? legacy.entities.media ?? [];
@@ -361,6 +367,7 @@ function normalizeTweet(ctx, t) {
       retweet_of_id: retweetOf,
       author_followed: authorFollowed,
       urls,
+      links,
       media,
       metrics: {
         likes: count(legacy.favorite_count, "favorite_count"),

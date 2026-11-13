@@ -84,7 +84,7 @@ async function render() {
     const kept = (await keptBundles()).filter((b) => !b.delivered).length;
     const parts = [];
     if (local.dailyWaiting) parts.push(`waiting (${local.dailyWaiting.cause}); next try ${clock(local.dailyWaiting.next)}`);
-    else if (!last) parts.push("07:00 Chicago; no run yet");
+    else if (!last) parts.push("05:00 Chicago; no run yet");
     else if (last.skipped) parts.push(`skipped ${ago(last.at)}: ${last.skipped}`);
     else parts.push(`${ago(last.at)} · ${last.taken} saves${last.stop ? ` · stopped: ${last.stop}` : ""}${last.waiting ? ` · ${last.waiting} waiting` : ""}`);
     if (kept) parts.push(`${kept} bundle${kept > 1 ? "s" : ""} kept, not yet delivered`);

@@ -500,6 +500,11 @@ function startMockWorker() {
         return res.end(JSON.stringify({ source: "model", labels }));
       }
       if (req.url === "/ingest/x") return res.end(JSON.stringify({ posts_upserted: 0, sightings: 0, new_posts: 0, candidates_created: 0 }));
+      // The knowledge store's intake (docs/KNOWLEDGE.md, "Daily loop").
+      if (req.url === "/k/intake") {
+        res.statusCode = 201;
+        return res.end(JSON.stringify({ post_id: record.body.post.id, intake_sha: "f".repeat(64), job: { id: `job-${record.body.post.id}`, state: "queued", created: true, requeued: false } }));
+      }
       return res.end("{}");
     });
   });
@@ -559,8 +564,10 @@ test("the fetch page's Clear error pause lifts a pause made only of failed reque
   await page.close();
 });
 
-test("daily fetch: a manual run on daily.html takes the newest saves, keeps the bundle, and moves the account's boundary; it waits for an archive fetch page", async () => {
-  await configure({ mode: "passive", account: "fixtureuser" });
+test("daily fetch: a manual run on daily.html takes the newest saves, files each with the knowledge store, and moves the account's boundary; it waits for an archive fetch page", async () => {
+  const INTAKE = "i".repeat(64);
+  await configure({ mode: "passive", account: "fixtureuser", intakeToken: INTAKE });
+  const startedAt = mock.requests.length;
   await worker.evaluate(async () => {
     const keys = (await chrome.storage.local.getKeys()).filter((k) => k.startsWith("pageSignal:"));
     await chrome.storage.local.remove([...keys, "backOffReportedUntil", "pendingBackOff", "pauseUntil", "dailyFetch", "dailyBundles"]);
@@ -583,7 +590,12 @@ test("daily fetch: a manual run on daily.html takes the newest saves, keeps the 
   assert.equal(await page.title(), "X daily fetch", "the archive runner looks for \"X fetch mode\" windows");
   await page.waitForFunction(() => /daily fetch (finished|stopped)/.test(document.getElementById("status").textContent), null, { timeout: 120_000 });
   const status = await page.textContent("#status");
-  assert.match(status, /daily fetch finished; 2 saves taken, boundary now 401/);
+  assert.match(status, /daily fetch finished; 2 saves taken, boundary now 401; 2 filed/);
+  // One kintake/1 body per finished save, oldest first, on the intake token.
+  const intakes = mock.requests.slice(startedAt).filter((r) => r.path === "/k/intake");
+  assert.deepEqual(intakes.map((r) => r.body.post.id), ["402", "401"]);
+  assert.ok(intakes.every((r) => r.authorization === `Bearer ${INTAKE}` && r.body.schema === "kintake/1" && r.body.account === "fixtureuser" && /^manual-/.test(r.body.run_id)));
+  assert.ok(intakes.every((r) => r.method === "POST"));
 
   const { dailyFetch, dailyBundles } = await worker.evaluate(() => chrome.storage.local.get(["dailyFetch", "dailyBundles"]));
   const state = dailyFetch.fixtureuser;
@@ -591,8 +603,9 @@ test("daily fetch: a manual run on daily.html takes the newest saves, keeps the 
   assert.equal(state.lastDay, undefined, "a manual run leaves today's scheduled run in place");
   assert.equal(state.last.taken, 2);
   assert.equal(state.last.stop, null);
-  assert.equal(state.last.delivery.delivered, false);
+  assert.deepEqual(state.last.delivery, { filed: 2, rejected: 0, stopped: null });
   assert.equal(dailyBundles.length, 1);
+  assert.equal(dailyBundles[0].delivered, true);
   assert.deepEqual(dailyBundles[0].bundle.newSaves.taken, ["402", "401"]);
   assert.equal(dailyBundles[0].bundle.context["402"].parent, null, "the daily job asks for the parent walk; a save that answers nothing has none");
   await page.close();
@@ -605,9 +618,12 @@ test("daily fetch: a manual run on daily.html takes the newest saves, keeps the 
   const closed = scheduled.waitForEvent("close", { timeout: 120_000 });
   await scheduled.goto(`chrome-extension://${extensionId}/fetch/daily.html?auto=daily`);
   await closed;
-  const after = (await worker.evaluate(() => chrome.storage.local.get("dailyFetch"))).dailyFetch.fixtureuser;
-  assert.equal(after.boundary, "401");
-  assert.equal(after.last.taken, 1, `401 is the only save above 402: ${JSON.stringify(after)}`);
+  const stored = await worker.evaluate(() => chrome.storage.local.get(["dailyFetch", "dailyBundles"]));
+  const after = stored.dailyFetch.fixtureuser;
+  const ran = stored.dailyBundles.at(-1).bundle;
+  const seen = JSON.stringify({ after, newSaves: ran.newSaves, bookmarks: ran.bookmarks, stop: ran.stop, ledger: ran.ledger.map((l) => [l.operation, l.status, l.note]) });
+  assert.equal(after.boundary, "401", seen);
+  assert.equal(after.last.taken, 1, `401 is the only save above 402: ${seen}`);
   assert.equal(after.last.manual, false);
   assert.match(String(after.lastDay), /^\d{4}-\d{2}-\d{2}$/, `a scheduled run uses up the day: ${JSON.stringify(after)}`);
   assert.deepEqual(await worker.evaluate(() => chrome.storage.session.get("dailyJob")), {}, "the job is claimed once");

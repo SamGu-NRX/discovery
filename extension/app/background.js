@@ -2,7 +2,8 @@
 // into contract batches, sends them to the Worker, and runs scheduled sessions.
 
 import { captureToBatch } from "./lib/capture.js";
-import { DAILY_ALARM, dailyEnabled, dailyJobs, dailyWindow, nextDailyState, planAttempt, skippedDay } from "./lib/daily.js";
+import { chicagoDay, DAILY_ALARM, dailyEnabled, dailyJobs, dailyWindow, nextDailyState, planAttempt, retriesInWindow, skippedDay } from "./lib/daily.js";
+import { deliverKept, deliveryDue, keepBundle } from "./lib/knowledge.js";
 import { acquireFetchRun, beatFetchRun, fetchRunHeldAnywhere, releaseFetchRun } from "./lib/fetchlock.js";
 import { focalTweetIdFromUrl, operationFromUrl } from "./lib/ops.js";
 import { dropStoredSince, enqueue, flush } from "./lib/outbox.js";
@@ -46,7 +47,7 @@ async function setUp() {
   await chrome.alarms.create(FLUSH_ALARM, { periodInMinutes: 1 });
   await chrome.alarms.create(REPOLL_ALARM, { periodInMinutes: 60 });
   if (!(await chrome.alarms.get(SESSION_ALARM))) await scheduleNext();
-  // Chrome may start inside the 07:00–07:45 window; startDaily runs it then,
+  // Chrome may start inside the 05:00–06:30 window; startDaily runs it then,
   // or sets the alarm for the next start.
   await startDaily().catch((err) => recordProblem("daily", err.message));
 }
@@ -70,6 +71,9 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     await flush().catch((err) => recordProblem("worker", err.message));
     await drainPageSignals().catch((err) => recordProblem("x", err.message));
     await backOffLock(sendPendingBackOff).catch((err) => recordProblem("worker", err.message));
+    // Daily bundles not yet filed with the knowledge store: at most one pass
+    // per 15 minutes after a stop (lib/knowledge.js).
+    if (await deliveryDue()) await deliverDaily().catch((err) => recordProblem("daily", `filing: ${err.message}`));
   } else if (alarm.name === DAILY_ALARM) {
     await startDaily().catch((err) => recordProblem("daily", err.message));
   } else if (alarm.name === REPOLL_ALARM) {
@@ -458,10 +462,21 @@ function claimDaily({ manual, newest }) {
   });
 }
 
-// The daily page's result: the account's next state, and a problem when
-// the run stopped. A scheduled page refused at its own start (something got
-// busy in between) is retried as busy, inside the window.
-function recordDaily({ manual, account, result }) {
+// Files the kept bundles' finished saves with the knowledge store.
+function deliverDaily() {
+  return dailyLock(async () => {
+    const out = await deliverKept(await loadConfig());
+    if (out.stopped) await recordProblem("daily", `filing with the knowledge store: ${out.stopped}`);
+    return out;
+  });
+}
+
+// The daily page's result: the bundle is kept, the account's next state
+// recorded (and a problem when the run stopped), then its finished saves
+// are filed with the knowledge store. A scheduled page refused at its own
+// start (something got busy in between) is retried as busy, inside the
+// window.
+function recordDaily({ manual, account, result, bundle }) {
   return dailyLock(async () => {
     const now = Date.now();
     await chrome.storage.session.remove("dailyJob");
@@ -478,9 +493,24 @@ function recordDaily({ manual, account, result }) {
       }
       return { ok: true, boundary: prev?.boundary ?? null };
     }
-    const { state, problem } = nextDailyState(prev, result, now, { manual: Boolean(manual) });
+    if (bundle) await keepBundle(bundle, { account, manual: Boolean(manual), runId: manual ? `manual-${new Date(now).toISOString()}` : `daily-${chicagoDay(now)}` });
+    const delivery = bundle ? await deliverKept(await loadConfig(), { now }) : null;
+    const { state, problem } = nextDailyState(prev, { ...result, delivery }, now, { manual: Boolean(manual) });
     await setDailyState(account, state);
     if (problem) await recordProblem("daily", problem);
-    return { ok: true, boundary: state.boundary };
+    // Stopped before reading a save, and not by X: tried again inside the
+    // window, or the day is given up at 06:30 (lib/daily.js, retriesInWindow).
+    if (retriesInWindow(result, { manual: Boolean(manual) })) {
+      const plan = planAttempt(state, now, `the last try stopped before reading Bookmarks (${result.stop.reason}: ${result.stop.detail})`);
+      if (plan.action === "give_up") {
+        await setDailyState(account, skippedDay(state, plan.cause, now));
+        await recordProblem("daily", `daily fetch skipped today: ${plan.cause}`);
+      } else if (plan.action === "retry") {
+        await setLocal({ dailyWaiting: { since: new Date(now).toISOString(), cause: plan.cause, next: new Date(plan.at).toISOString() } });
+      }
+      if (plan.at) await chrome.alarms.create(DAILY_ALARM, { when: plan.at });
+    }
+    else if (delivery?.stopped) await recordProblem("daily", `filing with the knowledge store: ${delivery.stopped}`);
+    return { ok: true, boundary: state.boundary, delivery };
   });
 }

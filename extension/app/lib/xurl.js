@@ -61,6 +61,17 @@ export function isMintedXUrl(value) {
 }
 
 // The path of an https://x.com URL, or null for anything else.
+// Whether a chrome.tabs.onUpdated event says the tab finished loading an
+// x.com page. A run's window starts on about:blank, and that page's own
+// "complete" can arrive after the navigation to x.com was asked for; counted
+// as the x.com load, it let a run check the tab while it was still on
+// about:blank (whose URL an extension without the tabs permission reads as
+// undefined), and stop with "the fetch tab is on undefined". That failed 1
+// daily e2e run in 20 on Nov 13.
+export function loadedOnX(info, tab) {
+  return info?.status === "complete" && xPath(tab?.url ?? "") !== null;
+}
+
 export function xPath(href) {
   try {
     const u = new URL(href);

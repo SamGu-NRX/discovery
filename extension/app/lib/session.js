@@ -5,13 +5,14 @@
 // Everything it learns arrives through the same capture path as passive
 // browsing.
 
+import { blankTabSettled } from "./tabs.js";
 import { fetchRunHeld, fetchRunHeldAnywhere } from "./fetchlock.js";
 import { flush } from "./outbox.js";
 import { scheduleNext } from "./schedule.js";
 import { extendPause, getLocal, getPauseUntil, loadConfig, pausedOrPausing, recordProblem, setLocal } from "./store.js";
 import { readFeed, recordBaseline } from "./reader.js";
 import { getDetailQueue, labelLensPosts, listLenses, pauseFrom, postStatus, reserveSession, sendLensBaseline, sendLensReads } from "./worker-api.js";
-import { bookmarksUrl, historyBookmarksUrl, homeUrl, isMintedXUrl, permalinkUrl, xPath } from "./xurl.js";
+import { bookmarksUrl, historyBookmarksUrl, homeUrl, isMintedXUrl, permalinkUrl, xPath, loadedOnX } from "./xurl.js";
 
 const LOAD_TIMEOUT_MS = 30_000;
 // Stop reasons reported as that status, each pausing sessions for 24 hours:
@@ -512,6 +513,7 @@ async function openWindow(s) {
   const win = await chrome.windows.create({ url: "about:blank", focused: false, type: "normal", width: 1200, height: 900 });
   s.windowId = win.id;
   s.tabId = win.tabs[0].id;
+  await blankTabSettled(win.tabs[0]);
   await publish(s);
   await navigate(s, homeUrl());
 }
@@ -551,8 +553,8 @@ async function onExpectedPage(s) {
 // counts; any "complete" after it must be the new page.
 async function loadAndWait(s, start) {
   const completed = new Set();
-  const onUpdated = (tabId, info) => {
-    if (info.status === "complete") completed.add(tabId);
+  const onUpdated = (tabId, info, tab) => {
+    if (loadedOnX(info, tab)) completed.add(tabId);
   };
   chrome.tabs.onUpdated.addListener(onUpdated);
   try {

@@ -52,9 +52,14 @@ export const DEFAULT_LIMITS = Object.freeze({
   // Live X answered every replayed SearchTimeline with 404 on Nov 12 while
   // it accepted replayed TweetDetail, so page is the default.
   searchVia: "page",
-  // Search page loads per 15 minutes. X's SearchTimeline budget was 50 per
-  // window on Nov 12, shared with Sam's own searches.
-  searchPageLoadsPerWindow: 30,
+  // Search page loads per 15 minutes, and the least time between two. Each
+  // page load also runs X's own app, which calls ViewerBadgeCounts; on
+  // Nov 13 at 02:40 UTC, 23 search page loads in about 2 minutes drew a 429
+  // on it and paused the extension for 24 hours. X publishes no limit for
+  // that endpoint and none was measured here; 8 per window at least 60 s
+  // apart is chosen to stay far below what drew the 429, not fitted to it.
+  searchPageLoadsPerWindow: 8,
+  searchPageGapMs: 60_000,
 });
 
 export function clampLimits(given = {}) {
@@ -69,6 +74,8 @@ export function clampLimits(given = {}) {
     out.searchVia = given.searchVia;
   }
   if (int(given.searchPageLoadsPerWindow) !== null) out.searchPageLoadsPerWindow = Math.max(1, Math.min(DEFAULT_LIMITS.searchPageLoadsPerWindow, int(given.searchPageLoadsPerWindow)));
+  // Like minGapMs, a job can only widen it.
+  if (int(given.searchPageGapMs) !== null) out.searchPageGapMs = Math.max(DEFAULT_LIMITS.searchPageGapMs, Math.min(15 * 60_000, int(given.searchPageGapMs)));
   if (int(given.runCap) !== null) out.runCap = Math.max(1, Math.min(DEFAULT_LIMITS.runCap, int(given.runCap)));
   for (const key of ["detailCapPerPost", "branchesPerPost", "searchPagesPerQuery", "linksPerPost", "reprimesPerOperation"]) {
     if (int(given[key]) !== null) out[key] = Math.max(0, Math.min(200, int(given[key])));
@@ -651,16 +658,21 @@ async function search(run, io, s) {
 }
 
 // Waits until fewer than searchPageLoadsPerWindow search pages were opened
-// in the last 15 minutes, or stops the run cleanly when that is too far off.
+// in the last 15 minutes and searchPageGapMs has passed since the last one,
+// or stops the run cleanly when that is too far off.
 async function keepSearchBudget(run, io) {
   const WINDOW = 15 * 60_000;
   const recent = run.searchPageLoads.filter((at) => io.now() - at < WINDOW);
   run.searchPageLoads = recent;
-  if (recent.length < run.limits.searchPageLoadsPerWindow) return;
-  const wait = recent[0] + WINDOW + 2000 - io.now();
-  if (wait > run.limits.maxRateWaitMs) throw new RunStopped("rate_budget", `${recent.length} search pages opened in 15 minutes`);
-  run.rateWaits.push({ operation: "SearchTimeline", at: new Date(io.now()).toISOString(), ms: wait, remaining: null, limit: run.limits.searchPageLoadsPerWindow });
-  await io.sleep(wait);
+  if (recent.length >= run.limits.searchPageLoadsPerWindow) {
+    const wait = recent[0] + WINDOW + 2000 - io.now();
+    if (wait > run.limits.maxRateWaitMs) throw new RunStopped("rate_budget", `${recent.length} search pages opened in 15 minutes`);
+    run.rateWaits.push({ operation: "SearchTimeline", at: new Date(io.now()).toISOString(), ms: wait, remaining: null, limit: run.limits.searchPageLoadsPerWindow });
+    await io.sleep(wait);
+  }
+  const last = run.searchPageLoads.at(-1);
+  const gap = last === undefined ? 0 : last + run.limits.searchPageGapMs - io.now();
+  if (gap > 0) await io.sleep(gap);
 }
 
 // One search page load: the first page of results, as X's own page asked

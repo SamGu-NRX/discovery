@@ -26,6 +26,9 @@ export async function loadConfig() {
     mode: MODES.includes(config.mode) ? config.mode : "passive",
     workerUrl: typeof config.workerUrl === "string" ? config.workerUrl.trim() : "",
     ingestToken: typeof config.ingestToken === "string" ? config.ingestToken.trim() : "",
+    // KNOWLEDGE_INTAKE_TOKEN: may only file daily saves (POST /k/intake,
+    // lib/knowledge.js), and read nothing.
+    intakeToken: typeof config.intakeToken === "string" ? config.intakeToken.trim() : "",
     // Used only when the logged-in handle cannot be read from X's side nav.
     account: typeof config.account === "string" ? config.account.trim().replace(/^@/, "") : "",
     // When the mode last changed (the popup sets it); captures stored after a

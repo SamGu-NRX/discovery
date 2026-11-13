@@ -58,8 +58,9 @@ let nextWindowId = 10;
 chrome.windows.create = async ({ url }) => {
   const id = nextWindowId++;
   log.push(`open:${id}`);
-  tab = { id: id + 100, url };
-  updates.fire(tab.id, { status: "complete" });
+  tab = { id: id + 100, url, status: "complete" };
+  // Like Chrome, onUpdated gets the tab as its third argument.
+  updates.fire(tab.id, { status: "complete" }, { ...tab });
   return { id, tabs: [{ ...tab }] };
 };
 chrome.tabs = {
@@ -67,7 +68,7 @@ chrome.tabs = {
   get: async () => ({ ...tab }),
   update: async (id, { url }) => {
     tab.url = url;
-    updates.fire(id, { status: "complete" });
+    updates.fire(id, { status: "complete" }, { ...tab });
     return { ...tab };
   },
 };
