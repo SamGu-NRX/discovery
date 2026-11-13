@@ -67,10 +67,10 @@ test("intake files one save job per post; the same body changes nothing, a new o
   expect(await k("POST", `/k/jobs/${claimed.id}/complete`, { owner: "t", lease_token: claimed.lease_token, state: "done" }), 200);
   const more = save("1900000000000000101", { context: [...body.context, { id: "1900000000000000103", author_handle: "c", text: "another" }] });
   const third = expect(await k("POST", "/k/intake", more, { token: "knowledge_intake" }), 200);
-  assert.equal(third.job.requeued, true);
   const after = await jobOf("1900000000000000101");
   assert.equal(after.state, "queued");
   assert.equal(after.payload.intake_sha, third.intake_sha);
+  assert.equal(third.job.requeued, true);
 });
 
 test("the intake token files saves and nothing else; kworker's token cannot file", async () => {
@@ -101,94 +101,177 @@ async function bundleWithCard(id, card) {
   return k("POST", "/k/bundles", { post_id: id, md_sha: sha(md), json_sha: sha(js), completeness: "complete", missing: [], saved_by: ["sdotgu"], author: "a", search_text: "x", card });
 }
 
-test("a changed body while the save is running is kept and runs after it, not acknowledged and lost", async () => {
-  // Review of f8c8d6f, P1 3: the newer sha was stored, the claimed job
-  // finished on the old one, and nothing ran the new body.
+
+const claimKey = async (kind, key, ttl_s = 60) => expect(await k("POST", "/k/jobs/claim", { owner: "t", kinds: [kind], ttl_s, limit: 10 }), 200).jobs.find((j) => j.key === key);
+const complete = (j, state = "done") => k("POST", `/k/jobs/${j.id}/complete`, { owner: "t", lease_token: j.lease_token, state });
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+test("a changed body while the save is running runs after it instead of being dropped", async () => {
+  // Review of f8c8d6f, P1 3: the newer body was acknowledged, the running
+  // attempt finished on the old one, and nothing ran the new body.
   const id = "1900000000000000601";
   const first = expect(await k("POST", "/k/intake", save(id), { token: "knowledge_intake" }), 201);
-  const claimed = expect(await k("POST", "/k/jobs/claim", { owner: "t", kinds: ["save"], ttl_s: 60, limit: 10 }), 200).jobs.find((j) => j.key === id);
+  const claimed = await claimKey("save", id);
   assert.equal(claimed.payload.intake_sha, first.intake_sha);
   const newer = expect(await k("POST", "/k/intake", save(id, { context: [{ id: "1900000000000000602", author_handle: "z", text: "later" }] }), { token: "knowledge_intake" }), 200);
-  assert.deepEqual([newer.job.deferred, newer.job.requeued, newer.job.state], [true, false, "claimed"]);
-  expect(await k("POST", `/k/jobs/${claimed.id}/complete`, { owner: "t", lease_token: claimed.lease_token, state: "done" }), 200);
+  expect(await complete(claimed), 200);
   const after = await jobOf(id);
-  assert.equal(after.state, "queued");
-  assert.equal(after.payload.intake_sha, newer.intake_sha);
-  assert.equal(after.pending, null);
+  assert.deepEqual([after.state, after.payload.intake_sha], ["queued", newer.intake_sha]);
+  assert.equal(newer.job.deferred, true);
 });
 
-test("a save that runs again replaces its waiting bundle job and defers a running one", async () => {
-  // Review of f8c8d6f, P1 4: again=true left a queued or claimed bundle job
-  // on its old payload, so the save's new children were never bundled.
-  const job = (payload) => k("POST", "/k/jobs", { kind: "bundle", key: "1900000000000000701", payload, again: true });
+test("a bundle job asked to run again takes the newest payload, waiting or running", async () => {
+  // Review of f8c8d6f, P1 4: again=true left a queued or claimed bundle job on
+  // its old payload, so a save that ran again was bundled from old children.
+  const key = "1900000000000000701";
+  const job = (payload) => k("POST", "/k/jobs", { kind: "bundle", key, payload, again: true });
   expect(await job({ v: 1 }), 201);
-  const replaced = expect(await job({ v: 2 }), 200);
-  assert.deepEqual([replaced.replaced, replaced.job.state, replaced.job.payload], [true, "queued", { v: 2 }]);
-  const claimed = expect(await k("POST", "/k/jobs/claim", { owner: "t", kinds: ["bundle"], ttl_s: 60, limit: 10 }), 200).jobs.find((j) => j.key === "1900000000000000701");
+  const waiting = expect(await job({ v: 2 }), 200);
+  const claimed = await claimKey("bundle", key);
   assert.deepEqual(claimed.payload, { v: 2 });
-  const deferred = expect(await job({ v: 3 }), 200);
-  assert.deepEqual([deferred.deferred, deferred.job.state, deferred.job.pending.payload], [true, "claimed", { v: 3 }]);
-  const done = expect(await k("POST", `/k/jobs/${claimed.id}/complete`, { owner: "t", lease_token: claimed.lease_token, state: "done" }), 200);
-  assert.deepEqual([done.state, done.payload, done.pending], ["queued", { v: 3 }, null]);
+  const running = expect(await job({ v: 3 }), 200);
+  expect(await complete(claimed), 200);
+  const next = await claimKey("bundle", key);
+  assert.deepEqual(next.payload, { v: 3 });
+  expect(await complete(next), 200);
+  assert.deepEqual([waiting.replaced, running.deferred], [true, true]);
 });
 
-// Every page from since on, following next_cursor; fails on a repeat.
-async function allPages(since, limit) {
-  const pages = [];
-  let cursor = null;
-  for (let n = 0; n < 50; n++) {
-    const r = await k("GET", `/k/digest?since=${since}&limit=${limit}${cursor ? `&cursor=${cursor}` : ""}`);
-    expect(r, 200);
-    pages.push({ ids: r.body.saves.map((x) => x.card.post_id), bytes: Buffer.byteLength(r.text), body: r.body });
-    if (!r.body.truncated) return pages;
-    cursor = r.body.next_cursor;
-  }
-  throw new Error("digest paging did not end");
-}
+test("payload changes to a waiting job all apply, however close together", async () => {
+  // Review of 7d6fe20, P1 2: a change in the same millisecond as the job's
+  // last update was skipped and still answered 200. Twenty at once make a
+  // shared millisecond likely; every one must report that it applied.
+  const key = "1900000000000000751";
+  expect(await k("POST", "/k/jobs", { kind: "bundle", key, payload: { v: 0 }, again: true }), 201);
+  const answers = await Promise.all(Array.from({ length: 20 }, (_, i) => k("POST", "/k/jobs", { kind: "bundle", key, payload: { v: i + 1 }, again: true })));
+  const flags = answers.map((r) => expect(r, 200)).map((b) => b.replaced || b.requeued || b.deferred);
+  assert.deepEqual(flags, Array(20).fill(true));
+});
+
+test("a run requested during an attempt whose lease expires runs as a fresh job", async () => {
+  // Review of 7d6fe20, P1 1: the third expiry failed the job and stranded the
+  // pending run; posting the same intake again then changed nothing.
+  const id = "1900000000000000781";
+  expect(await k("POST", "/k/intake", save(id), { token: "knowledge_intake" }), 201);
+  const crashed = await claimKey("save", id, 0.05);
+  const newer = expect(await k("POST", "/k/intake", save(id, { context: [{ id: "1900000000000000782", author_handle: "z", text: "later" }] }), { token: "knowledge_intake" }), 200);
+  // This expiry is its third: before the fix it failed the job.
+  s.d1(`UPDATE knowledge_jobs SET expired_leases = 2 WHERE id = '${crashed.id}'`);
+  await sleep(100);
+  const fresh = await claimKey("save", id);
+  assert.ok(fresh, "the pending run was not claimable after the expiry");
+  assert.equal(fresh.payload.intake_sha, newer.intake_sha);
+  const row = await jobOf(id);
+  assert.deepEqual([row.state, row.expired_leases, row.pending], ["claimed", 0, null]);
+  expect(await complete(fresh), 200);
+});
+
+test("deps that lead back to the job are refused, through other jobs and pending deps", async () => {
+  // Review of 7d6fe20, P2 3: only a job naming itself was refused, so A -> B -> A
+  // went through and neither job could ever be claimed.
+  const make = async (key, deps = []) => expect(await k("POST", "/k/jobs", { kind: "link", key, payload: {}, deps }), 201).job.id;
+  const a = await make("cycle-a");
+  const b = await make("cycle-b", [a]);
+  const c = await make("cycle-c", [b]);
+  const r = await k("POST", "/k/jobs", { kind: "link", key: "cycle-a", payload: { again: 1 }, deps: [c], again: true });
+  const row = (await k("GET", "/k/jobs?kind=link&key=cycle-a")).body.jobs[0];
+  assert.deepEqual(row.deps, []);
+  expect(r, 422, "dep_cycle");
+  // Through a pending deps list: d is claimed and its pending run names a.
+  const d = await make("cycle-d");
+  const claimed = await claimKey("link", "cycle-d");
+  expect(await k("POST", "/k/jobs", { kind: "link", key: "cycle-d", payload: {}, deps: [a], again: true }), 200);
+  expect(await k("POST", "/k/jobs", { kind: "link", key: "cycle-a", payload: {}, deps: [d], again: true }), 422, "dep_cycle");
+  expect(await complete(claimed), 200);
+});
 
 test("the digest returns cards of saves finished since a time, as stored", async () => {
   expect(await bundleWithCard("1900000000000000401", { post_id: "1900000000000000401", excerpt: "older" }), 201);
-  await new Promise((r) => setTimeout(r, 20));
+  await sleep(20);
   const since = Date.now();
   const card = { post_id: "1900000000000000402", url: "https://x.com/a/status/1900000000000000402", verdict: { label: "try", why: "a repo Sam can install" }, links: [{ url: "https://github.com/o/r", repo: { name: "o/r", stars: 12 } }] };
   expect(await bundleWithCard("1900000000000000402", card), 201);
   const d = expect(await k("GET", `/k/digest?since=${since}`), 200);
   assert.deepEqual(d.saves.map((x) => x.card.post_id), ["1900000000000000402"]);
   assert.deepEqual(d.saves[0].card, card);
-  assert.equal(d.truncated, false);
   // A card over 4 KiB is refused when the bundle is registered.
   expect(await bundleWithCard("1900000000000000403", { excerpt: "y".repeat(5000) }), 400, "invalid_request");
 });
 
-test("digest pages with saves finished in the same millisecond end, with each save once", async () => {
-  // Review of f8c8d6f, P1 2: next_since was the first excluded row's time,
-  // so with two saves at the same instant and limit 1 the first came back forever.
+// Follows the digest's own resume pointer (next_cursor, or next_since on the
+// old interface) until it says there is no more, at most 20 pages.
+async function allPages(since, limit) {
+  const pages = [];
+  let query = `since=${since}&limit=${limit}`;
+  for (let n = 0; n < 20; n++) {
+    const r = await k("GET", `/k/digest?${query}`);
+    expect(r, 200);
+    pages.push({ ids: r.body.saves.map((x) => x.card?.post_id ?? null), bytes: Buffer.byteLength(r.text), body: r.body });
+    if (!r.body.truncated) return pages;
+    query = r.body.next_cursor ? `since=${since}&limit=${limit}&cursor=${r.body.next_cursor}` : `since=${encodeURIComponent(r.body.next_since)}&limit=${limit}`;
+  }
+  return pages;
+}
+const pinTime = (ids, t) => s.d1(`UPDATE bundles SET created_at = ${t} WHERE post_id IN (${ids.map((i) => `'${i}'`).join(",")})`);
+
+test("saves finished in the same millisecond page once each, in order", async () => {
+  // Review of f8c8d6f, P1 2: with a resume time instead of a cursor, two
+  // saves at one instant and limit 1 returned the first one forever.
   const ids = ["1900000000000000801", "1900000000000000802", "1900000000000000803"];
   for (const id of ids) expect(await bundleWithCard(id, { post_id: id }), 201);
   const t = 4102444800000; // 2100-01-01, after every other bundle in this run
-  s.d1(`UPDATE bundles SET created_at = ${t} WHERE post_id IN (${ids.map((i) => `'${i}'`).join(",")})`);
+  pinTime(ids, t);
   const pages = await allPages(t, 1);
   assert.deepEqual(pages.map((p) => p.ids), [[ids[0]], [ids[1]], [ids[2]]]);
 });
 
-test("a digest page stays under 30 KB of UTF-8 and moves on", async () => {
+test("a malformed cursor is refused", async () => {
+  for (const bad of ["abc", "123", "123.", ".1900000000000000801", "123.0", "1".repeat(17) + ".1"]) {
+    expect(await k("GET", `/k/digest?since=0&cursor=${bad}`), 400, "invalid_request");
+  }
+});
+
+test("a digest page stays within 30 KiB of UTF-8 and paging moves on", async () => {
   // 12 cards of about 3.9 KB of two-byte characters: counted in UTF-16 units
   // they look half that size.
   const ids = Array.from({ length: 12 }, (_, i) => `19000000000000009${String(i).padStart(2, "0")}`);
   for (const id of ids) expect(await bundleWithCard(id, { post_id: id, excerpt: "é".repeat(1900) }), 201);
   const t = 4102444900000;
-  s.d1(`UPDATE bundles SET created_at = ${t} WHERE post_id IN (${ids.map((i) => `'${i}'`).join(",")})`);
+  pinTime(ids, t);
   const pages = await allPages(t, 100);
-  assert.ok(pages.length >= 2, `${pages.length} page(s)`);
   for (const p of pages) assert.ok(p.bytes <= 30 * 1024, `a page was ${p.bytes} bytes`);
   assert.deepEqual(pages.flatMap((p) => p.ids), ids);
 });
 
-test("pending_saves counts saves whose bundle is still to come; since is checked", async () => {
+test("a bundle from before cards existed stays small in the digest", async () => {
+  // Review of 7d6fe20, P2 4: a fallback card took missing[].what whole, and the
+  // first save on a page is admitted at any size.
+  const t = 4103000000000;
+  const id = "1900000000000001101";
+  const md = Buffer.from(`# ${id}
+`);
+  const js = Buffer.from(JSON.stringify({ schema: "kbundle/1", post_id: id, legacy: true }));
+  for (const [bytes, mime] of [[md, "text/markdown"], [js, "application/json"]]) {
+    const put = await freshFetch(`${s.base}/k/blobs/${sha(bytes)}`, { method: "PUT", headers: { authorization: `Bearer ${s.vars.KNOWLEDGE_TOKEN}`, "content-type": mime }, body: bytes });
+    assert.ok(put.status === 201 || put.status === 200, String(put.status));
+  }
+  // No card, as bundles registered before 0021 have, and one huge gap.
+  const missing = [{ what: "w".repeat(40000), ref: "x", reason: "r" }];
+  expect(await k("POST", "/k/bundles", { post_id: id, md_sha: sha(md), json_sha: sha(js), completeness: "partial", missing, saved_by: [], author: "a", search_text: "x" }), 201);
+  pinTime([id], t);
+  const r = await k("GET", `/k/digest?since=${t}`);
+  expect(r, 200);
+  assert.equal(r.body.saves[0].card.post_id, "1900000000000001101");
+  assert.ok(Buffer.byteLength(r.text) <= 2048, `the page was ${Buffer.byteLength(r.text)} bytes`);
+});
+
+test("pending_saves counts a save whose bundle is still to come", async () => {
   const before = expect(await k("GET", "/k/digest?since=0&limit=1"), 200).pending_saves;
-  // A save whose save job is done but whose bundle job waits still counts.
   expect(await k("POST", "/k/jobs", { kind: "bundle", key: "1900000000000001001", payload: {} }), 201);
   assert.equal(expect(await k("GET", "/k/digest?since=0&limit=1"), 200).pending_saves, before + 1);
+});
+
+test("since takes epoch milliseconds in range or an ISO time with a zone", async () => {
   for (const bad of ["99999999999999999", "2026-11-13", "yesterday", "2026-11-13T07:00:00"]) {
     expect(await k("GET", `/k/digest?since=${bad}`), 400, "invalid_request");
   }

@@ -131,9 +131,15 @@ const byteLength = (s: string) => enc.encode(s).byteLength;
 
 // A bundle registered before cards existed: its status and the first three
 // gaps, each cut short, so it stays far below a page.
+// Every field is cut, so the whole card stays under LEGACY_CARD_MAX bytes
+// whatever the row holds (a registered card is already at most 4 KiB).
+const LEGACY_CARD_MAX = 1024;
 function legacyCard(r: CardRow): string {
-  const missing = (JSON.parse(r.missing_json) as { what: string; reason: string }[]).slice(0, 3).map((m) => `${m.what}: ${String(m.reason).slice(0, 160)}`);
-  return JSON.stringify({ post_id: r.post_id, status: r.completeness, missing, card: null });
+  const missing = (JSON.parse(r.missing_json) as { what?: unknown; reason?: unknown }[])
+    .slice(0, 3)
+    .map((m) => `${String(m.what ?? "").slice(0, 40)}: ${String(m.reason ?? "").slice(0, 160)}`);
+  const card = JSON.stringify({ post_id: r.post_id, status: r.completeness, missing, card: null });
+  return byteLength(card) <= LEGACY_CARD_MAX ? card : JSON.stringify({ post_id: r.post_id, status: r.completeness, missing: [], card: null });
 }
 
 // GET /k/digest?since=<time>[&cursor=<created_at>.<post_id>]&limit=<n>

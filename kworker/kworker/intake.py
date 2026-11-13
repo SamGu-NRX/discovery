@@ -26,7 +26,8 @@ def _links(items) -> list[dict]:
 
 
 def _thread_post(p: dict, is_save: bool) -> dict:
-    return {"id": p["id"], "url": p["url"], "created_at": _iso(p.get("created_at")), "text": p.get("text") or "", "is_save": is_save, "media": _media(p.get("media"))}
+    return {"id": p["id"], "url": p["url"], "created_at": _iso(p.get("created_at")), "text": p.get("text") or "", "is_save": is_save, "media": _media(p.get("media")),
+            "links": [l["expanded"] for l in _links(p.get("links"))]}
 
 
 def expansion(intake: dict) -> dict:

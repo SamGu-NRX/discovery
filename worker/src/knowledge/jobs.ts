@@ -94,7 +94,11 @@ export async function createJob(env: Env, b: Record<string, unknown>): Promise<R
 // would fail at its next expiry; attempts keeps counting across runs.
 export async function runAgain(env: Env, id: string, payload: string, depsJson: string, now: number) {
   const db = env.DB;
-  const [requeued, replaced, deferred, row] = await db.batch<JobRow>([
+  if (depsJson !== "[]") await refuseCycle(env, id, depsJson);
+  // D1 runs a batch's statements in order, in one transaction. The second
+  // statement also matches a row the first just queued; writing the same
+  // payload twice is harmless, and the flags below say which one applied.
+  const [requeued, inPlace, deferred, row] = await db.batch<JobRow>([
     db
       .prepare(
         `UPDATE knowledge_jobs SET state = 'queued', payload = ?2, deps = ?3, runs = runs + 1, expired_leases = 0, owner = NULL, lease_token = NULL,
@@ -102,16 +106,37 @@ export async function runAgain(env: Env, id: string, payload: string, depsJson: 
          WHERE id = ?1 AND state IN ('done', 'failed') RETURNING id`,
       )
       .bind(id, payload, depsJson, now),
-    // runs and updated_at mark the row the first statement just queued, which
-    // this one must leave alone; D1 runs a batch's statements in order.
-    db.prepare(`UPDATE knowledge_jobs SET payload = ?2, deps = ?3, updated_at = ?4 WHERE id = ?1 AND state = 'queued' AND updated_at != ?4 RETURNING id`).bind(id, payload, depsJson, now),
+    db.prepare(`UPDATE knowledge_jobs SET payload = ?2, deps = ?3, updated_at = ?4 WHERE id = ?1 AND state = 'queued' RETURNING id`).bind(id, payload, depsJson, now),
     db.prepare(`UPDATE knowledge_jobs SET pending_payload = ?2, pending_deps = ?3 WHERE id = ?1 AND state = 'claimed' RETURNING id`).bind(id, payload, depsJson),
     db.prepare("SELECT * FROM knowledge_jobs WHERE id = ?").bind(id),
   ]);
+  const wasRequeued = requeued.results.length > 0;
   return {
-    how: { requeued: requeued.results.length > 0, replaced: replaced.results.length > 0, deferred: deferred.results.length > 0 },
+    how: { requeued: wasRequeued, replaced: !wasRequeued && inPlace.results.length > 0, deferred: deferred.results.length > 0 },
     row: row.results[0],
   };
+}
+
+// Refuses deps that lead back to the job, through any job's deps or pending
+// deps: neither job of a cycle could ever be claimed. UNION keeps each id
+// once, so the walk ends after at most every job reachable from these deps;
+// the graphs are a save's few children, and DEP_WALK_MAX bounds a bad one.
+const DEP_WALK_MAX = 1000;
+async function refuseCycle(env: Env, id: string, depsJson: string) {
+  const r = await env.DB.prepare(
+    `WITH RECURSIVE reach(id) AS (
+       SELECT value FROM json_each(?1)
+       UNION
+       SELECT d.value FROM reach JOIN knowledge_jobs j ON j.id = reach.id JOIN json_each(j.deps) d
+       UNION
+       SELECT d.value FROM reach JOIN knowledge_jobs j ON j.id = reach.id JOIN json_each(coalesce(j.pending_deps, '[]')) d
+     )
+     SELECT count(*) AS n, coalesce(max(id = ?2), 0) AS cycle FROM (SELECT id FROM reach LIMIT ?3)`,
+  )
+    .bind(depsJson, id, DEP_WALK_MAX + 1)
+    .first<{ n: number; cycle: number }>();
+  if (r && r.cycle) throw new KError(422, "dep_cycle", `deps lead back to job ${id} through other jobs' deps; neither could ever be claimed`);
+  if (r && r.n > DEP_WALK_MAX) throw new KError(422, "dep_cycle", `deps reach more than ${DEP_WALK_MAX} jobs; refusing a dependency graph this large`);
 }
 
 export async function claimJobs(env: Env, b: Record<string, unknown>) {
@@ -125,7 +150,18 @@ export async function claimJobs(env: Env, b: Record<string, unknown>) {
   // A dep that is neither done nor failed (or is missing) holds the job back.
   // Least-attempted first, so a job handed back with state "queued" goes
   // behind ones never tried.
-  const [, claimed] = await db.batch<JobRow>([
+  const [, , claimed] = await db.batch<JobRow>([
+    // An expired attempt that had a run requested during it (pending_payload)
+    // is over: the pending run is queued as a fresh run with its own expiry
+    // budget, before the failure rule below can strand it.
+    db
+      .prepare(
+        `UPDATE knowledge_jobs SET state = 'queued', payload = pending_payload, deps = pending_deps, pending_payload = NULL, pending_deps = NULL,
+           runs = runs + 1, expired_leases = 0, owner = NULL, lease_until = NULL, lease_token = NULL, result = NULL,
+           error = 'the previous attempt''s lease expired; running the request that arrived during it', updated_at = ?1
+         WHERE state = 'claimed' AND lease_until < ?1 AND pending_payload IS NOT NULL`,
+      )
+      .bind(now),
     db
       .prepare(
         `UPDATE knowledge_jobs SET state = 'failed', owner = NULL, lease_until = NULL, lease_token = NULL, updated_at = ?1,

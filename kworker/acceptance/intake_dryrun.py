@@ -21,6 +21,18 @@ from kworker.archive_nov12 import Nov12
 
 CAP = 80  # the daily job's context cap
 _ID = re.compile(r"/status/(\d+)")
+_TCO = re.compile(r"https?://t\.co/\w+")
+
+
+def resolutions(arch: Nov12) -> dict[str, str]:
+    """t.co -> target, from the archive's link-resolutions.json: the daily job
+    sends links expanded, so the dry run does too."""
+    rows = json.loads((arch.snap / "2026-11-12" / "link-resolutions.json").read_text(encoding="utf-8"))
+    return {r["url"]: r["expanded"] for r in rows if r.get("url") and r.get("expanded") and not r.get("error")}
+
+
+def _expanded(text: str, res: dict[str, str]) -> list[dict]:
+    return [{"url": u, "expanded": res[u]} for u in dict.fromkeys(_TCO.findall(text or "")) if u in res]
 
 
 def _post(p: dict, media: list[dict] | None = None) -> dict:
@@ -33,7 +45,8 @@ def _post(p: dict, media: list[dict] | None = None) -> dict:
     }
 
 
-def body(arch: Nov12, sid: str) -> dict:
+def body(arch: Nov12, sid: str, res: dict[str, str] | None = None) -> dict:
+    res = res if res is not None else resolutions(arch)
     exp = arch.expansion(sid)
     raw = arch.posts[sid]
     post = _post({**exp["post"], "author_handle": exp["post"]["author_handle"]})
@@ -45,7 +58,10 @@ def body(arch: Nov12, sid: str) -> dict:
         qid = q.get("id") or (_ID.search(q.get("url") or "") or [None, None])[1]
         if qid and q.get("author_handle"):
             post["quoted"] = _post({"id": qid, "url": q["url"], "author_handle": q["author_handle"], "text": q["text"]}, q.get("media") or [])
-    thread = [_post({"id": t["id"], "url": t["url"], "author_handle": exp["post"]["author_handle"], "text": t["text"]}, t["media"]) for t in exp["thread"]]
+    thread = [
+        {**_post({"id": t["id"], "url": t["url"], "author_handle": exp["post"]["author_handle"], "text": t["text"]}, t["media"]), "links": _expanded(t["text"], res)}
+        for t in exp["thread"]
+    ]
     ids = {t["id"] for t in exp["thread"]}
     rows = [c for c in arch.candidates(sid) if c["status_id"] not in ids and not str(c.get("view", "")).startswith("fetch:upstream")]
     context = [
@@ -57,7 +73,7 @@ def body(arch: Nov12, sid: str) -> dict:
             "quoted_id": c.get("quoted_status_id"),
             "view": c.get("view"),
             "created_at": c.get("created_at"),
-            "links": [u for u in c.get("urls") or [] if isinstance(u, str)],
+            "links": [u for u in c.get("urls") or [] if isinstance(u, str) and not _TCO.match(u)] + _expanded(c.get("rendered_text") or "", res),
         }
         for c in rows[:CAP]
     ]
@@ -68,7 +84,7 @@ def body(arch: Nov12, sid: str) -> dict:
         "account": (exp.get("saved_by") or ["sdotgu"])[0],
         "post": post,
         "thread": thread,
-        "upstream": [_post(up)] if up else [],
+        "upstream": [_post(u) for u in up or []],
         "context": context,
         "context_capped": len(rows) > CAP,
         "views_read": [{"view": v} for v in exp.get("reply_views") or []],
@@ -85,10 +101,11 @@ def main() -> None:
     arch = Nov12(a.snapshot, a.worktree)
     ids = a.ids.split(",") if a.ids else arch.judged()
     v = dev_vars()
+    res = resolutions(arch)
     out = []
     with httpx.Client(base_url=a.base, headers={"authorization": f"Bearer {v['KNOWLEDGE_INTAKE_TOKEN']}"}, timeout=60) as c:
         for sid in ids:
-            b = body(arch, sid)
+            b = body(arch, sid, res)
             r = c.post("/k/intake", content=json.dumps(b, ensure_ascii=False).encode("utf-8"), headers={"content-type": "application/json"})
             out.append((sid, r.status_code, r.json().get("job", r.json())))
             print(sid, r.status_code, json.dumps(r.json())[:200])

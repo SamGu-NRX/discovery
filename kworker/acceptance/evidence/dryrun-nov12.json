@@ -1,0 +1,1667 @@
+{
+ "summary": {
+  "saves": 70,
+  "status": {
+   "complete": 51,
+   "blocked": 17,
+   "partial": 2
+  },
+  "tokens": {
+   "gate_band.in": 254931,
+   "gate_band.out": 88659,
+   "save_verdict.in": 178614,
+   "save_verdict.out": 5482,
+   "image_read.in": 27277,
+   "image_read.out": 15696,
+   "image_second_read.in": 19384,
+   "image_second_read.out": 6633,
+   "video_read.in": 83889,
+   "video_read.out": 12975
+  },
+  "wall_s": 2429.7,
+  "r2_mb": 256.3,
+  "gate_vs_judge": {
+   "both_keep": 450,
+   "gate_only": 380,
+   "judge_only": 285,
+   "both_drop": 3020,
+   "precision": 0.542,
+   "recall": 0.612
+  }
+ },
+ "saves": {
+  "2030019458345980296": {
+   "status": "complete",
+   "reasons": [],
+   "version": 2,
+   "wall_s": 29.4,
+   "r2_bytes": 1448028,
+   "tokens": {
+    "gate_band.in": 1865,
+    "gate_band.out": 215,
+    "save_verdict.in": 4806,
+    "save_verdict.out": 80
+   },
+   "model_calls": {
+    "fastembed/BAAI/bge-base-en-v1.5": 1,
+    "cliproxy/claude-haiku-5-5": 2
+   },
+   "gate_sha": "5850e18129cd9dbdaf86fa6b36bd25385f7249d2456a6b62e31dd16cced9768f",
+   "gate_vs_judge": {
+    "both_keep": 22,
+    "gate_only": 1,
+    "judge_only": 43,
+    "both_drop": 14
+   }
+  },
+  "2110757819427574056": {
+   "status": "complete",
+   "reasons": [],
+   "version": 1,
+   "wall_s": 36.4,
+   "r2_bytes": 720855,
+   "tokens": {
+    "gate_band.in": 7591,
+    "gate_band.out": 2391,
+    "save_verdict.in": 3502,
+    "save_verdict.out": 108
+   },
+   "model_calls": {
+    "fastembed/BAAI/bge-base-en-v1.5": 1,
+    "cliproxy/claude-haiku-5-5": 3
+   },
+   "gate_sha": "9166c5bba405c2b2441d47bf16981a8d4532f46509362752a4f8a302d4ce2b2f",
+   "gate_vs_judge": {
+    "both_keep": 23,
+    "gate_only": 5,
+    "judge_only": 6,
+    "both_drop": 46
+   }
+  },
+  "2114400113515012360": {
+   "status": "blocked",
+   "reasons": [
+    "link https://t.co/G2EO7NoYv4: blocked at rung 7: every rung failed (rung 1: X fetches are off (KWORKER_NO_X=1); rung 2: X fetches are off (KWORKER_NO_X=1); rung 3: X fetches are off (KWORKER",
+    "link https://t.co/Ai84q6Lozf: blocked at rung 7: every rung failed (rung 1: X fetches are off (KWORKER_NO_X=1); rung 2: X fetches are off (KWORKER_NO_X=1); rung 3: X fetches are off (KWORKER"
+   ],
+   "version": 2,
+   "wall_s": 25.0,
+   "r2_bytes": 494112,
+   "tokens": {
+    "gate_band.in": 3209,
+    "gate_band.out": 1264,
+    "save_verdict.in": 4340,
+    "save_verdict.out": 61
+   },
+   "model_calls": {
+    "fastembed/BAAI/bge-base-en-v1.5": 1,
+    "cliproxy/claude-haiku-5-5": 2
+   },
+   "gate_sha": "c6b1463eefe105db5d5d1b756f36bf6985d17ff5feb39dfce0847156de74276a",
+   "gate_vs_judge": {
+    "both_keep": 1,
+    "gate_only": 10,
+    "judge_only": 2,
+    "both_drop": 67
+   }
+  },
+  "2114446672831058376": {
+   "status": "partial",
+   "reasons": [
+    "link https://x.com/i/jf/onboarding/web?redirect_after_login=%2Fi%2Farticle%2F2114445040831676416&mode=login: blocked at rung 7: every rung failed (rung 1: X fetches are off (KWORKER_NO_X=1); rung 2: X fetches are off (KWORKER_NO_X=1); rung 3: X fetches are off (KWORKER",
+    "link https://Teja.Ai: error at rung 7: every rung failed (rung 1: ConnectTimeout: [WinError 10060] A connection attempt failed because the connected party did not properly respond af"
+   ],
+   "version": 2,
+   "wall_s": 121.9,
+   "r2_bytes": 342212,
+   "tokens": {
+    "gate_band.in": 6500,
+    "gate_band.out": 2429,
+    "save_verdict.in": 2726,
+    "save_verdict.out": 74
+   },
+   "model_calls": {
+    "fastembed/BAAI/bge-base-en-v1.5": 1,
+    "cliproxy/claude-haiku-5-5": 3
+   },
+   "gate_sha": "9eaf4e13b39ab85afd09c78b78cfd15e10fcb81258560684ed62f06d1f8f398c",
+   "gate_vs_judge": {
+    "both_keep": 5,
+    "gate_only": 8,
+    "judge_only": 2,
+    "both_drop": 65
+   }
+  },
+  "2114505381342838802": {
+   "status": "complete",
+   "reasons": [],
+   "version": 1,
+   "wall_s": 62.4,
+   "r2_bytes": 8056537,
+   "tokens": {
+    "gate_band.in": 3724,
+    "gate_band.out": 364,
+    "save_verdict.in": 4287,
+    "save_verdict.out": 95,
+    "image_read.in": 1701,
+    "image_read.out": 1133,
+    "image_second_read.in": 1377,
+    "image_second_read.out": 720
+   },
+   "model_calls": {
+    "fastembed/BAAI/bge-base-en-v1.5": 1,
+    "cliproxy/claude-haiku-5-5": 3,
+    "cliproxy/gpt-6-luna": 1
+   },
+   "gate_sha": "8839e0d3beeabc4f607cd7c8a8787ea02e1e72cfbf2f0f4f069e03425d0c5d9a",
+   "gate_vs_judge": {
+    "both_keep": 2,
+    "gate_only": 3,
+    "judge_only": 0,
+    "both_drop": 3
+   }
+  },
+  "2114931750115672242": {
+   "status": "complete",
+   "reasons": [],
+   "version": 2,
+   "wall_s": 17.6,
+   "r2_bytes": 41983,
+   "tokens": {
+    "save_verdict.in": 3321,
+    "save_verdict.out": 96
+   },
+   "model_calls": {
+    "cliproxy/claude-haiku-5-5": 1
+   },
+   "gate_sha": "5983bd64bb4a8af3133cbb935c2b83ffcaee9635089725a8cf7d68725aefd61b",
+   "gate_vs_judge": {
+    "both_keep": 0,
+    "gate_only": 5,
+    "judge_only": 1,
+    "both_drop": 14
+   }
+  },
+  "2115072947576812013": {
+   "status": "blocked",
+   "reasons": [
+    "link https://t.co/DsuXYYUV1w: blocked at rung 7: every rung failed (rung 1: X fetches are off (KWORKER_NO_X=1); rung 2: X fetches are off (KWORKER_NO_X=1); rung 3: X fetches are off (KWORKER"
+   ],
+   "version": 2,
+   "wall_s": 25.8,
+   "r2_bytes": 434745,
+   "tokens": {
+    "gate_band.in": 3797,
+    "gate_band.out": 1464,
+    "save_verdict.in": 2819,
+    "save_verdict.out": 79
+   },
+   "model_calls": {
+    "fastembed/BAAI/bge-base-en-v1.5": 1,
+    "cliproxy/claude-haiku-5-5": 2
+   },
+   "gate_sha": "c0914b8178dcb71beea476313b183904fb0e5a35ea714f1bc2b568cc3b5eaf30",
+   "gate_vs_judge": {
+    "both_keep": 8,
+    "gate_only": 7,
+    "judge_only": 4,
+    "both_drop": 61
+   }
+  },
+  "2115081566187552991": {
+   "status": "complete",
+   "reasons": [],
+   "version": 2,
+   "wall_s": 22.5,
+   "r2_bytes": 367133,
+   "tokens": {
+    "gate_band.in": 2933,
+    "gate_band.out": 898,
+    "save_verdict.in": 2201,
+    "save_verdict.out": 71
+   },
+   "model_calls": {
+    "fastembed/BAAI/bge-base-en-v1.5": 1,
+    "cliproxy/claude-haiku-5-5": 2
+   },
+   "gate_sha": "d586d177444a2b4014ec141b52dd4391352862a04bc0e2858ce4c6aec791b8b9",
+   "gate_vs_judge": {
+    "both_keep": 0,
+    "gate_only": 0,
+    "judge_only": 2,
+    "both_drop": 78
+   }
+  },
+  "2115098474593321015": {
+   "status": "complete",
+   "reasons": [],
+   "version": 2,
+   "wall_s": 15.2,
+   "r2_bytes": 26343,
+   "tokens": {
+    "save_verdict.in": 2566,
+    "save_verdict.out": 87
+   },
+   "model_calls": {
+    "cliproxy/claude-haiku-5-5": 1
+   },
+   "gate_sha": "8692dafa306719222eac6d9b843346fb38daaec383c6c8e117d9f91d86621028",
+   "gate_vs_judge": {
+    "both_keep": 0,
+    "gate_only": 1,
+    "judge_only": 0,
+    "both_drop": 3
+   }
+  },
+  "2115486437156016566": {
+   "status": "blocked",
+   "reasons": [
+    "link https://t.co/zuanvmBLDy: blocked at rung 7: every rung failed (rung 1: X fetches are off (KWORKER_NO_X=1); rung 2: X fetches are off (KWORKER_NO_X=1); rung 3: X fetches are off (KWORKER"
+   ],
+   "version": 2,
+   "wall_s": 15.8,
+   "r2_bytes": 29262,
+   "tokens": {
+    "save_verdict.in": 2712,
+    "save_verdict.out": 71
+   },
+   "model_calls": {
+    "cliproxy/claude-haiku-5-5": 1
+   },
+   "gate_sha": "5fb90544ec7667ec84d1dd3fd5e58fc1c015f075642c3995d8bb03906553e1a3",
+   "gate_vs_judge": {
+    "both_keep": 1,
+    "gate_only": 0,
+    "judge_only": 0,
+    "both_drop": 8
+   }
+  },
+  "2115575731585507796": {
+   "status": "complete",
+   "reasons": [],
+   "version": 2,
+   "wall_s": 16.6,
+   "r2_bytes": 123636,
+   "tokens": {
+    "save_verdict.in": 3575,
+    "save_verdict.out": 89
+   },
+   "model_calls": {
+    "cliproxy/claude-haiku-5-5": 1
+   },
+   "gate_sha": "4efb6eff12620ba7d95288dd9fc3fa091bc28a60fe63c08f9799a363a2b0fee8",
+   "gate_vs_judge": {
+    "both_keep": 9,
+    "gate_only": 4,
+    "judge_only": 9,
+    "both_drop": 30
+   }
+  },
+  "2115638341454696697": {
+   "status": "complete",
+   "reasons": [],
+   "version": 2,
+   "wall_s": 15.9,
+   "r2_bytes": 29926,
+   "tokens": {
+    "save_verdict.in": 2220,
+    "save_verdict.out": 80
+   },
+   "model_calls": {
+    "cliproxy/claude-haiku-5-5": 1
+   },
+   "gate_sha": "ace6a570a8ec15dc33aa899902de1e5e7990644f278e92bfd242074ce8c25634",
+   "gate_vs_judge": {
+    "both_keep": 0,
+    "gate_only": 1,
+    "judge_only": 4,
+    "both_drop": 25
+   }
+  },
+  "2115740246994243669": {
+   "status": "partial",
+   "reasons": [
+    "media https://video.twimg.com/amplify_video/2115208863225954304/vid/avc1/3840x2160/-TjnRKrOnhMTnOCj.mp4?tag=29: KError: upload -> 0 s3_not_configured: blob 6736118d824cd69a10beb5ca29415f424fbc489d5677a857b7cdaf4a11599e2b is 271696090 bytes, over 8388608; set R2_S3_ENDPOIN"
+   ],
+   "version": 2,
+   "wall_s": 23.2,
+   "r2_bytes": 27135,
+   "tokens": {
+    "save_verdict.in": 2576,
+    "save_verdict.out": 94
+   },
+   "model_calls": {
+    "cliproxy/claude-haiku-5-5": 1
+   },
+   "gate_sha": "4d6a7f0a9dd992329ae32dc2ccaa7d4ec881232f33932d20212288b2fefe261c",
+   "gate_vs_judge": {
+    "both_keep": 0,
+    "gate_only": 1,
+    "judge_only": 0,
+    "both_drop": 14
+   }
+  },
+  "2115740336685461962": {
+   "status": "complete",
+   "reasons": [],
+   "version": 2,
+   "wall_s": 15.3,
+   "r2_bytes": 30274,
+   "tokens": {
+    "save_verdict.in": 2224,
+    "save_verdict.out": 101
+   },
+   "model_calls": {
+    "cliproxy/claude-haiku-5-5": 1
+   },
+   "gate_sha": "560de51d9e606048b87a7409ff8c3171006321a1010aa82924711421b7e2e29f",
+   "gate_vs_judge": {
+    "both_keep": 0,
+    "gate_only": 0,
+    "judge_only": 0,
+    "both_drop": 15
+   }
+  },
+  "2115775656457843006": {
+   "status": "complete",
+   "reasons": [],
+   "version": 2,
+   "wall_s": 16.4,
+   "r2_bytes": 75578,
+   "tokens": {
+    "save_verdict.in": 2469,
+    "save_verdict.out": 71
+   },
+   "model_calls": {
+    "cliproxy/claude-haiku-5-5": 1
+   },
+   "gate_sha": "17c322b16f47b102b4b98c3f3e9b922118447ef684287270e842a8385b8ebd5c",
+   "gate_vs_judge": {
+    "both_keep": 0,
+    "gate_only": 1,
+    "judge_only": 0,
+    "both_drop": 5
+   }
+  },
+  "2115790225998021049": {
+   "status": "complete",
+   "reasons": [],
+   "version": 2,
+   "wall_s": 15.7,
+   "r2_bytes": 36774,
+   "tokens": {
+    "save_verdict.in": 2389,
+    "save_verdict.out": 67
+   },
+   "model_calls": {
+    "cliproxy/claude-haiku-5-5": 1
+   },
+   "gate_sha": "2c150993e56fc1cbe9ce57f27b6f726ee845ef4ffadee6840370b24e638dea2c",
+   "gate_vs_judge": {
+    "both_keep": 0,
+    "gate_only": 2,
+    "judge_only": 1,
+    "both_drop": 12
+   }
+  },
+  "2115859625719566381": {
+   "status": "blocked",
+   "reasons": [
+    "link https://t.co/yMU3YeaYPL: blocked at rung 7: every rung failed (rung 1: X fetches are off (KWORKER_NO_X=1); rung 2: X fetches are off (KWORKER_NO_X=1); rung 3: X fetches are off (KWORKER",
+    "link https://t.co/qlTkYPmQWn: blocked at rung 7: every rung failed (rung 1: X fetches are off (KWORKER_NO_X=1); rung 2: X fetches are off (KWORKER_NO_X=1); rung 3: X fetches are off (KWORKER"
+   ],
+   "version": 2,
+   "wall_s": 15.3,
+   "r2_bytes": 19802,
+   "tokens": {
+    "save_verdict.in": 2150,
+    "save_verdict.out": 107
+   },
+   "model_calls": {
+    "cliproxy/claude-haiku-5-5": 1
+   },
+   "gate_sha": "8f7ebc767738d0e9306ddf88ed196e9de45167c42f18dcd486346b7dccdf5295",
+   "gate_vs_judge": {
+    "both_keep": 0,
+    "gate_only": 0,
+    "judge_only": 0,
+    "both_drop": 6
+   }
+  },
+  "2115864821925351779": {
+   "status": "blocked",
+   "reasons": [
+    "link https://t.co/9xkSaeHTit: blocked at rung 7: every rung failed (rung 1: X fetches are off (KWORKER_NO_X=1); rung 2: X fetches are off (KWORKER_NO_X=1); rung 3: X fetches are off (KWORKER",
+    "link https://x.com/momentprocamera?s=11: blocked at rung 7: every rung failed (rung 1: X fetches are off (KWORKER_NO_X=1); rung 2: X fetches are off (KWORKER_NO_X=1); rung 3: X fetches are off (KWORKER"
+   ],
+   "version": 2,
+   "wall_s": 16.3,
+   "r2_bytes": 69765,
+   "tokens": {
+    "save_verdict.in": 2801,
+    "save_verdict.out": 105
+   },
+   "model_calls": {
+    "cliproxy/claude-haiku-5-5": 1
+   },
+   "gate_sha": "61389801e86f7c6509f6c556d1ee785ba33eb7786f6b5a7dde54d3ef632ad345",
+   "gate_vs_judge": {
+    "both_keep": 2,
+    "gate_only": 8,
+    "judge_only": 5,
+    "both_drop": 61
+   }
+  },
+  "2115876931749200320": {
+   "status": "complete",
+   "reasons": [],
+   "version": 2,
+   "wall_s": 24.9,
+   "r2_bytes": 305611,
+   "tokens": {
+    "gate_band.in": 5242,
+    "gate_band.out": 1999,
+    "save_verdict.in": 2801,
+    "save_verdict.out": 70
+   },
+   "model_calls": {
+    "fastembed/BAAI/bge-base-en-v1.5": 1,
+    "cliproxy/claude-haiku-5-5": 3
+   },
+   "gate_sha": "ab383a4447cbbd8a57d35709a27db2f8226df43e00858642192e9e6abb7d7ce9",
+   "gate_vs_judge": {
+    "both_keep": 2,
+    "gate_only": 18,
+    "judge_only": 3,
+    "both_drop": 56
+   }
+  },
+  "2115895353883156663": {
+   "status": "blocked",
+   "reasons": [
+    "link https://t.co/1aUdYVBBeq: blocked at rung 7: every rung failed (rung 1: X fetches are off (KWORKER_NO_X=1); rung 2: X fetches are off (KWORKER_NO_X=1); rung 3: X fetches are off (KWORKER"
+   ],
+   "version": 1,
+   "wall_s": 137.6,
+   "r2_bytes": 1761705,
+   "tokens": {
+    "gate_band.in": 2729,
+    "gate_band.out": 602,
+    "save_verdict.in": 2647,
+    "save_verdict.out": 71,
+    "image_read.in": 2354,
+    "image_read.out": 1574,
+    "image_second_read.in": 1979,
+    "image_second_read.out": 1664
+   },
+   "model_calls": {
+    "cliproxy/claude-haiku-5-5": 3,
+    "cliproxy/gpt-6-luna": 1
+   },
+   "gate_sha": "32f47639b6a204e79659d0c65b183ca47f81968f643da10e7e62b542a72c73bb",
+   "gate_vs_judge": {
+    "both_keep": 2,
+    "gate_only": 2,
+    "judge_only": 2,
+    "both_drop": 55
+   }
+  },
+  "2115912766561398794": {
+   "status": "complete",
+   "reasons": [],
+   "version": 2,
+   "wall_s": 15.8,
+   "r2_bytes": 45489,
+   "tokens": {
+    "save_verdict.in": 2341,
+    "save_verdict.out": 107
+   },
+   "model_calls": {
+    "cliproxy/claude-haiku-5-5": 1
+   },
+   "gate_sha": "fb7c450339d319c9dd056f72e8ae68f5c167c5180d54fba1e632e3109dab14a7",
+   "gate_vs_judge": {
+    "both_keep": 0,
+    "gate_only": 1,
+    "judge_only": 0,
+    "both_drop": 13
+   }
+  },
+  "2115920871265046767": {
+   "status": "complete",
+   "reasons": [],
+   "version": 2,
+   "wall_s": 15.1,
+   "r2_bytes": 31983,
+   "tokens": {
+    "save_verdict.in": 2227,
+    "save_verdict.out": 73
+   },
+   "model_calls": {
+    "cliproxy/claude-haiku-5-5": 1
+   },
+   "gate_sha": "f0a37b214aab0651d919b9a0f308d0c21e73292b37df5b52c329358a11469ebe",
+   "gate_vs_judge": {
+    "both_keep": 0,
+    "gate_only": 0,
+    "judge_only": 0,
+    "both_drop": 20
+   }
+  },
+  "2115923331148849532": {
+   "status": "complete",
+   "reasons": [],
+   "version": 2,
+   "wall_s": 15.6,
+   "r2_bytes": 153681,
+   "tokens": {
+    "save_verdict.in": 3533,
+    "save_verdict.out": 91
+   },
+   "model_calls": {
+    "cliproxy/claude-haiku-5-5": 1
+   },
+   "gate_sha": "18ef58e110772212d5af4cb849d907590b737978e4342430abb16d72e3dcdf53",
+   "gate_vs_judge": {
+    "both_keep": 10,
+    "gate_only": 5,
+    "judge_only": 0,
+    "both_drop": 19
+   }
+  },
+  "2117443552896807117": {
+   "status": "complete",
+   "reasons": [],
+   "version": 1,
+   "wall_s": 63.2,
+   "r2_bytes": 606197,
+   "tokens": {
+    "gate_band.in": 7650,
+    "gate_band.out": 3055,
+    "save_verdict.in": 2903,
+    "save_verdict.out": 108,
+    "image_read.in": 2994,
+    "image_read.out": 1397,
+    "image_second_read.in": 1365,
+    "image_second_read.out": 248
+   },
+   "model_calls": {
+    "fastembed/BAAI/bge-base-en-v1.5": 1,
+    "cliproxy/claude-haiku-5-5": 5,
+    "cliproxy/gpt-6-luna": 1
+   },
+   "gate_sha": "bdbd694619c690957ef3c9dc02664261966113f2dc6cd79acbf93607cc46987e",
+   "gate_vs_judge": {
+    "both_keep": 11,
+    "gate_only": 6,
+    "judge_only": 7,
+    "both_drop": 56
+   }
+  },
+  "2117660145131893118": {
+   "status": "complete",
+   "reasons": [],
+   "version": 1,
+   "wall_s": 179.7,
+   "r2_bytes": 1647610,
+   "tokens": {
+    "gate_band.in": 5861,
+    "gate_band.out": 1839,
+    "save_verdict.in": 2634,
+    "save_verdict.out": 76,
+    "image_read.in": 10270,
+    "image_read.out": 9551,
+    "image_second_read.in": 10280,
+    "image_second_read.out": 3571
+   },
+   "model_calls": {
+    "fastembed/BAAI/bge-base-en-v1.5": 1,
+    "cliproxy/claude-haiku-5-5": 5,
+    "cliproxy/gpt-6-luna": 2
+   },
+   "gate_sha": "aab505d2b8dc47a3c10a750beb45cce12643d72d966c1350785ef5645a99dffc",
+   "gate_vs_judge": {
+    "both_keep": 0,
+    "gate_only": 0,
+    "judge_only": 1,
+    "both_drop": 56
+   }
+  },
+  "2117678349828976746": {
+   "status": "blocked",
+   "reasons": [
+    "link https://t.co/CqoRF7YP0z: blocked at rung 7: every rung failed (rung 1: X fetches are off (KWORKER_NO_X=1); rung 2: X fetches are off (KWORKER_NO_X=1); rung 3: X fetches are off (KWORKER",
+    "link https://t.co/JLet5LxzRi: blocked at rung 7: every rung failed (rung 1: X fetches are off (KWORKER_NO_X=1); rung 2: X fetches are off (KWORKER_NO_X=1); rung 3: X fetches are off (KWORKER"
+   ],
+   "version": 1,
+   "wall_s": 70.9,
+   "r2_bytes": 28969556,
+   "tokens": {
+    "gate_band.in": 6081,
+    "gate_band.out": 2201,
+    "save_verdict.in": 2943,
+    "save_verdict.out": 96,
+    "video_read.in": 11552,
+    "video_read.out": 2176
+   },
+   "model_calls": {
+    "fastembed/BAAI/bge-base-en-v1.5": 1,
+    "cliproxy/claude-haiku-5-5": 4,
+    "faster-whisper/large-v3-turbo": 1
+   },
+   "gate_sha": "97ded55d3955eba5d84da24aa21af66e4412baad5012fb9b1920d83169d8dbde",
+   "gate_vs_judge": {
+    "both_keep": 16,
+    "gate_only": 22,
+    "judge_only": 13,
+    "both_drop": 29
+   }
+  },
+  "2117690339548975528": {
+   "status": "complete",
+   "reasons": [],
+   "version": 1,
+   "wall_s": 41.3,
+   "r2_bytes": 14234344,
+   "tokens": {
+    "gate_band.in": 3760,
+    "gate_band.out": 1250,
+    "save_verdict.in": 2852,
+    "save_verdict.out": 106,
+    "video_read.in": 10449,
+    "video_read.out": 1420
+   },
+   "model_calls": {
+    "fastembed/BAAI/bge-base-en-v1.5": 1,
+    "cliproxy/claude-haiku-5-5": 3,
+    "faster-whisper/large-v3-turbo": 1
+   },
+   "gate_sha": "cbf6bba0a7eadf0fd77015fe10601144dc9e986c4ecc573f49f0193d1fdf8319",
+   "gate_vs_judge": {
+    "both_keep": 10,
+    "gate_only": 6,
+    "judge_only": 0,
+    "both_drop": 17
+   }
+  },
+  "2117693795076854052": {
+   "status": "complete",
+   "reasons": [],
+   "version": 1,
+   "wall_s": 87.3,
+   "r2_bytes": 69568983,
+   "tokens": {
+    "gate_band.in": 5949,
+    "gate_band.out": 2128,
+    "save_verdict.in": 2460,
+    "save_verdict.out": 71,
+    "video_read.in": 14281,
+    "video_read.out": 2313
+   },
+   "model_calls": {
+    "fastembed/BAAI/bge-base-en-v1.5": 1,
+    "cliproxy/claude-haiku-5-5": 4,
+    "faster-whisper/large-v3-turbo": 1
+   },
+   "gate_sha": "c59e77357ab3dccfe214d2e4b42438798dfe562270dc5afc616e4edffbbebd5c",
+   "gate_vs_judge": {
+    "both_keep": 4,
+    "gate_only": 3,
+    "judge_only": 0,
+    "both_drop": 73
+   }
+  },
+  "2117719471691551037": {
+   "status": "complete",
+   "reasons": [],
+   "version": 2,
+   "wall_s": 14.9,
+   "r2_bytes": 38218,
+   "tokens": {
+    "save_verdict.in": 3139,
+    "save_verdict.out": 80
+   },
+   "model_calls": {
+    "cliproxy/claude-haiku-5-5": 1
+   },
+   "gate_sha": "edb86c1efaa4789eeb8b29b15b4f2990bf4a8137fe70a76e168c5dccaad78e1d",
+   "gate_vs_judge": {
+    "both_keep": 1,
+    "gate_only": 1,
+    "judge_only": 1,
+    "both_drop": 5
+   }
+  },
+  "2117732325073064266": {
+   "status": "complete",
+   "reasons": [],
+   "version": 2,
+   "wall_s": 14.8,
+   "r2_bytes": 49945,
+   "tokens": {
+    "save_verdict.in": 2693,
+    "save_verdict.out": 137
+   },
+   "model_calls": {
+    "cliproxy/claude-haiku-5-5": 1
+   },
+   "gate_sha": "9329a0f59b8b93223c3c511033e9d8b212cf7eff869ff77e07235035e6f646e0",
+   "gate_vs_judge": {
+    "both_keep": 1,
+    "gate_only": 2,
+    "judge_only": 3,
+    "both_drop": 1
+   }
+  },
+  "2117750246184824926": {
+   "status": "complete",
+   "reasons": [],
+   "version": 1,
+   "wall_s": 35.9,
+   "r2_bytes": 795489,
+   "tokens": {
+    "gate_band.in": 6381,
+    "gate_band.out": 2216,
+    "save_verdict.in": 2641,
+    "save_verdict.out": 77
+   },
+   "model_calls": {
+    "fastembed/BAAI/bge-base-en-v1.5": 1,
+    "cliproxy/claude-haiku-5-5": 3
+   },
+   "gate_sha": "78f63890557ad4399fb044cb4741f2828469500fbf5467f97dfe10be5ec747b8",
+   "gate_vs_judge": {
+    "both_keep": 8,
+    "gate_only": 8,
+    "judge_only": 9,
+    "both_drop": 49
+   }
+  },
+  "2117761216076517471": {
+   "status": "complete",
+   "reasons": [],
+   "version": 2,
+   "wall_s": 15.0,
+   "r2_bytes": 28878,
+   "tokens": {
+    "save_verdict.in": 2349,
+    "save_verdict.out": 69
+   },
+   "model_calls": {
+    "cliproxy/claude-haiku-5-5": 1
+   },
+   "gate_sha": "0899fc66962a8ae10e9e8dddd97baaa01fa92c7b011c55ebd071c5cc30b96728",
+   "gate_vs_judge": {
+    "both_keep": 0,
+    "gate_only": 1,
+    "judge_only": 0,
+    "both_drop": 8
+   }
+  },
+  "2117765472141664455": {
+   "status": "blocked",
+   "reasons": [
+    "link https://t.co/dxCJU3xanc: blocked at rung 7: every rung failed (rung 1: X fetches are off (KWORKER_NO_X=1); rung 2: X fetches are off (KWORKER_NO_X=1); rung 3: X fetches are off (KWORKER"
+   ],
+   "version": 1,
+   "wall_s": 77.1,
+   "r2_bytes": 70392947,
+   "tokens": {
+    "gate_band.in": 8053,
+    "gate_band.out": 2847,
+    "save_verdict.in": 2800,
+    "save_verdict.out": 76,
+    "video_read.in": 26618,
+    "video_read.out": 3329
+   },
+   "model_calls": {
+    "fastembed/BAAI/bge-base-en-v1.5": 1,
+    "cliproxy/claude-haiku-5-5": 5,
+    "faster-whisper/large-v3-turbo": 2
+   },
+   "gate_sha": "df98ea66c3e5aa36b092c41bd09beb845fcb7f68305ec42e4ad76165e0ae5e89",
+   "gate_vs_judge": {
+    "both_keep": 6,
+    "gate_only": 6,
+    "judge_only": 5,
+    "both_drop": 63
+   }
+  },
+  "2117776295534997818": {
+   "status": "blocked",
+   "reasons": [
+    "link https://t.co/8g4kj6WcQg: blocked at rung 7: every rung failed (rung 1: X fetches are off (KWORKER_NO_X=1); rung 2: X fetches are off (KWORKER_NO_X=1); rung 3: X fetches are off (KWORKER",
+    "link https://t.co/aGOPFhADfS: blocked at rung 7: every rung failed (rung 1: X fetches are off (KWORKER_NO_X=1); rung 2: X fetches are off (KWORKER_NO_X=1); rung 3: X fetches are off (KWORKER",
+    "link https://t.co/0IrAuFWXwj: blocked at rung 7: every rung failed (rung 1: X fetches are off (KWORKER_NO_X=1); rung 2: X fetches are off (KWORKER_NO_X=1); rung 3: X fetches are off (KWORKER",
+    "link https://t.co/nC6TBVvaeV: blocked at rung 7: every rung failed (rung 1: X fetches are off (KWORKER_NO_X=1); rung 2: X fetches are off (KWORKER_NO_X=1); rung 3: X fetches are off (KWORKER",
+    "link https://t.co/ebwr25WWFW: blocked at rung 7: every rung failed (rung 1: X fetches are off (KWORKER_NO_X=1); rung 2: X fetches are off (KWORKER_NO_X=1); rung 3: X fetches are off (KWORKER",
+    "link https://t.co/RZEWA1kReO: blocked at rung 7: every rung failed (rung 1: X fetches are off (KWORKER_NO_X=1); rung 2: X fetches are off (KWORKER_NO_X=1); rung 3: X fetches are off (KWORKER",
+    "link https://t.co/GdJsyKBxUQ: blocked at rung 7: every rung failed (rung 1: X fetches are off (KWORKER_NO_X=1); rung 2: X fetches are off (KWORKER_NO_X=1); rung 3: X fetches are off (KWORKER",
+    "link https://t.co/fYgoheJwdj: blocked at rung 7: every rung failed (rung 1: X fetches are off (KWORKER_NO_X=1); rung 2: X fetches are off (KWORKER_NO_X=1); rung 3: X fetches are off (KWORKER",
+    "link https://t.co/v3srdbDviq: blocked at rung 7: every rung failed (rung 1: X fetches are off (KWORKER_NO_X=1); rung 2: X fetches are off (KWORKER_NO_X=1); rung 3: X fetches are off (KWORKER"
+   ],
+   "version": 2,
+   "wall_s": 34.4,
+   "r2_bytes": 388464,
+   "tokens": {
+    "gate_band.in": 7450,
+    "gate_band.out": 2851,
+    "save_verdict.in": 3282,
+    "save_verdict.out": 98
+   },
+   "model_calls": {
+    "fastembed/BAAI/bge-base-en-v1.5": 1,
+    "cliproxy/claude-haiku-5-5": 3
+   },
+   "gate_sha": "ca9e6ab73033f81bfa1efb2b0d0077c7877ea94dfcfaa068c80a210331ac07ed",
+   "gate_vs_judge": {
+    "both_keep": 13,
+    "gate_only": 10,
+    "judge_only": 4,
+    "both_drop": 53
+   }
+  },
+  "2117988081110512073": {
+   "status": "blocked",
+   "reasons": [
+    "link https://t.co/qPcLUVKHET: blocked at rung 7: every rung failed (rung 1: X fetches are off (KWORKER_NO_X=1); rung 2: X fetches are off (KWORKER_NO_X=1); rung 3: X fetches are off (KWORKER"
+   ],
+   "version": 1,
+   "wall_s": 53.2,
+   "r2_bytes": 33636619,
+   "tokens": {
+    "gate_band.in": 6319,
+    "gate_band.out": 2170,
+    "save_verdict.in": 2442,
+    "save_verdict.out": 66,
+    "video_read.in": 10095,
+    "video_read.out": 1840
+   },
+   "model_calls": {
+    "fastembed/BAAI/bge-base-en-v1.5": 1,
+    "cliproxy/claude-haiku-5-5": 4,
+    "faster-whisper/large-v3-turbo": 1
+   },
+   "gate_sha": "3649343bbc9b95587bf21691397afd0199ea6b62366c553c2731d6f78958210a",
+   "gate_vs_judge": {
+    "both_keep": 4,
+    "gate_only": 11,
+    "judge_only": 0,
+    "both_drop": 65
+   }
+  },
+  "2118063143167693011": {
+   "status": "complete",
+   "reasons": [],
+   "version": 2,
+   "wall_s": 41.8,
+   "r2_bytes": 894101,
+   "tokens": {
+    "gate_band.in": 7827,
+    "gate_band.out": 3113,
+    "save_verdict.in": 2989,
+    "save_verdict.out": 101
+   },
+   "model_calls": {
+    "fastembed/BAAI/bge-base-en-v1.5": 1,
+    "cliproxy/claude-haiku-5-5": 3
+   },
+   "gate_sha": "84bf4fcf982d10bb55fb05b5511e815248a261a5d825badd15ddcf33eb5ab8cb",
+   "gate_vs_judge": {
+    "both_keep": 3,
+    "gate_only": 8,
+    "judge_only": 2,
+    "both_drop": 67
+   }
+  },
+  "2118243873017495655": {
+   "status": "complete",
+   "reasons": [],
+   "version": 2,
+   "wall_s": 15.4,
+   "r2_bytes": 35082,
+   "tokens": {
+    "save_verdict.in": 2767,
+    "save_verdict.out": 110
+   },
+   "model_calls": {
+    "cliproxy/claude-haiku-5-5": 1
+   },
+   "gate_sha": "170f83ecfba241f6dbd87447a43e826dc93eb44a52070b085206aab60d1551c7",
+   "gate_vs_judge": {
+    "both_keep": 0,
+    "gate_only": 0,
+    "judge_only": 3,
+    "both_drop": 2
+   }
+  },
+  "2118312950016491728": {
+   "status": "blocked",
+   "reasons": [
+    "link https://t.co/pucJqtBsUE: blocked at rung 7: every rung failed (rung 1: X fetches are off (KWORKER_NO_X=1); rung 2: X fetches are off (KWORKER_NO_X=1); rung 3: X fetches are off (KWORKER",
+    "link https://t.co/SKKW0SX746: blocked at rung 7: every rung failed (rung 1: X fetches are off (KWORKER_NO_X=1); rung 2: X fetches are off (KWORKER_NO_X=1); rung 3: X fetches are off (KWORKER"
+   ],
+   "version": 2,
+   "wall_s": 15.4,
+   "r2_bytes": 231129,
+   "tokens": {
+    "save_verdict.in": 3189,
+    "save_verdict.out": 77
+   },
+   "model_calls": {
+    "cliproxy/claude-haiku-5-5": 1
+   },
+   "gate_sha": "b2092d3f72fb1288be9f20ba0430cdb936dbbf7d3a678bbfb76120baec2d47ae",
+   "gate_vs_judge": {
+    "both_keep": 5,
+    "gate_only": 2,
+    "judge_only": 7,
+    "both_drop": 42
+   }
+  },
+  "2118334756274241547": {
+   "status": "blocked",
+   "reasons": [
+    "link https://goo.gl/bavVf4: blocked at rung 7: every rung failed (rung 1: HTTP 406; rung 2: r.jina.ai HTTP 403; rung 3: Wayback snapshot 20250221014616; rung 4: HTTP 200 in the browser wit"
+   ],
+   "version": 2,
+   "wall_s": 29.4,
+   "r2_bytes": 360585,
+   "tokens": {
+    "gate_band.in": 3287,
+    "gate_band.out": 944,
+    "save_verdict.in": 2053,
+    "save_verdict.out": 75
+   },
+   "model_calls": {
+    "fastembed/BAAI/bge-base-en-v1.5": 1,
+    "cliproxy/claude-haiku-5-5": 2
+   },
+   "gate_sha": "72b43f3565ddd28b4bd51c9b1dd99a2ecbdfcf6a2b0a69208c2a072e789fa3c9",
+   "gate_vs_judge": {
+    "both_keep": 1,
+    "gate_only": 0,
+    "judge_only": 12,
+    "both_drop": 67
+   }
+  },
+  "2118388273571901655": {
+   "status": "complete",
+   "reasons": [],
+   "version": 1,
+   "wall_s": 118.9,
+   "r2_bytes": 8154646,
+   "tokens": {
+    "gate_band.in": 10536,
+    "gate_band.out": 3874,
+    "save_verdict.in": 3643,
+    "save_verdict.out": 77,
+    "image_read.in": 9958,
+    "image_read.out": 2041,
+    "image_second_read.in": 4383,
+    "image_second_read.out": 430,
+    "video_read.in": 10894,
+    "video_read.out": 1897
+   },
+   "model_calls": {
+    "cliproxy/claude-haiku-5-5": 7,
+    "cliproxy/gpt-6-luna": 1,
+    "faster-whisper/large-v3-turbo": 1
+   },
+   "gate_sha": "4ebfea773294dc521504f4d95ac55c4eb4f9543ee6c0e63cf4a679534b520248",
+   "gate_vs_judge": {
+    "both_keep": 20,
+    "gate_only": 10,
+    "judge_only": 13,
+    "both_drop": 258
+   }
+  },
+  "2118478123104870660": {
+   "status": "blocked",
+   "reasons": [
+    "link https://t.co/GhHN5stSms: blocked at rung 7: every rung failed (rung 1: X fetches are off (KWORKER_NO_X=1); rung 2: X fetches are off (KWORKER_NO_X=1); rung 3: X fetches are off (KWORKER"
+   ],
+   "version": 2,
+   "wall_s": 15.8,
+   "r2_bytes": 40799,
+   "tokens": {
+    "save_verdict.in": 3116,
+    "save_verdict.out": 83
+   },
+   "model_calls": {
+    "cliproxy/claude-haiku-5-5": 1
+   },
+   "gate_sha": "b29231795c9593f5aeecfd1e2ff605bd6aab92982e34723d51c26cf83c995cb2",
+   "gate_vs_judge": {
+    "both_keep": 0,
+    "gate_only": 2,
+    "judge_only": 0,
+    "both_drop": 35
+   }
+  },
+  "2118697027639160951": {
+   "status": "complete",
+   "reasons": [],
+   "version": 2,
+   "wall_s": 34.6,
+   "r2_bytes": 385052,
+   "tokens": {
+    "gate_band.in": 8807,
+    "gate_band.out": 3023,
+    "save_verdict.in": 2905,
+    "save_verdict.out": 80
+   },
+   "model_calls": {
+    "fastembed/BAAI/bge-base-en-v1.5": 1,
+    "cliproxy/claude-haiku-5-5": 3
+   },
+   "gate_sha": "db5b9d3fcbfcf678b8f5cad08042be70ecb6cd8a5a90f9e0e0a61ab386fe53fd",
+   "gate_vs_judge": {
+    "both_keep": 5,
+    "gate_only": 3,
+    "judge_only": 15,
+    "both_drop": 57
+   }
+  },
+  "2118808885247029599": {
+   "status": "complete",
+   "reasons": [],
+   "version": 2,
+   "wall_s": 15.1,
+   "r2_bytes": 4887,
+   "tokens": {
+    "save_verdict.in": 1872,
+    "save_verdict.out": 103
+   },
+   "model_calls": {
+    "cliproxy/claude-haiku-5-5": 1
+   },
+   "gate_sha": "429cf69f1cc13c1ff4321c9df92c5a16a815a27754814cbedf4abd0d0e81b9ee",
+   "gate_vs_judge": {
+    "both_keep": 0,
+    "gate_only": 0,
+    "judge_only": 0,
+    "both_drop": 1
+   }
+  },
+  "2119058549271851431": {
+   "status": "complete",
+   "reasons": [],
+   "version": 2,
+   "wall_s": 2.6,
+   "r2_bytes": 5201,
+   "tokens": {
+    "save_verdict.in": 1928,
+    "save_verdict.out": 57
+   },
+   "model_calls": {
+    "cliproxy/claude-haiku-5-5": 1
+   },
+   "gate_sha": "bce4c9bc75540cab7fc3b4a994755612e859bf0b85e33f6d722a8440a5529727",
+   "gate_vs_judge": {
+    "both_keep": 0,
+    "gate_only": 0,
+    "judge_only": 0,
+    "both_drop": 0
+   }
+  },
+  "2119124661443457189": {
+   "status": "complete",
+   "reasons": [],
+   "version": 2,
+   "wall_s": 35.0,
+   "r2_bytes": 2641057,
+   "tokens": {
+    "gate_band.in": 4608,
+    "gate_band.out": 1067,
+    "save_verdict.in": 2728,
+    "save_verdict.out": 119
+   },
+   "model_calls": {
+    "fastembed/BAAI/bge-base-en-v1.5": 1,
+    "cliproxy/claude-haiku-5-5": 2
+   },
+   "gate_sha": "cb3f4294ddcc32e008bc0574a05ad382f940154d9be6c502b28b0a62aa123ff9",
+   "gate_vs_judge": {
+    "both_keep": 6,
+    "gate_only": 1,
+    "judge_only": 2,
+    "both_drop": 11
+   }
+  },
+  "2119455296750039509": {
+   "status": "blocked",
+   "reasons": [
+    "link https://t.co/klJ5JtE52a: blocked at rung 7: every rung failed (rung 1: X fetches are off (KWORKER_NO_X=1); rung 2: X fetches are off (KWORKER_NO_X=1); rung 3: X fetches are off (KWORKER"
+   ],
+   "version": 2,
+   "wall_s": 14.9,
+   "r2_bytes": 69058,
+   "tokens": {
+    "save_verdict.in": 2715,
+    "save_verdict.out": 77
+   },
+   "model_calls": {
+    "cliproxy/claude-haiku-5-5": 1
+   },
+   "gate_sha": "968e04cf7b8a3a8d2e0a0674cc155b55c2018ec7ceb23a438a145a6a6b341e08",
+   "gate_vs_judge": {
+    "both_keep": 6,
+    "gate_only": 2,
+    "judge_only": 5,
+    "both_drop": 42
+   }
+  },
+  "2119485255836983723": {
+   "status": "complete",
+   "reasons": [],
+   "version": 1,
+   "wall_s": 101.3,
+   "r2_bytes": 2493430,
+   "tokens": {
+    "gate_band.in": 34415,
+    "gate_band.out": 13315,
+    "save_verdict.in": 2861,
+    "save_verdict.out": 74
+   },
+   "model_calls": {
+    "fastembed/BAAI/bge-base-en-v1.5": 1,
+    "cliproxy/claude-haiku-5-5": 12
+   },
+   "gate_sha": "c7c2015bcaa4c05bcdfcc241c5d7cb7bd7223f1abc3177b9c0f38f54498c0854",
+   "gate_vs_judge": {
+    "both_keep": 11,
+    "gate_only": 8,
+    "judge_only": 14,
+    "both_drop": 379
+   }
+  },
+  "2119521036660314339": {
+   "status": "complete",
+   "reasons": [],
+   "version": 2,
+   "wall_s": 34.3,
+   "r2_bytes": 415353,
+   "tokens": {
+    "gate_band.in": 7493,
+    "gate_band.out": 2670,
+    "save_verdict.in": 3401,
+    "save_verdict.out": 99
+   },
+   "model_calls": {
+    "fastembed/BAAI/bge-base-en-v1.5": 1,
+    "cliproxy/claude-haiku-5-5": 3
+   },
+   "gate_sha": "14b07c1d0bc3e67317b0a36f181e05ae85c49582bcf41a7f3d3907c608fae04e",
+   "gate_vs_judge": {
+    "both_keep": 18,
+    "gate_only": 17,
+    "judge_only": 10,
+    "both_drop": 35
+   }
+  },
+  "2119531364722913609": {
+   "status": "blocked",
+   "reasons": [
+    "link https://t.co/0uxsnU7IyZ: blocked at rung 7: every rung failed (rung 1: X fetches are off (KWORKER_NO_X=1); rung 2: X fetches are off (KWORKER_NO_X=1); rung 3: X fetches are off (KWORKER"
+   ],
+   "version": 2,
+   "wall_s": 25.3,
+   "r2_bytes": 359278,
+   "tokens": {
+    "gate_band.in": 3065,
+    "gate_band.out": 951,
+    "save_verdict.in": 2313,
+    "save_verdict.out": 76
+   },
+   "model_calls": {
+    "fastembed/BAAI/bge-base-en-v1.5": 1,
+    "cliproxy/claude-haiku-5-5": 2
+   },
+   "gate_sha": "c1c87195319169b37a4619663d365164f7148f6d16a5782afce0caab0af7d4e0",
+   "gate_vs_judge": {
+    "both_keep": 1,
+    "gate_only": 0,
+    "judge_only": 7,
+    "both_drop": 72
+   }
+  },
+  "2119567289121132600": {
+   "status": "complete",
+   "reasons": [],
+   "version": 2,
+   "wall_s": 12.9,
+   "r2_bytes": 73890,
+   "tokens": {},
+   "model_calls": {},
+   "gate_sha": "607ce6ba738724aedecf96fe572c4cd685441f212b5fe76cbd964407f1f7c627",
+   "gate_vs_judge": {
+    "both_keep": 1,
+    "gate_only": 2,
+    "judge_only": 3,
+    "both_drop": 11
+   }
+  },
+  "2119636848297599457": {
+   "status": "complete",
+   "reasons": [],
+   "version": 2,
+   "wall_s": 12.8,
+   "r2_bytes": 31032,
+   "tokens": {},
+   "model_calls": {},
+   "gate_sha": "dd9d5fd103424aa5564bb86084903eff65a915aa2585bff7200427cd29a7ed96",
+   "gate_vs_judge": {
+    "both_keep": 0,
+    "gate_only": 1,
+    "judge_only": 0,
+    "both_drop": 9
+   }
+  },
+  "2119727129869070554": {
+   "status": "complete",
+   "reasons": [],
+   "version": 2,
+   "wall_s": 12.7,
+   "r2_bytes": 32081,
+   "tokens": {},
+   "model_calls": {},
+   "gate_sha": "8187696eb0193cf62100c9ceebf7ea7b060295d0bf38978afc022bf6b55fdb00",
+   "gate_vs_judge": {
+    "both_keep": 0,
+    "gate_only": 1,
+    "judge_only": 0,
+    "both_drop": 4
+   }
+  },
+  "2119758408857628677": {
+   "status": "blocked",
+   "reasons": [
+    "link https://t.co/ODUiB6Bg98: blocked at rung 7: every rung failed (rung 1: X fetches are off (KWORKER_NO_X=1); rung 2: X fetches are off (KWORKER_NO_X=1); rung 3: X fetches are off (KWORKER",
+    "link https://t.co/O4SujE5Hj6: blocked at rung 7: every rung failed (rung 1: X fetches are off (KWORKER_NO_X=1); rung 2: X fetches are off (KWORKER_NO_X=1); rung 3: X fetches are off (KWORKER"
+   ],
+   "version": 2,
+   "wall_s": 36.1,
+   "r2_bytes": 444229,
+   "tokens": {
+    "gate_band.in": 7939,
+    "gate_band.out": 3055,
+    "save_verdict.in": 4185,
+    "save_verdict.out": 101
+   },
+   "model_calls": {
+    "fastembed/BAAI/bge-base-en-v1.5": 1,
+    "cliproxy/claude-haiku-5-5": 3
+   },
+   "gate_sha": "d9ea6b43f34e0b0c2d263952ad7baccdaa2391972ab3b85d082df9523477f327",
+   "gate_vs_judge": {
+    "both_keep": 17,
+    "gate_only": 12,
+    "judge_only": 5,
+    "both_drop": 46
+   }
+  },
+  "2119767672770724021": {
+   "status": "complete",
+   "reasons": [],
+   "version": 2,
+   "wall_s": 13.1,
+   "r2_bytes": 125832,
+   "tokens": {},
+   "model_calls": {},
+   "gate_sha": "9e98ff9cba4b7bb915ab39a07ef3b0ef52af4e0fe7689093de24dadd4c0d1ae7",
+   "gate_vs_judge": {
+    "both_keep": 17,
+    "gate_only": 13,
+    "judge_only": 1,
+    "both_drop": 34
+   }
+  },
+  "2119777023845417175": {
+   "status": "complete",
+   "reasons": [],
+   "version": 2,
+   "wall_s": 12.7,
+   "r2_bytes": 62455,
+   "tokens": {},
+   "model_calls": {},
+   "gate_sha": "97bb982f14e008ed8ff95ea76f87626f079b427e541425018fe7a7ba1b8173cc",
+   "gate_vs_judge": {
+    "both_keep": 12,
+    "gate_only": 9,
+    "judge_only": 0,
+    "both_drop": 18
+   }
+  },
+  "2119823616774992084": {
+   "status": "complete",
+   "reasons": [],
+   "version": 2,
+   "wall_s": 42.6,
+   "r2_bytes": 363791,
+   "tokens": {
+    "gate_band.in": 8450,
+    "gate_band.out": 2087,
+    "save_verdict.in": 3355,
+    "save_verdict.out": 112
+   },
+   "model_calls": {
+    "fastembed/BAAI/bge-base-en-v1.5": 1,
+    "cliproxy/claude-haiku-5-5": 3
+   },
+   "gate_sha": "5b2681db8150b62d5603a6655f35006dc9154182f8694b9901fe01c8572b485f",
+   "gate_vs_judge": {
+    "both_keep": 7,
+    "gate_only": 14,
+    "judge_only": 2,
+    "both_drop": 57
+   }
+  },
+  "2119843556051603752": {
+   "status": "complete",
+   "reasons": [],
+   "version": 2,
+   "wall_s": 13.1,
+   "r2_bytes": 147784,
+   "tokens": {},
+   "model_calls": {},
+   "gate_sha": "ada3946823045dd83cdb79ddd3a990d5057b6a83f5ff0cc3155b2e076031ec7f",
+   "gate_vs_judge": {
+    "both_keep": 18,
+    "gate_only": 2,
+    "judge_only": 6,
+    "both_drop": 40
+   }
+  },
+  "2119851704149852437": {
+   "status": "complete",
+   "reasons": [],
+   "version": 2,
+   "wall_s": 28.4,
+   "r2_bytes": 360493,
+   "tokens": {
+    "gate_band.in": 6427,
+    "gate_band.out": 2214,
+    "save_verdict.in": 3222,
+    "save_verdict.out": 119
+   },
+   "model_calls": {
+    "fastembed/BAAI/bge-base-en-v1.5": 1,
+    "cliproxy/claude-haiku-5-5": 3
+   },
+   "gate_sha": "095d348d610b18376c3994cb2299cf94fb3c29b2871b024c6c5d4b4e5d08db2f",
+   "gate_vs_judge": {
+    "both_keep": 35,
+    "gate_only": 14,
+    "judge_only": 5,
+    "both_drop": 26
+   }
+  },
+  "2119870150845599972": {
+   "status": "complete",
+   "reasons": [],
+   "version": 2,
+   "wall_s": 32.9,
+   "r2_bytes": 411552,
+   "tokens": {
+    "gate_band.in": 8135,
+    "gate_band.out": 2991,
+    "save_verdict.in": 2431,
+    "save_verdict.out": 131
+   },
+   "model_calls": {
+    "fastembed/BAAI/bge-base-en-v1.5": 1,
+    "cliproxy/claude-haiku-5-5": 3
+   },
+   "gate_sha": "314ed9e488eb8bef9adc705037c70a97d44fc0caf1ce98316be5d9afcdaff897",
+   "gate_vs_judge": {
+    "both_keep": 6,
+    "gate_only": 9,
+    "judge_only": 4,
+    "both_drop": 59
+   }
+  },
+  "2119879610724720702": {
+   "status": "complete",
+   "reasons": [],
+   "version": 2,
+   "wall_s": 35.3,
+   "r2_bytes": 394339,
+   "tokens": {
+    "gate_band.in": 9013,
+    "gate_band.out": 2926,
+    "save_verdict.in": 2820,
+    "save_verdict.out": 106
+   },
+   "model_calls": {
+    "fastembed/BAAI/bge-base-en-v1.5": 1,
+    "cliproxy/claude-haiku-5-5": 3
+   },
+   "gate_sha": "3206d323cd35e4e797a41d182fa1d29dccfe2ec55b3a1f702f9546f1584322e8",
+   "gate_vs_judge": {
+    "both_keep": 5,
+    "gate_only": 6,
+    "judge_only": 3,
+    "both_drop": 65
+   }
+  },
+  "2119880654858977333": {
+   "status": "complete",
+   "reasons": [],
+   "version": 2,
+   "wall_s": 12.7,
+   "r2_bytes": 51672,
+   "tokens": {},
+   "model_calls": {},
+   "gate_sha": "336f451d7c44fd2e3f7e65d4d485e10baedb46a4eb24eff15fd0dcdc0e0a3443",
+   "gate_vs_judge": {
+    "both_keep": 1,
+    "gate_only": 13,
+    "judge_only": 2,
+    "both_drop": 42
+   }
+  },
+  "2119895207181156424": {
+   "status": "complete",
+   "reasons": [],
+   "version": 2,
+   "wall_s": 12.7,
+   "r2_bytes": 29170,
+   "tokens": {},
+   "model_calls": {},
+   "gate_sha": "8516a439dd7a43763f7d9dc87bd9e4d2167ebb0c76931726da62a817e9cf7c33",
+   "gate_vs_judge": {
+    "both_keep": 5,
+    "gate_only": 0,
+    "judge_only": 2,
+    "both_drop": 15
+   }
+  },
+  "2119899156273639888": {
+   "status": "complete",
+   "reasons": [],
+   "version": 2,
+   "wall_s": 12.6,
+   "r2_bytes": 8878,
+   "tokens": {},
+   "model_calls": {},
+   "gate_sha": "46f501dc56a86f8549eca43ec6fc278744265c9ed85c498c3acd6530e4b63472",
+   "gate_vs_judge": {
+    "both_keep": 0,
+    "gate_only": 0,
+    "judge_only": 0,
+    "both_drop": 2
+   }
+  },
+  "2119930229661503893": {
+   "status": "complete",
+   "reasons": [],
+   "version": 1,
+   "wall_s": 33.1,
+   "r2_bytes": 381794,
+   "tokens": {
+    "gate_band.in": 8177,
+    "gate_band.out": 2483,
+    "save_verdict.in": 5937,
+    "save_verdict.out": 95
+   },
+   "model_calls": {
+    "fastembed/BAAI/bge-base-en-v1.5": 1,
+    "cliproxy/claude-haiku-5-5": 3
+   },
+   "gate_sha": "464922d303f397b353897f6b6b3dd8646217bc1fd1f0a040d3a6231c3434656e",
+   "gate_vs_judge": {
+    "both_keep": 9,
+    "gate_only": 13,
+    "judge_only": 3,
+    "both_drop": 54
+   }
+  },
+  "2120216484089872421": {
+   "status": "blocked",
+   "reasons": [
+    "link https://papers.ssrn.com/sol3/papers.cfm?abstract_id=6198738: blocked at rung 7: every rung failed (rung 1: HTTP 403; rung 2: r.jina.ai: target refused; rung 3: ConnectTimeout: _ssl.c:983: The handshake operation timed out"
+   ],
+   "version": 1,
+   "wall_s": 31.2,
+   "r2_bytes": 378099,
+   "tokens": {
+    "gate_band.in": 6838,
+    "gate_band.out": 2116,
+    "save_verdict.in": 3602,
+    "save_verdict.out": 118
+   },
+   "model_calls": {
+    "fastembed/BAAI/bge-base-en-v1.5": 1,
+    "cliproxy/claude-haiku-5-5": 3
+   },
+   "gate_sha": "f8bce50919b76c1ce07cc1d3dd03ab9c064464414437f3cad8e6cfc5e0e4b57c",
+   "gate_vs_judge": {
+    "both_keep": 22,
+    "gate_only": 18,
+    "judge_only": 15,
+    "both_drop": 25
+   }
+  },
+  "2120252783953871317": {
+   "status": "complete",
+   "reasons": [],
+   "version": 1,
+   "wall_s": 44.6,
+   "r2_bytes": 378672,
+   "tokens": {
+    "gate_band.in": 7605,
+    "gate_band.out": 3045,
+    "save_verdict.in": 2684,
+    "save_verdict.out": 105
+   },
+   "model_calls": {
+    "fastembed/BAAI/bge-base-en-v1.5": 1,
+    "cliproxy/claude-haiku-5-5": 3
+   },
+   "gate_sha": "ffbf30a5921b16a2f58bd7d8681900984726e8214bbb877bc979c57b71b96aa5",
+   "gate_vs_judge": {
+    "both_keep": 12,
+    "gate_only": 8,
+    "judge_only": 7,
+    "both_drop": 53
+   }
+  },
+  "2120313779691168082": {
+   "status": "complete",
+   "reasons": [],
+   "version": 1,
+   "wall_s": 33.2,
+   "r2_bytes": 389982,
+   "tokens": {
+    "gate_band.in": 4229,
+    "gate_band.out": 1569,
+    "save_verdict.in": 2691,
+    "save_verdict.out": 78
+   },
+   "model_calls": {
+    "fastembed/BAAI/bge-base-en-v1.5": 1,
+    "cliproxy/claude-haiku-5-5": 2
+   },
+   "gate_sha": "01f696594c0293eff4334ce5cc6846a6cf67258c5a15e22dd36fed3349434706",
+   "gate_vs_judge": {
+    "both_keep": 16,
+    "gate_only": 14,
+    "judge_only": 4,
+    "both_drop": 46
+   }
+  },
+  "2120494222516339134": {
+   "status": "complete",
+   "reasons": [],
+   "version": 1,
+   "wall_s": 27.6,
+   "r2_bytes": 356086,
+   "tokens": {
+    "gate_band.in": 2684,
+    "gate_band.out": 861,
+    "save_verdict.in": 3047,
+    "save_verdict.out": 113
+   },
+   "model_calls": {
+    "fastembed/BAAI/bge-base-en-v1.5": 1,
+    "cliproxy/claude-haiku-5-5": 2
+   },
+   "gate_sha": "f2be1028e8095f4bf547ba477f5a7e21f447d95c55ec192548d8968c83fc65df",
+   "gate_vs_judge": {
+    "both_keep": 4,
+    "gate_only": 3,
+    "judge_only": 1,
+    "both_drop": 68
+   }
+  },
+  "2120508498236596597": {
+   "status": "complete",
+   "reasons": [],
+   "version": 1,
+   "wall_s": 32.1,
+   "r2_bytes": 401395,
+   "tokens": {
+    "gate_band.in": 3914,
+    "gate_band.out": 1483,
+    "save_verdict.in": 2759,
+    "save_verdict.out": 108
+   },
+   "model_calls": {
+    "fastembed/BAAI/bge-base-en-v1.5": 1,
+    "cliproxy/claude-haiku-5-5": 2
+   },
+   "gate_sha": "565ee78599d5806531e1b0d7f788d06b6d3ac49bae023d97881cb6e5bf6b8dab",
+   "gate_vs_judge": {
+    "both_keep": 20,
+    "gate_only": 10,
+    "judge_only": 3,
+    "both_drop": 47
+   }
+  },
+  "2120517146887512512": {
+   "status": "complete",
+   "reasons": [],
+   "version": 1,
+   "wall_s": 34.1,
+   "r2_bytes": 371422,
+   "tokens": {
+    "gate_band.in": 6388,
+    "gate_band.out": 2689,
+    "save_verdict.in": 3030,
+    "save_verdict.out": 80
+   },
+   "model_calls": {
+    "fastembed/BAAI/bge-base-en-v1.5": 1,
+    "cliproxy/claude-haiku-5-5": 3
+   },
+   "gate_sha": "b2ac4f5ccb247f864b7b98fd5510970f781876c438e059dbc62890ce26ed45cb",
+   "gate_vs_judge": {
+    "both_keep": 6,
+    "gate_only": 6,
+    "judge_only": 2,
+    "both_drop": 66
+   }
+  }
+ }
+}
