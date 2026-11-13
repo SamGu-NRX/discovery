@@ -1,9 +1,9 @@
 {
  "blobs": {
   "local": 2583,
-  "already_in_prod": 1403,
-  "sent": 1180,
-  "sent_mb": 347.4,
+  "already_in_prod": 2583,
+  "sent": 0,
+  "sent_mb": 0.0,
   "over_95_mib": []
  },
  "fetches": {
@@ -20,8 +20,359 @@
  },
  "bundles": {
   "local_latest": 80,
-  "registered": 0,
-  "rows": []
+  "registered": 70,
+  "rows": [
+   {
+    "post_id": "2117443552896807117",
+    "version": 1,
+    "created": true
+   },
+   {
+    "post_id": "2117660145131893118",
+    "version": 1,
+    "created": true
+   },
+   {
+    "post_id": "2117678349828976746",
+    "version": 1,
+    "created": true
+   },
+   {
+    "post_id": "2117690339548975528",
+    "version": 1,
+    "created": true
+   },
+   {
+    "post_id": "2117693795076854052",
+    "version": 1,
+    "created": true
+   },
+   {
+    "post_id": "2117750246184824926",
+    "version": 1,
+    "created": true
+   },
+   {
+    "post_id": "2117765472141664455",
+    "version": 1,
+    "created": true
+   },
+   {
+    "post_id": "2117988081110512073",
+    "version": 1,
+    "created": true
+   },
+   {
+    "post_id": "2115895353883156663",
+    "version": 1,
+    "created": true
+   },
+   {
+    "post_id": "2118388273571901655",
+    "version": 1,
+    "created": true
+   },
+   {
+    "post_id": "2119485255836983723",
+    "version": 1,
+    "created": true
+   },
+   {
+    "post_id": "2030019458345980296",
+    "version": 1,
+    "created": true
+   },
+   {
+    "post_id": "2114400113515012360",
+    "version": 1,
+    "created": true
+   },
+   {
+    "post_id": "2114446672831058376",
+    "version": 1,
+    "created": true
+   },
+   {
+    "post_id": "2114931750115672242",
+    "version": 1,
+    "created": true
+   },
+   {
+    "post_id": "2115072947576812013",
+    "version": 1,
+    "created": true
+   },
+   {
+    "post_id": "2115081566187552991",
+    "version": 1,
+    "created": true
+   },
+   {
+    "post_id": "2115098474593321015",
+    "version": 1,
+    "created": true
+   },
+   {
+    "post_id": "2115486437156016566",
+    "version": 1,
+    "created": true
+   },
+   {
+    "post_id": "2115575731585507796",
+    "version": 1,
+    "created": true
+   },
+   {
+    "post_id": "2115638341454696697",
+    "version": 1,
+    "created": true
+   },
+   {
+    "post_id": "2115740246994243669",
+    "version": 1,
+    "created": true
+   },
+   {
+    "post_id": "2115740336685461962",
+    "version": 1,
+    "created": true
+   },
+   {
+    "post_id": "2115775656457843006",
+    "version": 1,
+    "created": true
+   },
+   {
+    "post_id": "2115790225998021049",
+    "version": 1,
+    "created": true
+   },
+   {
+    "post_id": "2115859625719566381",
+    "version": 1,
+    "created": true
+   },
+   {
+    "post_id": "2115864821925351779",
+    "version": 1,
+    "created": true
+   },
+   {
+    "post_id": "2115876931749200320",
+    "version": 1,
+    "created": true
+   },
+   {
+    "post_id": "2115912766561398794",
+    "version": 1,
+    "created": true
+   },
+   {
+    "post_id": "2115920871265046767",
+    "version": 1,
+    "created": true
+   },
+   {
+    "post_id": "2115923331148849532",
+    "version": 1,
+    "created": true
+   },
+   {
+    "post_id": "2117719471691551037",
+    "version": 1,
+    "created": true
+   },
+   {
+    "post_id": "2117732325073064266",
+    "version": 1,
+    "created": true
+   },
+   {
+    "post_id": "2117761216076517471",
+    "version": 1,
+    "created": true
+   },
+   {
+    "post_id": "2117776295534997818",
+    "version": 1,
+    "created": true
+   },
+   {
+    "post_id": "2118063143167693011",
+    "version": 1,
+    "created": true
+   },
+   {
+    "post_id": "2118243873017495655",
+    "version": 1,
+    "created": true
+   },
+   {
+    "post_id": "2118312950016491728",
+    "version": 1,
+    "created": true
+   },
+   {
+    "post_id": "2118334756274241547",
+    "version": 1,
+    "created": true
+   },
+   {
+    "post_id": "2118478123104870660",
+    "version": 1,
+    "created": true
+   },
+   {
+    "post_id": "2118697027639160951",
+    "version": 1,
+    "created": true
+   },
+   {
+    "post_id": "2118808885247029599",
+    "version": 1,
+    "created": true
+   },
+   {
+    "post_id": "2119058549271851431",
+    "version": 1,
+    "created": true
+   },
+   {
+    "post_id": "2119124661443457189",
+    "version": 1,
+    "created": true
+   },
+   {
+    "post_id": "2119455296750039509",
+    "version": 1,
+    "created": true
+   },
+   {
+    "post_id": "2119521036660314339",
+    "version": 1,
+    "created": true
+   },
+   {
+    "post_id": "2119531364722913609",
+    "version": 1,
+    "created": true
+   },
+   {
+    "post_id": "2119567289121132600",
+    "version": 1,
+    "created": true
+   },
+   {
+    "post_id": "2119636848297599457",
+    "version": 1,
+    "created": true
+   },
+   {
+    "post_id": "2119727129869070554",
+    "version": 1,
+    "created": true
+   },
+   {
+    "post_id": "2119758408857628677",
+    "version": 1,
+    "created": true
+   },
+   {
+    "post_id": "2119767672770724021",
+    "version": 1,
+    "created": true
+   },
+   {
+    "post_id": "2119777023845417175",
+    "version": 1,
+    "created": true
+   },
+   {
+    "post_id": "2119823616774992084",
+    "version": 1,
+    "created": true
+   },
+   {
+    "post_id": "2119843556051603752",
+    "version": 1,
+    "created": true
+   },
+   {
+    "post_id": "2119851704149852437",
+    "version": 1,
+    "created": true
+   },
+   {
+    "post_id": "2119870150845599972",
+    "version": 1,
+    "created": true
+   },
+   {
+    "post_id": "2119879610724720702",
+    "version": 1,
+    "created": true
+   },
+   {
+    "post_id": "2119880654858977333",
+    "version": 1,
+    "created": true
+   },
+   {
+    "post_id": "2119895207181156424",
+    "version": 1,
+    "created": true
+   },
+   {
+    "post_id": "2119899156273639888",
+    "version": 1,
+    "created": true
+   },
+   {
+    "post_id": "2119930229661503893",
+    "version": 1,
+    "created": true
+   },
+   {
+    "post_id": "2120216484089872421",
+    "version": 1,
+    "created": true
+   },
+   {
+    "post_id": "2120252783953871317",
+    "version": 1,
+    "created": true
+   },
+   {
+    "post_id": "2120313779691168082",
+    "version": 1,
+    "created": true
+   },
+   {
+    "post_id": "2120494222516339134",
+    "version": 1,
+    "created": true
+   },
+   {
+    "post_id": "2120508498236596597",
+    "version": 1,
+    "created": true
+   },
+   {
+    "post_id": "2120517146887512512",
+    "version": 1,
+    "created": true
+   },
+   {
+    "post_id": "2114505381342838802",
+    "version": 1,
+    "created": true
+   },
+   {
+    "post_id": "2110757819427574056",
+    "version": 1,
+    "created": true
+   }
+  ]
  },
- "wall_s": 470.1
+ "wall_s": 48.4
 }
