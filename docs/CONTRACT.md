@@ -32,7 +32,8 @@ Each token is a random 32-byte hex string. It is stored locally in `~/.agent-sec
 | per-device `device_token` (D1 keeps its SHA-256) | Sam's iPhone app | `GET /approvals*`, `POST /inbox`, `GET /brief`, `POST /voice`, `GET /voice/:id`, `POST /devices/:own id/apns-token`. Never a decision: that takes the device's signature |
 | one-time enrollment code (10 minutes, D1 keeps its SHA-256) | the app, typed by Sam | `POST /devices/enroll` |
 | `BRIDGE_TOKEN` | CLIProxyAPI's `openai-compatibility` entry | `GET /v1/models`, `POST /v1/chat/completions` |
-| `KNOWLEDGE_TOKEN` | kworker on the Zephyrus | `/k/*` (docs/KNOWLEDGE.md), `POST /embed`, `GET /positives` |
+| `KNOWLEDGE_TOKEN` | kworker on the Zephyrus, the Mac's morning-brief task | `/k/*` except `POST /k/intake` (docs/KNOWLEDGE.md), `POST /embed`, `GET /positives` |
+| `KNOWLEDGE_INTAKE_TOKEN` | the extension's daily job | `POST /k/intake` only |
 
 The mailbox's wake secrets (`MAIL_T3_WAKE_URL`, `MAIL_T3_WAKE_SECRET`, `MAIL_GROK_WAKE_URL`, `MAIL_GROK_WAKE_KEY`) and `MAIL_CALLBACK_ORIGINS` are Worker secrets that authorize nothing on the Worker; `worker/README.md` lists them and how to rotate each.
 

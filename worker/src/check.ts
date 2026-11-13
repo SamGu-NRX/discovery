@@ -57,6 +57,8 @@ export interface Env {
   // the tests point at the fixture's stand-in.
   KNOWLEDGE: R2Bucket;
   KNOWLEDGE_TOKEN?: string;
+  // The extension's daily job: POST /k/intake only.
+  KNOWLEDGE_INTAKE_TOKEN?: string;
   GEMINI_BASE_URL?: string;
   // Lens labeling (src/lens.ts). LENS_EMBED_URL replaces Workers AI for
   // embeddings with an OpenAI-compatible /embeddings endpoint; the label

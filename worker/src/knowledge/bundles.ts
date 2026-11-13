@@ -5,9 +5,12 @@
 import type { Env } from "../check";
 import { json } from "../http";
 import { requireBlobs, missingBlobs } from "./blobs";
-import { blobKey, choice, hex64, invalid, KError, list, obj, parsed, text } from "./common";
+import { blobKey, choice, hex64, invalid, jsonField, KError, list, obj, parsed, text } from "./common";
 
 const SEARCH_MAX_BYTES = 64 * 1024;
+// GET /k/digest returns cards as stored and stays under ~30 KB, so each card
+// is small (docs/KNOWLEDGE.md, "Daily loop").
+const CARD_MAX_BYTES = 4 * 1024;
 // The post id doubles as bundle_search's rowid, so it must fit in int64.
 const POST_ID = /^[1-9][0-9]{0,18}$/;
 const INT64_MAX = 9223372036854775807n;
@@ -23,6 +26,7 @@ export interface BundleRow {
   missing_json: string;
   saved_by: string;
   created_at: number;
+  card_json: string | null;
 }
 
 export function postId(v: unknown, field: string): string {
@@ -31,8 +35,8 @@ export function postId(v: unknown, field: string): string {
 }
 
 const presentBundle = (row: BundleRow) => {
-  const { missing_json, saved_by, ...rest } = row;
-  return { ...rest, missing: parsed(missing_json), saved_by: parsed(saved_by) };
+  const { missing_json, saved_by, card_json, ...rest } = row;
+  return { ...rest, missing: parsed(missing_json), saved_by: parsed(saved_by), card: parsed(card_json) };
 };
 
 export const latestBundle = (env: Env, id: string) =>
@@ -59,6 +63,7 @@ export async function registerBundle(env: Env, b: Record<string, unknown>): Prom
   const author = typeof b.author === "string" ? b.author.slice(0, 500) : invalid("author must be a string");
   if (typeof b.search_text !== "string") invalid("search_text must be a string");
   const searchText = b.search_text;
+  const card = b.card === undefined || b.card === null ? null : jsonField(obj(b.card, "card"), "card", CARD_MAX_BYTES);
   if (new TextEncoder().encode(searchText).byteLength > SEARCH_MAX_BYTES) invalid(`search_text must be at most ${SEARCH_MAX_BYTES} bytes`);
   requireBlobs(await missingBlobs(env, [md, js]), [
     ["md_sha", md],
@@ -83,10 +88,10 @@ export async function registerBundle(env: Env, b: Record<string, unknown>): Prom
   const [inserted] = await db.batch<BundleRow>([
     db
       .prepare(
-        `INSERT INTO bundles (post_id, version, r2_key, json_key, md_sha, json_sha, completeness, missing_json, saved_by, created_at)
-         VALUES (?1, ?2, ?5, ?6, ?7, ?3, ?8, ?9, ?10, ?4) ON CONFLICT (post_id, version) DO NOTHING RETURNING *`,
+        `INSERT INTO bundles (post_id, version, r2_key, json_key, md_sha, json_sha, completeness, missing_json, saved_by, created_at, card_json)
+         VALUES (?1, ?2, ?5, ?6, ?7, ?3, ?8, ?9, ?10, ?4, ?11) ON CONFLICT (post_id, version) DO NOTHING RETURNING *`,
       )
-      .bind(id, version, js, now, keys.r2_key, keys.json_key, md, completeness, JSON.stringify(missing), JSON.stringify(savedBy)),
+      .bind(id, version, js, now, keys.r2_key, keys.json_key, md, completeness, JSON.stringify(missing), JSON.stringify(savedBy), card),
     db.prepare(`DELETE FROM bundle_search WHERE rowid = CAST(?1 AS INTEGER) AND ${ours}`).bind(id, version, js, now),
     db.prepare(`INSERT INTO bundle_search (rowid, post_id, author, body) SELECT CAST(?1 AS INTEGER), ?1, ?5, ?6 WHERE ${ours}`).bind(id, version, js, now, author, searchText),
   ]);

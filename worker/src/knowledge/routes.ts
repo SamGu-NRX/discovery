@@ -9,6 +9,7 @@ import { commitBlob, getBlob, hasBlobs, putBlob } from "./blobs";
 import { getBundle, registerBundle } from "./bundles";
 import { claimJobs, completeJob, createJob, heartbeatJob, listJobs } from "./jobs";
 import { listCapabilities, runModel } from "./models";
+import { digest, intake } from "./intake";
 import { getDomainPolicy, lookupDerivations, lookupFetches, lookupVerdicts, postDerivations, postVerdicts, putDomainPolicy, upsertFetches } from "./records";
 
 type Handler = (req: Request, env: Env, url: URL, params: string[], ctx: ExecutionContext, scope: Scope) => Promise<Response>;
@@ -24,6 +25,8 @@ const KB = 1024;
 const body = (req: Request, kib: number) => readJson<Record<string, unknown>>(req, kib * KB);
 const ok = (p: Promise<unknown>) => p.then((data) => json(data));
 const K: Scope[] = ["kworker"];
+// The extension's daily job holds this token; it can file saves and nothing else.
+const INTAKE: Scope[] = ["kintake"];
 
 export const KNOWLEDGE_ROUTES: KnowledgeRoute[] = [
   { method: "PUT", path: /^\/k\/blobs\/([^/]+)$/, scopes: K, handler: (req, env, _u, [sha]) => putBlob(env, req, sha) },
@@ -46,5 +49,7 @@ export const KNOWLEDGE_ROUTES: KnowledgeRoute[] = [
   { method: "GET", path: /^\/k\/capabilities$/, scopes: K, handler: (_r, env, url) => ok(listCapabilities(env, url)) },
   { method: "POST", path: /^\/k\/model\/run$/, scopes: K, handler: async (req, env) => ok(runModel(env, await body(req, 128))) },
   { method: "GET", path: /^\/k\/domain-policy$/, scopes: K, handler: (_r, env, url) => ok(getDomainPolicy(env, url)) },
+  { method: "POST", path: /^\/k\/intake$/, scopes: INTAKE, handler: (req, env) => intake(env, req) },
+  { method: "GET", path: /^\/k\/digest$/, scopes: K, handler: (_r, env, url) => digest(env, url) },
   { method: "POST", path: /^\/k\/domain-policy$/, scopes: K, handler: async (req, env) => ok(putDomainPolicy(env, await body(req, 4))) },
 ];

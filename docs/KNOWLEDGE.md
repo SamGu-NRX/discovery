@@ -139,6 +139,67 @@ A save is a post Sam bookmarked. It is always kept, with its self-thread, its me
 
 Every generated block carries `by: { provider, model, prompt_v }`. Code-produced fields carry none.
 
+## Daily loop
+
+Each morning Sam reads one brief about the posts he saved in the last 24 hours. The extension's daily job (07:00 America/Chicago, @sdotgu's Chrome on the Zephyrus) posts each new save to `POST /k/intake`. kworker, on a schedule on the Zephyrus, reads each save in full and writes its bundle and a card. A scheduled T3 task on the Mac (08:00) reads `GET /k/digest` and writes the brief.
+
+### `POST /k/intake` (token `KNOWLEDGE_INTAKE_TOKEN`, scope `kintake`)
+
+One save per request, at most 192 KiB of JSON. The `kintake` token may call this route and nothing else, so the extension can file saves but not read the store. Posting the same body again changes nothing; a different body for the same post (more context, say) runs the save again unless it is running now.
+
+```json
+{
+  "schema": "kintake/1",
+  "run_id": "daily-2026-11-13",
+  "account": "sdotgu",
+  "captured_at": "2026-11-13T13:02:11Z",
+  "post": {
+    "id": "2119124661443457189",
+    "url": "https://x.com/corbtt/status/2119124661443457189",
+    "author_handle": "corbtt",
+    "author_name": "Kyle Corbitt",
+    "created_at": "2026-11-07T17:47:45Z",
+    "text": "verbatim, with t.co links expanded where known",
+    "media": [{ "kind": "photo|video|gif", "url": "https://pbs.twimg.com/media/…?name=orig" }],
+    "links": [{ "url": "https://t.co/…", "expanded": "https://example.com/page", "title": "optional" }],
+    "quoted": null,
+    "reply_to": null
+  },
+  "thread": [],
+  "upstream": [],
+  "context": [
+    { "id": "2119125016797479391", "author_handle": "corbtt", "text": "…", "reply_to": "2119124661443457189",
+      "quoted_id": null, "view": "relevant", "created_at": "2026-11-07T17:49:10Z", "links": ["https://example.com"] }
+  ],
+  "context_capped": false,
+  "views_read": [{ "view": "relevant", "reached_end": true, "count": 23 }]
+}
+```
+
+- `post`, `thread[]`, `upstream[]` and `post.quoted` are post objects. Required in each: `id` (numeric string), `url`, `author_handle`, and `text` (a string, `""` when the post has none). `media` (at most 20) and `links` (at most 50) are optional.
+- `thread`: the author's self-thread in order, the save included, when the job walked it. `upstream`: the posts the save replies to, nearest first (the reply-parent walk).
+- `context`: at most 120 posts around the save: replies, quotes, posts linking it. Each needs `id`, `author_handle`, `text`; `reply_to`, `quoted_id`, `view`, `created_at` and `links` (URL strings or `{ url, expanded }`) are optional. kworker's relevance gate decides which to keep, so send them unfiltered. Set `context_capped: true` when the job's 80-post cap cut the context short.
+- `run_id`, `account` and `schema` are required; `captured_at` and `views_read` are optional.
+- Answers: 201 `{ post_id, intake_sha, job: { id, state, created: true, requeued: false } }` for a new save, 200 for one already filed (`requeued` says whether it runs again). A bad field is 400 `invalid_request` naming it (`post.text must be a string …`, `context[3].id must be …`); over 192 KiB is 413 `too_large`.
+
+### `GET /k/digest?since=<ISO or epoch ms>&limit=<1..100>` (scope `kworker`)
+
+`{ since, until, count, truncated, next_since, pending_saves, saves: [{ version, finished_at, card }] }` for each save whose latest bundle was registered at or after `since`, oldest first, at most about 30 KB. When the answer is cut, `truncated` is true and `next_since` is where to ask again. `pending_saves` counts saves still queued or running.
+
+A card, written by kworker with the bundle (at most 4 KiB):
+
+```json
+{
+  "post_id": "…", "url": "…", "author": "@corbtt (Kyle Corbitt)", "created_at": "…", "saved_by": ["sdotgu"],
+  "status": "complete|partial|blocked", "missing": ["link https://…: blocked at rung 7 (login wall)"],
+  "excerpt": "the post's first 280 characters",
+  "verdict": { "label": "try|read|reference|skip", "why": "one sentence on why it matters to Sam", "action": "one thing to do, or empty", "by": { "provider": "…", "model": "…", "prompt_v": "…" } },
+  "context": ["@corbtt: the top kept replies, one line each"],
+  "links": [{ "url": "…", "title": "…", "status": "ok", "repo": { "name": "o/r", "stars": 0, "last_commit": "…" } }],
+  "media": { "photos": 0, "videos": 0 }
+}
+```
+
 ## Agent tools (mailbox MCP endpoint, read-only)
 
 Fields holding text from posts, pages or models end in `_untrusted`, the mailbox endpoint's marker for data an agent must not take instructions from.
@@ -155,6 +216,7 @@ cd worker
 npx wrangler r2 bucket create x-knowledge
 npx wrangler d1 migrations apply DB --remote
 npx wrangler secret put KNOWLEDGE_TOKEN      # random 32-byte hex, also in ~/.agent-secrets/discovery-knowledge
+npx wrangler secret put KNOWLEDGE_INTAKE_TOKEN   # random 32-byte hex; the extension's daily job holds it
 npx wrangler secret put GEMINI_API_KEY       # free-tier key; optional
 npx wrangler deploy
 ```
