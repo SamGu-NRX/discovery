@@ -16,7 +16,7 @@ import { HttpError } from "./http";
 export interface Limits {
   d1: number;
   // D1 calls held back for writes that must land even when the work before
-  // them ran out of budget: the cron's attempt row and its cron_runs row.
+  // them ran out of budget: the lens refresh's attempt row.
   d1Reserve: number;
   external: number;
   internal: number;
@@ -24,9 +24,9 @@ export interface Limits {
 }
 
 export const ROUTE_LIMITS: Limits = { d1: 40, d1Reserve: 0, external: 40, internal: 500, bundleReads: 10 };
-// The lens cron's invocation (LENS_CRON in src/index.ts), which does nothing
-// else: candidate query, refresh, attempt row and cron_runs row, 40 of the 50.
-export const CRON_LIMITS: Limits = { d1: 40, d1Reserve: 2, external: 30, internal: 500, bundleReads: 10 };
+// LensCronDO's invocation (src/lens-cron.ts), which does nothing else:
+// candidate query, refresh and attempt row, 40 of the 50.
+export const CRON_LIMITS: Limits = { d1: 40, d1Reserve: 1, external: 30, internal: 500, bundleReads: 10 };
 
 export class Budget {
   readonly used = { d1: 0, external: 0, internal: 0, bundleReads: 0 };

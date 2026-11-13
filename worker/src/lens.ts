@@ -463,8 +463,9 @@ export async function refreshBackground(env: LensEnv, req: Request) {
   return takeBackground(env, account, source, hours as number, max as number);
 }
 
-// From the lens cron (LENS_CRON in src/index.ts, hourly in an invocation of
-// its own): retakes one lens account's background per run. One query
+// From LensCronDO (src/lens-cron.ts), which the */15 cron calls once per run,
+// in an invocation of its own: retakes one lens account's background per
+// run. One query
 // picks it: among accounts whose background is over a day old and that saw
 // at least 50 posts with text in the last day, the one tried longest ago, so
 // an account that keeps failing goes to the back and ineligible accounts

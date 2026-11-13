@@ -52,10 +52,12 @@ After 0031 is applied, each existing lens answers 409 until its account has a ba
 | `VOICE` | R2 | `discovery-voice` |
 | `WATCHER` | Durable Object, SQLite (migration tag `v1`) | `WatcherDO` |
 | `BRIDGE_WAIT` | Durable Object, SQLite (migration tag `v2`, new) | `BridgeWaitDO` |
-| cron | trigger | `*/15 * * * *` (watchers, approvals, mailbox, voice) |
-| cron | trigger | `37 * * * *` (lens background refresh only) |
+| `LENS_CRON` | Durable Object, SQLite (migration tag `v3`, new) | `LensCronDO` |
+| cron | trigger | `*/15 * * * *` |
 
-The lens refresh runs on its own cron, so it has a scheduled invocation's 50 D1 calls to itself and the mailbox work on `*/15` cannot crowd it out, or the reverse. That is 2 of the 5 cron triggers Workers Free allows per account.
+The lens background refresh runs in `LensCronDO` (`worker/src/lens-cron.ts`). The `*/15` cron calls it once per run, keyed by name `lens`, after the watcher, approval, mailbox and voice work, and logs its result. A Durable Object request is its own invocation with its own 50 D1 calls, so the mailbox's unbounded wake dispatch on the cron cannot crowd the refresh out, or the reverse. A second cron trigger would do the same, but the account is at 5 of the 5 triggers Workers Free allows (cogportal, cogportal-production, discovery-watcher, kgu-one-preview-v3, t3code-mobile-ops). If the Durable Object fails, the cron logs it and still writes its `cron_runs` row.
+
+`v3` is a create migration for the one new class. `wrangler deploy` applies it with the Worker; it is not a D1 migration.
 
 ## Secrets
 

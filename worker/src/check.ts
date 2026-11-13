@@ -44,6 +44,8 @@ export interface Env {
   // The OpenAI-compatible bridge's bearer, and the Durable Object it waits on.
   BRIDGE_TOKEN?: string;
   BRIDGE_WAIT: DurableObjectNamespace<import("./bridge").BridgeWaitDO>;
+  // The lens background refresh's own invocation (src/lens-cron.ts).
+  LENS_CRON: DurableObjectNamespace<import("./lens-cron").LensCronDO>;
   // Local tests only: send APNs, GitHub and Gemini requests to the fixture
   // server instead of Apple's, GitHub's and Google's hosts. Unset in
   // production.

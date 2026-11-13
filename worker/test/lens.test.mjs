@@ -327,12 +327,10 @@ test("the first baseline sets open_at and glance_at at its 90th and 70th percent
   assert.deepEqual((await s.d1("SELECT open_at, glance_at FROM lenses WHERE id = 'based'"))[0], { open_at: row.open_at, glance_at: row.glance_at });
 });
 
-// The lens refresh has its own trigger (LENS_CRON in src/index.ts); the */15
-// cron does the watcher, approval, mailbox and voice work only.
-const LENS_CRON_URL = () => `${s.base}/__scheduled?cron=37+*+*+*+*`;
-const DISPATCH_CRON_URL = () => `${s.base}/__scheduled?cron=*/15+*+*+*+*`;
+// The one cron; it has LensCronDO (src/lens-cron.ts) retake lens backgrounds.
+const CRON_URL = () => `${s.base}/__scheduled?cron=*/15+*+*+*+*`;
 
-test("the lens cron retakes a lens account's background from its own posts once a day and refits its lenses; the */15 cron does not", async () => {
+test("the cron retakes a lens account's background from its own posts once a day and refits its lenses", async () => {
   await makeLens("daily", "cronacct");
   const before = (await s.d1("SELECT background_version FROM lenses WHERE id = 'daily'"))[0].background_version;
   await s.d1("UPDATE lens_backgrounds SET created_at = created_at - 2 * 3600000 WHERE account = 'cronacct'");
@@ -343,9 +341,7 @@ test("the lens cron retakes a lens account's background from its own posts once 
   // A day of the account's own feed, and a background more than a day old.
   await ingest("cronacct", Array.from({ length: 60 }, (_, i) => post(String(9_930_000 + i), BG_TEXTS[i % BG_TEXTS.length])));
   await s.d1("UPDATE lens_backgrounds SET created_at = created_at - 25 * 3600000 WHERE account = 'cronacct'");
-  assert.equal((await freshFetch(DISPATCH_CRON_URL())).status, 200);
-  assert.equal((await s.d1("SELECT max(version) AS v FROM lens_backgrounds WHERE account = 'cronacct'"))[0].v, before, "the */15 cron leaves backgrounds alone");
-  const res = await freshFetch(LENS_CRON_URL());
+  const res = await freshFetch(CRON_URL());
   assert.equal(res.status, 200);
   const latest = (await s.d1("SELECT version, source_account, posts FROM lens_backgrounds WHERE account = 'cronacct' ORDER BY version DESC LIMIT 1"))[0];
   assert.equal(latest.version, before + 1);
@@ -354,7 +350,7 @@ test("the lens cron retakes a lens account's background from its own posts once 
   assert.equal((await s.d1("SELECT background_version FROM lenses WHERE id = 'daily'"))[0].background_version, before + 1);
 
   // A background taken under a day ago is not retaken.
-  await freshFetch(LENS_CRON_URL());
+  await freshFetch(CRON_URL());
   assert.equal((await s.d1("SELECT max(version) AS v FROM lens_backgrounds WHERE account = 'cronacct'"))[0].v, before + 1);
 });
 
@@ -378,7 +374,7 @@ async function dueAccount(account, texts, idBase) {
   await s.d1(`UPDATE lens_backgrounds SET created_at = created_at - 25 * 3600000 WHERE account = '${account}'`);
 }
 const latestVersion = async (account) => (await s.d1(`SELECT max(version) AS v FROM lens_backgrounds WHERE account = '${account}'`))[0].v;
-const cron = () => freshFetch(LENS_CRON_URL());
+const cron = () => freshFetch(CRON_URL());
 const feed = (n) => Array.from({ length: n }, (_, i) => BG_TEXTS[i % BG_TEXTS.length]);
 
 test("the cron's gate counts only posts with text, so an account that saw only empty posts does not stop the next one", async () => {
@@ -441,7 +437,7 @@ test("48 ineligible lens accounts ahead of a healthy one cost the cron nothing, 
   await cron();
   assert.equal(await latestVersion("acd-healthy"), v + 1);
   const attempt = (await s.d1("SELECT d1_calls FROM lens_background_attempts WHERE account = 'acd-healthy'"))[0];
-  // The lens cron's whole invocation, counted by the Worker's own budget:
+  // LensCronDO's whole invocation, counted by the Worker's own budget:
   // under Free's 50 whatever bindings the refresh reads through.
   assert.ok(attempt.d1_calls > 0 && attempt.d1_calls < 50, `the run recorded ${attempt.d1_calls} D1 calls`);
   assert.deepEqual(await s.d1("SELECT account FROM lens_background_attempts WHERE account LIKE 'acc-inel-%'"), []);
@@ -496,4 +492,21 @@ test("a baseline recorded before 0031 gets its text back from x_posts, and the r
     ids,
     "written back in feed order",
   );
+});
+
+test("a LensCronDO failure is logged and the */15 run still records itself", async () => {
+  // With its attempts table gone, the Durable Object's candidate query fails.
+  const runs = async () => (await s.d1("SELECT count(*) AS n FROM cron_runs"))[0].n;
+  const before = await runs();
+  await s.d1("ALTER TABLE lens_background_attempts RENAME TO lens_background_attempts_away");
+  try {
+    assert.equal((await freshFetch(CRON_URL())).status, 200);
+    assert.equal(await runs(), before + 1, "the run's cron_runs row");
+    // wrangler dev's log can trail the response by a moment.
+    const logged = () => s.lines.some((l) => /\[cron\] lens backgrounds: .*no such table: lens_background_attempts/.test(l));
+    for (let i = 0; i < 50 && !logged(); i += 1) await new Promise((r) => setTimeout(r, 100));
+    assert.ok(logged(), "the failure is logged");
+  } finally {
+    await s.d1("ALTER TABLE lens_background_attempts_away RENAME TO lens_background_attempts");
+  }
 });
