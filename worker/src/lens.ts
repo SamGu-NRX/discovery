@@ -5,9 +5,8 @@
 // reads, schedule metric re-polls for the posts it opens, and compute the
 // scorecard that says whether the feed came back purer and earlier.
 
-import type { Env } from "./check";
 import { fail, HttpError, readJson, str } from "./http";
-import { Budget, CRON_LIMITS, CountedDb, type CountedStatement, type Limits, ROUTE_LIMITS } from "./lens-budget";
+import type { CountedStatement, LensEnv } from "./lens-budget";
 import { composeText, isThin, linkContext, readBundle } from "./lens-text";
 import { centered, checkVectors, dot, isVector, meanOf, parseStoredVector, unit, VectorError } from "./lens-vec";
 import { EMBED_MODEL } from "./x";
@@ -144,21 +143,6 @@ export const REFRESH_COOLDOWN_MS = 3600_000;
 export const MAX_EXEMPLARS = 100;
 const DAY = 24 * HOUR;
 
-// Lens code gets the Worker's bindings with D1 behind CountedDb and the
-// invocation's budget beside it (src/lens-budget.ts). Every D1 call, embedding
-// call and bundle read below is charged to that budget.
-export type LensEnv = Omit<Env, "DB"> & { DB: CountedDb; budget: Budget };
-
-function lensEnv(env: Env, limits: Limits): LensEnv {
-  const budget = new Budget(limits);
-  return { ...env, DB: new CountedDb(env.DB, budget), budget };
-}
-
-// What loadLens needs, so the routes outside the budget can share it.
-interface QueryDb {
-  prepare(sql: string): { bind(...values: unknown[]): { first<T>(): Promise<T | null> } };
-}
-
 interface Background {
   version: number;
   mean: number[];
@@ -184,7 +168,7 @@ async function embedAll(env: LensEnv, texts: string[]): Promise<number[][]> {
 }
 
 async function latestBackground(env: LensEnv, account: string): Promise<Background | null> {
-  const row = await env.DB.prepare("SELECT version, mean_json FROM lens_backgrounds WHERE account = ?1 ORDER BY version DESC LIMIT 1")
+  const row = await env.db.prepare("SELECT version, mean_json FROM lens_backgrounds WHERE account = ?1 ORDER BY version DESC LIMIT 1")
     .bind(account)
     .first<{ version: number; mean_json: string }>();
   if (!row) return null;
@@ -201,7 +185,7 @@ async function storedFits(env: LensEnv, lenses: LensRow[]): Promise<{ mean: numb
   const bare = lenses.find((l) => l.background_version === null);
   if (bare) throw new HttpError(409, `lens ${bare.id} has no background; POST /lenses/backgrounds/refresh for account ${bare.account}`);
   const key = (account: string, version: number | null) => `${account}#${version}`;
-  const { results } = await env.DB.prepare(
+  const { results } = await env.db.prepare(
     "SELECT account, version, mean_json FROM lens_backgrounds WHERE account || '#' || version IN (SELECT value FROM json_each(?1))",
   )
     .bind(JSON.stringify([...new Set(lenses.map((l) => key(l.account, l.background_version)))]))
@@ -228,7 +212,7 @@ async function storedBundles(env: LensEnv, ids: string[]): Promise<Map<string, u
   let rows: { post_id: string; json_key: string }[];
   try {
     rows = (
-      await env.DB.prepare(
+      await env.db.prepare(
         `SELECT b.post_id, b.json_key FROM bundles b
          WHERE b.post_id IN (SELECT value FROM json_each(?1))
            AND b.version = (SELECT max(version) FROM bundles WHERE post_id = b.post_id)`,
@@ -324,7 +308,7 @@ async function usableBaselines(env: LensEnv, lensIds: string[]): Promise<{ posts
   const out = { posts: new Map<string, { id: string; text: string }[]>(), writeBacks: [] as CountedStatement[] };
   if (!lensIds.length) return out;
   type Row = { lens_id: string; session_id: string; has_texts: number; legacy_ids: string | null };
-  const { results } = await env.DB.prepare(
+  const { results } = await env.db.prepare(
     `SELECT lens_id, session_id, texts_json IS NOT NULL AS has_texts, CASE WHEN texts_json IS NULL THEN post_ids_json END AS legacy_ids
      FROM lens_baselines WHERE lens_id IN (SELECT value FROM json_each(?1)) ORDER BY lens_id, at`,
   )
@@ -339,7 +323,7 @@ async function usableBaselines(env: LensEnv, lensIds: string[]): Promise<{ posts
   const legacyIds = [...new Set([...candidates.values()].flat().flatMap((r) => (r.legacy_ids ? (JSON.parse(r.legacy_ids) as string[]) : [])))];
   const stored = new Map<string, string>();
   if (legacyIds.length) {
-    const rows = await env.DB.prepare("SELECT id, text FROM x_posts WHERE id IN (SELECT value FROM json_each(?1)) AND length(text) > 0")
+    const rows = await env.db.prepare("SELECT id, text FROM x_posts WHERE id IN (SELECT value FROM json_each(?1)) AND length(text) > 0")
       .bind(JSON.stringify(legacyIds))
       .all<{ id: string; text: string }>();
     for (const r of rows.results) stored.set(r.id, r.text);
@@ -355,13 +339,13 @@ async function usableBaselines(env: LensEnv, lensIds: string[]): Promise<{ posts
       const posts = ids.filter((id) => stored.has(id)).map((id) => ({ id, text: stored.get(id)! }));
       if (posts.length >= 10 && posts.length * 2 >= ids.length) {
         out.posts.set(lensId, posts);
-        out.writeBacks.push(env.DB.prepare("UPDATE lens_baselines SET texts_json = ?3 WHERE lens_id = ?1 AND session_id = ?2").bind(lensId, r.session_id, JSON.stringify(posts)));
+        out.writeBacks.push(env.db.prepare("UPDATE lens_baselines SET texts_json = ?3 WHERE lens_id = ?1 AND session_id = ?2").bind(lensId, r.session_id, JSON.stringify(posts)));
         break;
       }
     }
   }
   if (withText.length) {
-    const rows = await env.DB.prepare(
+    const rows = await env.db.prepare(
       `SELECT b.lens_id, b.texts_json FROM lens_baselines b JOIN json_each(?1) k
          ON b.lens_id = json_extract(k.value, '$[0]') AND b.session_id = json_extract(k.value, '$[1]')`,
     )
@@ -374,7 +358,7 @@ async function usableBaselines(env: LensEnv, lensIds: string[]): Promise<{ posts
 
 async function exemplarPosts(env: LensEnv, ids: string[]) {
   if (!ids.length) return [];
-  return (await env.DB.prepare("SELECT id, text FROM x_posts WHERE id IN (SELECT value FROM json_each(?1))").bind(JSON.stringify(ids)).all<{ id: string; text: string }>()).results;
+  return (await env.db.prepare("SELECT id, text FROM x_posts WHERE id IN (SELECT value FROM json_each(?1))").bind(JSON.stringify(ids)).all<{ id: string; text: string }>()).results;
 }
 
 // Takes a new background for `account` from the posts `source` saw in the
@@ -388,7 +372,7 @@ async function takeBackground(env: LensEnv, account: string, source: string, hou
   if (max > MAX_BACKGROUND_POSTS) fail(`max must be at most ${MAX_BACKGROUND_POSTS}`);
   // Only the latest version and when it was taken: a refresh is also how a
   // corrupt stored mean gets replaced, so it must not parse that mean.
-  const prev = await env.DB.prepare("SELECT version, created_at FROM lens_backgrounds WHERE account = ?1 ORDER BY version DESC LIMIT 1")
+  const prev = await env.db.prepare("SELECT version, created_at FROM lens_backgrounds WHERE account = ?1 ORDER BY version DESC LIMIT 1")
     .bind(account)
     .first<{ version: number; created_at: number }>();
   const now = Date.now();
@@ -397,7 +381,7 @@ async function takeBackground(env: LensEnv, account: string, source: string, hou
   }
   const since = now - hours * HOUR;
   const posts = (
-    await env.DB.prepare(
+    await env.db.prepare(
       `SELECT p.id, p.text FROM x_posts p JOIN (
          SELECT post_id, max(seen_at) AS last FROM x_sightings WHERE account = ?1 AND seen_at >= ?2 GROUP BY post_id
        ) s ON s.post_id = p.id WHERE length(p.text) > 0 ORDER BY s.last DESC LIMIT ?3`,
@@ -416,7 +400,7 @@ async function takeBackground(env: LensEnv, account: string, source: string, hou
     vectorFailure(err);
   }
   const version = (prev?.version ?? 0) + 1;
-  const lenses = (await env.DB.prepare("SELECT * FROM lenses WHERE account = ?1 ORDER BY id").bind(account).all<LensRow>()).results;
+  const lenses = (await env.db.prepare("SELECT * FROM lenses WHERE account = ?1 ORDER BY id").bind(account).all<LensRow>()).results;
   const exemplarIds = lenses.map((l) => JSON.parse(l.exemplar_ids_json) as string[]);
   const stored = new Map((await exemplarPosts(env, [...new Set(exemplarIds.flat())])).map((p) => [p.id, p]));
   const baselines = await usableBaselines(env, lenses.map((l) => l.id));
@@ -426,8 +410,8 @@ async function takeBackground(env: LensEnv, account: string, source: string, hou
     mean,
   );
   try {
-    await env.DB.batch([
-      env.DB.prepare("INSERT INTO lens_backgrounds (account, version, mean_json, posts, source_account, since, embed_model, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)").bind(
+    await env.db.batch([
+      env.db.prepare("INSERT INTO lens_backgrounds (account, version, mean_json, posts, source_account, since, embed_model, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)").bind(
         account,
         version,
         JSON.stringify(mean),
@@ -438,7 +422,7 @@ async function takeBackground(env: LensEnv, account: string, source: string, hou
         now,
       ),
       ...lenses.map((lens, i) =>
-        env.DB.prepare("UPDATE lenses SET centroid_json = ?2, open_at = ?3, glance_at = ?4, thresholds_source = ?5, background_version = ?6, updated_at = ?7 WHERE id = ?1").bind(
+        env.db.prepare("UPDATE lenses SET centroid_json = ?2, open_at = ?3, glance_at = ?4, thresholds_source = ?5, background_version = ?6, updated_at = ?7 WHERE id = ?1").bind(
           lens.id,
           JSON.stringify(fits[i].centroid),
           fits[i].open_at,
@@ -468,7 +452,7 @@ async function takeBackground(env: LensEnv, account: string, source: string, hou
 // hours? = 24, max? = 500 }. A new lens account has seen nothing yet, so its
 // first background comes from another account's posts (source_account),
 // until the daily refresh can use its own.
-export async function refreshBackground(env: Env, req: Request) {
+export async function refreshBackground(env: LensEnv, req: Request) {
   const b = await readJson<Record<string, unknown>>(req);
   const account = str(b.account, "account", 64).replace(/^@/, "");
   const source = b.source_account === undefined ? account : str(b.source_account, "source_account", 64).replace(/^@/, "");
@@ -476,7 +460,7 @@ export async function refreshBackground(env: Env, req: Request) {
   if (!Number.isInteger(hours) || (hours as number) < 1 || (hours as number) > 24 * 30) fail("hours must be 1 to 720");
   const max = b.max ?? MAX_BACKGROUND_POSTS;
   if (!Number.isInteger(max) || (max as number) < MIN_BACKGROUND_POSTS || (max as number) > MAX_BACKGROUND_POSTS) fail(`max must be ${MIN_BACKGROUND_POSTS} to ${MAX_BACKGROUND_POSTS}`);
-  return takeBackground(lensEnv(env, ROUTE_LIMITS), account, source, hours as number, max as number);
+  return takeBackground(env, account, source, hours as number, max as number);
 }
 
 // From the cron: retakes one lens account's background per run. One query
@@ -485,10 +469,11 @@ export async function refreshBackground(env: Env, req: Request) {
 // an account that keeps failing goes to the back and ineligible accounts
 // cost nothing. Each attempt, its error and its D1 calls are recorded in
 // lens_background_attempts. One account per run keeps the cron inside its
-// budget; it runs every 15 minutes.
-export async function refreshDueBackgrounds(env: Env, now: number) {
-  const lx = lensEnv(env, CRON_LIMITS);
-  const due = await lx.DB.prepare(
+// budget; it runs every 15 minutes. `env` is the cron's: its D1 calls before
+// this one are already on the budget, and `laterD1Calls` are those it makes
+// after, so the recorded count is the whole invocation's.
+export async function refreshDueBackgrounds(env: LensEnv, now: number, laterD1Calls: number) {
+  const due = await env.db.prepare(
     `SELECT l.account FROM (SELECT DISTINCT account FROM lenses) l
      LEFT JOIN lens_background_attempts a ON a.account = l.account
      WHERE NOT EXISTS (SELECT 1 FROM lens_backgrounds b WHERE b.account = l.account AND b.created_at > ?1)
@@ -502,15 +487,14 @@ export async function refreshDueBackgrounds(env: Env, now: number) {
   let done = null;
   let error: string | null = null;
   try {
-    done = await takeBackground(lx, due.account, due.account, 24, MAX_BACKGROUND_POSTS);
+    done = await takeBackground(env, due.account, due.account, 24, MAX_BACKGROUND_POSTS);
   } catch (err) {
     error = (err as Error).message.slice(0, 500);
   }
-  // Written outside the budget, so a refresh that ran out of it is still
-  // recorded; the budget leaves room for this one call. Its own call is in
-  // the count.
-  const d1Calls = lx.budget.used.d1 + 1;
-  await env.DB.prepare(
+  // Charged to the reserve, so a refresh that ran out of budget is still
+  // recorded. The count includes this write and the caller's later calls.
+  const d1Calls = env.budget.used.d1 + 1 + laterD1Calls;
+  await env.db.prepareReserved(
     `INSERT INTO lens_background_attempts (account, at, error, d1_calls) VALUES (?1, ?2, ?3, ?4)
      ON CONFLICT (account) DO UPDATE SET at = excluded.at, error = excluded.error, d1_calls = excluded.d1_calls`,
   )
@@ -521,16 +505,15 @@ export async function refreshDueBackgrounds(env: Env, now: number) {
 
 // ---- lenses ---------------------------------------------------------------
 
-async function loadLens(db: QueryDb, id: string): Promise<LensRow> {
-  const row = await db.prepare("SELECT * FROM lenses WHERE id = ?1").bind(id).first<LensRow>();
+async function loadLens(env: LensEnv, id: string): Promise<LensRow> {
+  const row = await env.db.prepare("SELECT * FROM lenses WHERE id = ?1").bind(id).first<LensRow>();
   if (!row) throw new HttpError(404, `no lens ${id}`);
   return row;
 }
 
 // POST /lenses (admin): creates or replaces a lens from exemplar posts the
 // Worker already stores, fitted against the account's latest background.
-export async function upsertLens(env: Env, req: Request) {
-  const lx = lensEnv(env, ROUTE_LIMITS);
+export async function upsertLens(env: LensEnv, req: Request) {
   const b = await readJson<Record<string, unknown>>(req);
   const id = str(b.id, "id", 64);
   if (!LENS_ID.test(id)) fail("id must be lowercase letters, digits and dashes");
@@ -541,15 +524,15 @@ export async function upsertLens(env: Env, req: Request) {
   if (!Array.isArray(terms) || !terms.every((t) => typeof t === "string" && t.length > 0 && t.length <= 60)) fail("project_terms must be an array of short strings");
   const exemplarIds = [...new Set(b.exemplar_ids as string[])];
   if (exemplarIds.length > MAX_EXEMPLARS) fail(`a lens takes at most ${MAX_EXEMPLARS} exemplars, one embedding call`);
-  const found = await exemplarPosts(lx, exemplarIds);
+  const found = await exemplarPosts(env, exemplarIds);
   if (found.length < MIN_EXEMPLARS) fail(`only ${found.length} of the exemplar_ids are stored posts; a lens needs at least ${MIN_EXEMPLARS}`);
-  const background = await latestBackground(lx, account);
+  const background = await latestBackground(env, account);
   if (!background) fail(`account ${account} has no background yet; POST /lenses/backgrounds/refresh first (with source_account for an account that has seen nothing)`);
-  const baselines = await usableBaselines(lx, [id]);
-  const [f] = await fitLenses(lx, [{ exemplars: found, baseline: baselines.posts.get(id) ?? null }], background.mean);
+  const baselines = await usableBaselines(env, [id]);
+  const [f] = await fitLenses(env, [{ exemplars: found, baseline: baselines.posts.get(id) ?? null }], background.mean);
   const now = Date.now();
-  await lx.DB.batch([
-    lx.DB.prepare(
+  await env.db.batch([
+    env.db.prepare(
       `INSERT INTO lenses (id, account, charter, exemplar_ids_json, centroid_json, embed_model, open_at, glance_at, project_terms_json, created_at, updated_at, background_version, thresholds_source)
        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10, ?11, ?12)
        ON CONFLICT (id) DO UPDATE SET account = excluded.account, charter = excluded.charter, exemplar_ids_json = excluded.exemplar_ids_json,
@@ -573,9 +556,9 @@ export async function upsertLens(env: Env, req: Request) {
 
 // GET /lenses?account= (ingest): the lenses an account reads for. No
 // centroid; the extension needs only the id.
-export async function listLenses(env: Env, url: URL) {
+export async function listLenses(env: LensEnv, url: URL) {
   const account = str(url.searchParams.get("account"), "account query parameter", 64);
-  const rows = await env.DB.prepare("SELECT id, account, charter, open_at, glance_at FROM lenses WHERE account = ?1 ORDER BY id")
+  const rows = await env.db.prepare("SELECT id, account, charter, open_at, glance_at FROM lenses WHERE account = ?1 ORDER BY id")
     .bind(account)
     .all();
   return { lenses: rows.results };
@@ -619,20 +602,19 @@ export function centroidAction(taste: number, lens: Pick<LensRow, "open_at" | "g
 }
 
 // POST /lenses/:id/label (ingest): the reader's labels for up to 40 posts.
-export async function labelPosts(env: Env, id: string, req: Request) {
-  const lx = lensEnv(env, ROUTE_LIMITS);
-  const lens = await loadLens(lx.DB, id);
+export async function labelPosts(env: LensEnv, id: string, req: Request) {
+  const lens = await loadLens(env, id);
   const b = await readJson<Record<string, unknown>>(req, 256 * 1024);
   const posts = readPosts(b.posts, MAX_LABEL_POSTS);
   const terms = JSON.parse(lens.project_terms_json) as string[];
-  const tastes = await tastesFor(lx, posts, await storedFits(lx, [lens]));
-  const seen = await lx.DB.prepare(
+  const tastes = await tastesFor(env, posts, await storedFits(env, [lens]));
+  const seen = await env.db.prepare(
     "SELECT DISTINCT post_id FROM x_sightings WHERE lens_id = ?1 AND post_id IN (SELECT value FROM json_each(?2))",
   )
     .bind(id, JSON.stringify(posts.map((p) => p.id)))
     .all<{ post_id: string }>();
   const sighted = new Set(seen.results.map((r) => r.post_id));
-  const { labels, note } = await modelLabels(lx, lens.charter, posts);
+  const { labels, note } = await modelLabels(env, lens.charter, posts);
   const byModel = new Map(labels?.map((l) => [l.id, l.action]) ?? []);
   return {
     lens_id: id,
@@ -651,8 +633,8 @@ export async function labelPosts(env: Env, id: string, req: Request) {
 // POST /lenses/:id/reads (ingest): what the reader did, one row per post per
 // session; a repeat of the same (session, post) is ignored. Every open is a
 // flag and gets the re-poll schedule.
-export async function recordReads(env: Env, id: string, req: Request) {
-  await loadLens(env.DB, id);
+export async function recordReads(env: LensEnv, id: string, req: Request) {
+  await loadLens(env, id);
   const b = await readJson<Record<string, unknown>>(req, 256 * 1024);
   const sessionId = str(b.session_id, "session_id", 128);
   if (!Array.isArray(b.reads) || b.reads.length === 0 || b.reads.length > 500) fail("reads must be an array of 1 to 500 reads");
@@ -673,15 +655,15 @@ export async function recordReads(env: Env, id: string, req: Request) {
   });
   const opens = reads.filter((r) => r.action === "open");
   const repolls = opens.flatMap((r) => REPOLL_STEPS.map(([step, ms]) => ({ post_id: r.post_id, step, due_at: r.at + ms })));
-  const [inserted] = await env.DB.batch([
-    env.DB.prepare(
+  const [inserted] = await env.db.batch([
+    env.db.prepare(
       `INSERT OR IGNORE INTO reads (lens_id, session_id, post_id, action, dwell_ms, taste, novelty, project, label_source, at)
        SELECT ?1, ?2, json_extract(value, '$.post_id'), json_extract(value, '$.action'), json_extract(value, '$.dwell_ms'),
               json_extract(value, '$.taste'), json_extract(value, '$.novelty'), json_extract(value, '$.project'), json_extract(value, '$.source'),
               json_extract(value, '$.at')
        FROM json_each(?3)`,
     ).bind(id, sessionId, JSON.stringify(reads)),
-    env.DB.prepare(
+    env.db.prepare(
       `INSERT OR IGNORE INTO lens_repolls (lens_id, post_id, step, due_at)
        SELECT ?1, json_extract(value, '$.post_id'), json_extract(value, '$.step'), json_extract(value, '$.due_at') FROM json_each(?2)`,
     ).bind(id, JSON.stringify(repolls)),
@@ -691,10 +673,10 @@ export async function recordReads(env: Env, id: string, req: Request) {
 
 // GET /lenses/repolls/due?account= (ingest): post ids whose next re-poll is
 // due, oldest first, at most 50.
-export async function dueRepolls(env: Env, url: URL) {
+export async function dueRepolls(env: LensEnv, url: URL) {
   const account = url.searchParams.get("account");
   if (!account) fail("account query parameter is required");
-  const rows = await env.DB.prepare(
+  const rows = await env.db.prepare(
     `SELECT r.post_id, min(r.due_at) AS due_at FROM lens_repolls r JOIN lenses l ON l.id = r.lens_id
      WHERE l.account = ?1 AND r.done_at IS NULL AND r.due_at <= ?2 GROUP BY r.post_id ORDER BY due_at LIMIT 50`,
   )
@@ -705,12 +687,12 @@ export async function dueRepolls(env: Env, url: URL) {
 
 // POST /lenses/repolls/done (ingest): marks every due step of these posts
 // done. A step that falls due later stays open.
-export async function doneRepolls(env: Env, req: Request) {
+export async function doneRepolls(env: LensEnv, req: Request) {
   const b = await readJson<Record<string, unknown>>(req);
   const account = str(b.account, "account", 64);
   if (!Array.isArray(b.post_ids) || !b.post_ids.every((x) => typeof x === "string" && POST_ID.test(x))) fail("post_ids must be an array of post id strings");
   const now = Date.now();
-  const res = await env.DB.prepare(
+  const res = await env.db.prepare(
     `UPDATE lens_repolls SET done_at = ?1
      WHERE done_at IS NULL AND due_at <= ?1 AND post_id IN (SELECT value FROM json_each(?2))
        AND lens_id IN (SELECT id FROM lenses WHERE account = ?3)`,
@@ -725,16 +707,15 @@ export async function doneRepolls(env: Env, req: Request) {
 // POST /lenses/:id/baseline (ingest): the untouched For You top 100, in feed
 // order, with each post's text. The lens's first baseline sets its
 // thresholds (fit() says why). Purity is the share at or above glance_at.
-export async function recordBaseline(env: Env, id: string, req: Request) {
-  const lx = lensEnv(env, ROUTE_LIMITS);
-  const lens = await loadLens(lx.DB, id);
+export async function recordBaseline(env: LensEnv, id: string, req: Request) {
+  const lens = await loadLens(env, id);
   const b = await readJson<Record<string, unknown>>(req, 512 * 1024);
   const sessionId = str(b.session_id, "session_id", 128);
   const posts = readPosts(b.posts, 100);
-  const tastes = (await tastesFor(lx, posts, await storedFits(lx, [lens]))).map((t) => t[0]);
+  const tastes = (await tastesFor(env, posts, await storedFits(env, [lens]))).map((t) => t[0]);
   let { open_at: openAt, glance_at: glanceAt } = lens;
   // A lens whose earlier baselines are all unusable is set by this one.
-  const earlier = await usableBaselines(lx, [id]);
+  const earlier = await usableBaselines(env, [id]);
   const first = !earlier.posts.has(id);
   if (first) {
     const sorted = [...tastes].sort((x, y) => x - y);
@@ -743,14 +724,14 @@ export async function recordBaseline(env: Env, id: string, req: Request) {
   }
   const purity = tastes.filter((t) => t >= glanceAt).length / tastes.length;
   const texts = JSON.stringify(posts.map((p) => ({ id: p.id, text: p.text })));
-  await lx.DB.batch([
+  await env.db.batch([
     ...earlier.writeBacks,
-    lx.DB.prepare(
+    env.db.prepare(
       `INSERT INTO lens_baselines (lens_id, session_id, at, post_ids_json, tastes_json, purity, texts_json) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
        ON CONFLICT (lens_id, session_id) DO UPDATE SET at = excluded.at, post_ids_json = excluded.post_ids_json, tastes_json = excluded.tastes_json,
          purity = excluded.purity, texts_json = excluded.texts_json`,
     ).bind(id, sessionId, Date.now(), JSON.stringify(posts.map((p) => p.id)), JSON.stringify(tastes), purity, texts),
-    lx.DB.prepare("UPDATE lenses SET open_at = ?2, glance_at = ?3, thresholds_source = CASE WHEN ?4 THEN 'baseline' ELSE thresholds_source END WHERE id = ?1").bind(
+    env.db.prepare("UPDATE lenses SET open_at = ?2, glance_at = ?3, thresholds_source = CASE WHEN ?4 THEN 'baseline' ELSE thresholds_source END WHERE id = ?1").bind(
       id,
       openAt,
       glanceAt,
@@ -784,21 +765,21 @@ const median = (xs: number[]) => {
 //   earlier the lens account saw them (negative: later);
 // - flag precision: share of opened posts with a 7-day sample whose views
 //   grew 10 times or more.
-export async function scorecard(env: Env, id: string, url: URL) {
-  const lens = await loadLens(env.DB, id);
+export async function scorecard(env: LensEnv, id: string, url: URL) {
+  const lens = await loadLens(env, id);
   const vs = url.searchParams.get("vs") ?? "sdotgu";
-  const [sessions, baselines, flagged] = await env.DB.batch<Record<string, unknown>>([
-    env.DB.prepare(
+  const [sessions, baselines, flagged] = await env.db.batch<Record<string, unknown>>([
+    env.db.prepare(
       `SELECT session_id, min(at) AS started_at, count(*) AS reads, sum(taste >= ?2) AS near, sum(action = 'open') AS opens, avg(dwell_ms) AS mean_dwell_ms
        FROM reads WHERE lens_id = ?1 GROUP BY session_id ORDER BY started_at`,
     ).bind(id, lens.glance_at),
-    env.DB.prepare("SELECT session_id, at, purity FROM lens_baselines WHERE lens_id = ?1 ORDER BY at").bind(id),
-    env.DB.prepare("SELECT DISTINCT post_id FROM reads WHERE lens_id = ?1 AND action = 'open'").bind(id),
+    env.db.prepare("SELECT session_id, at, purity FROM lens_baselines WHERE lens_id = ?1 ORDER BY at").bind(id),
+    env.db.prepare("SELECT DISTINCT post_id FROM reads WHERE lens_id = ?1 AND action = 'open'").bind(id),
   ]);
   const flaggedIds = flagged.results.map((r) => r.post_id as string);
   // Every sample of the opened posts and of every post the lens account saw,
   // by any account; views come from each sighting's metrics.
-  const samples = await env.DB.prepare(
+  const samples = await env.db.prepare(
     `SELECT post_id, account, seen_at, json_extract(metrics_json, '$.views') AS views FROM x_sightings
      WHERE post_id IN (SELECT DISTINCT post_id FROM x_sightings WHERE account = ?1)
      ORDER BY seen_at`,
@@ -855,8 +836,7 @@ const MAX_SIGNAL_POSTS = 100;
 // and whether it reaches glance_at (near) and open_at; which lenses opened
 // it; when a lens account and `vs` first saw it; and its views at the first
 // and latest sample, which the re-polls add to. `account` limits the lenses.
-export async function signals(env: Env, url: URL) {
-  const lx = lensEnv(env, ROUTE_LIMITS);
+export async function signals(env: LensEnv, url: URL) {
   const account = url.searchParams.get("account");
   const vs = url.searchParams.get("vs") ?? "sdotgu";
   const limitParam = url.searchParams.get("limit");
@@ -868,8 +848,8 @@ export async function signals(env: Env, url: URL) {
 
   const lenses = (
     await (account
-      ? lx.DB.prepare("SELECT * FROM lenses WHERE account = ?1 ORDER BY id").bind(account)
-      : lx.DB.prepare("SELECT * FROM lenses ORDER BY id")
+      ? env.db.prepare("SELECT * FROM lenses WHERE account = ?1 ORDER BY id").bind(account)
+      : env.db.prepare("SELECT * FROM lenses ORDER BY id")
     ).all<LensRow>()
   ).results;
   if (!lenses.length) throw new HttpError(404, account ? `no lenses for account ${account}` : "no lenses");
@@ -878,22 +858,22 @@ export async function signals(env: Env, url: URL) {
   const ids =
     named ??
     (
-      await lx.DB.prepare(
+      await env.db.prepare(
         `SELECT post_id FROM reads WHERE action = 'open' AND lens_id IN (SELECT value FROM json_each(?1))
          GROUP BY post_id ORDER BY max(at) DESC LIMIT ?2`,
       )
         .bind(lensIds, limit)
         .all<{ post_id: string }>()
     ).results.map((r) => r.post_id);
-  if (!ids.length) return { vs, lenses: lenses.map(({ id, account, open_at, glance_at }) => ({ id, account, open_at, glance_at })), posts: [], missing: [], usage: lx.budget.usage() };
+  if (!ids.length) return { vs, lenses: lenses.map(({ id, account, open_at, glance_at }) => ({ id, account, open_at, glance_at })), posts: [], missing: [], usage: env.budget.usage() };
 
-  const [stored, opens, samples] = await lx.DB.batch<Record<string, unknown>>([
-    lx.DB.prepare("SELECT id, author_handle, text FROM x_posts WHERE id IN (SELECT value FROM json_each(?1))").bind(JSON.stringify(ids)),
-    lx.DB.prepare(
+  const [stored, opens, samples] = await env.db.batch<Record<string, unknown>>([
+    env.db.prepare("SELECT id, author_handle, text FROM x_posts WHERE id IN (SELECT value FROM json_each(?1))").bind(JSON.stringify(ids)),
+    env.db.prepare(
       `SELECT post_id, lens_id FROM reads WHERE action = 'open' AND post_id IN (SELECT value FROM json_each(?1))
          AND lens_id IN (SELECT value FROM json_each(?2)) GROUP BY post_id, lens_id`,
     ).bind(JSON.stringify(ids), lensIds),
-    lx.DB.prepare(
+    env.db.prepare(
       `SELECT post_id, account, seen_at, json_extract(metrics_json, '$.views') AS views FROM x_sightings
        WHERE post_id IN (SELECT value FROM json_each(?1)) ORDER BY seen_at`,
     ).bind(JSON.stringify(ids)),
@@ -901,8 +881,8 @@ export async function signals(env: Env, url: URL) {
   const byId = new Map(stored.results.map((r) => [r.id as string, r as { id: string; author_handle: string; text: string }]));
   const posts = ids.filter((id) => byId.has(id)).map((id) => byId.get(id)!);
   // Each lens scores against its own account's background.
-  const fits = await storedFits(lx, lenses);
-  const tastes = await tastesFor(lx, posts, fits);
+  const fits = await storedFits(env, lenses);
+  const tastes = await tastesFor(env, posts, fits);
   const lensAccounts = new Set(lenses.map((l) => l.account));
   const openedBy = new Map<string, string[]>();
   for (const r of opens.results) (openedBy.get(r.post_id as string) ?? openedBy.set(r.post_id as string, []).get(r.post_id as string)!).push(r.lens_id as string);
@@ -946,7 +926,7 @@ export async function signals(env: Env, url: URL) {
     lenses: lenses.map(({ id, account, open_at, glance_at }) => ({ id, account, open_at, glance_at })),
     posts: rows,
     missing: ids.filter((id) => !byId.has(id)),
-    usage: lx.budget.usage(),
+    usage: env.budget.usage(),
     summary: {
       posts: rows.length,
       near_two_or_more: rows.filter((r) => r.near_lenses.length >= 2).length,

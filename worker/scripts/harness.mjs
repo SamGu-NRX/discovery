@@ -5,13 +5,35 @@
 import { spawn, execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { createWriteStream, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { request } from "node:http";
 import { dirname, join } from "node:path";
+import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { createFixture } from "../fixtures/server.mjs";
 
 export const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const WRANGLER = join(ROOT, "node_modules/.bin/wrangler");
 const ENV = { ...process.env, CI: "1", WRANGLER_SEND_METRICS: "false" };
+
+// fetch, but on a new connection each time. wrangler dev closes idle
+// keep-alive sockets after 5 s, and fetch's pool sometimes reuses one just as
+// it closes ("fetch failed"); on Windows, where each d1() call takes about 2 s,
+// that happens often enough to fail a run.
+export function freshFetch(url, { method = "GET", headers = {}, body, signal } = {}) {
+  return new Promise((resolve, reject) => {
+    const h = { ...headers };
+    if (body !== undefined && body !== null) h["content-length"] = String(Buffer.byteLength(body));
+    const r = request(url, { method, headers: h, agent: false, signal }, (res) => {
+      const out = new Headers();
+      for (const [k, v] of Object.entries(res.headers)) out.set(k, Array.isArray(v) ? v.join(", ") : v);
+      const empty = res.statusCode === 204 || res.statusCode === 304;
+      if (empty) res.resume();
+      resolve(new Response(empty ? null : Readable.toWeb(res), { status: res.statusCode, headers: out }));
+    });
+    r.on("error", reject);
+    r.end(body ?? undefined);
+  });
+}
 
 const LOCAL_SECRETS = ["ADMIN_TOKEN", "WEBSUB_SECRET", "INGEST_TOKEN", "RUNNER_TOKEN", "INBOX_TOKEN"];
 
@@ -76,17 +98,7 @@ export async function startStack({ port, fixturePort, inspectorPort, logFile, pe
   async function call(method, path, body, { raw = false, token = "admin" } = {}) {
     const headers = { "content-type": "application/json" };
     if (token !== "none") headers.authorization = `Bearer ${vars[`${token.toUpperCase()}_TOKEN`]}`;
-    // wrangler dev closes idle keep-alive connections, and a request written
-    // onto one it has just closed fails with "other side closed" (undici
-    // UND_ERR_SOCKET) before the Worker sees it; the lens tests hit this after
-    // the seconds-long `wrangler d1 execute` calls. Such a request is sent once
-    // more. A repeat the Worker had already handled would answer differently
-    // (a second refresh is 429), so this cannot turn a failure into a pass.
-    const send = () => fetch(base + path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
-    const res = await send().catch((err) => {
-      if (err?.cause?.code === "UND_ERR_SOCKET") return send();
-      throw err;
-    });
+    const res = await freshFetch(base + path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
     if (raw) return res;
     const text = await res.text();
     const data = text ? JSON.parse(text) : null;

@@ -29,6 +29,11 @@ CREATE TABLE lens_background_attempts (
   d1_calls INTEGER NOT NULL
 );
 
+-- The cron's candidate query and a refresh read one account's sightings of
+-- the last day; x_sightings_account (account, post_id) does not cover the
+-- time, so each would scan the account's whole history.
+CREATE INDEX x_sightings_account_seen ON x_sightings (account, seen_at);
+
 -- The background a lens's centroid and thresholds were fitted against, and
 -- where its thresholds came from: 'baseline' (the day-1 For You top 100) or
 -- 'exemplars' (before any baseline).

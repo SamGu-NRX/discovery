@@ -5,7 +5,7 @@
 
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
-import { startStack } from "../scripts/harness.mjs";
+import { freshFetch, startStack } from "../scripts/harness.mjs";
 
 const FIXTURE_PORT = 8852;
 let s;
@@ -338,7 +338,7 @@ test("the cron retakes a lens account's background from its own posts once a day
   // A day of the account's own feed, and a background more than a day old.
   await ingest("cronacct", Array.from({ length: 60 }, (_, i) => post(String(9_930_000 + i), BG_TEXTS[i % BG_TEXTS.length])));
   await s.d1("UPDATE lens_backgrounds SET created_at = created_at - 25 * 3600000 WHERE account = 'cronacct'");
-  const res = await fetch(`${s.base}/__scheduled?cron=*/15+*+*+*+*`);
+  const res = await freshFetch(`${s.base}/__scheduled?cron=*/15+*+*+*+*`);
   assert.equal(res.status, 200);
   const latest = (await s.d1("SELECT version, source_account, posts FROM lens_backgrounds WHERE account = 'cronacct' ORDER BY version DESC LIMIT 1"))[0];
   assert.equal(latest.version, before + 1);
@@ -347,7 +347,7 @@ test("the cron retakes a lens account's background from its own posts once a day
   assert.equal((await s.d1("SELECT background_version FROM lenses WHERE id = 'daily'"))[0].background_version, before + 1);
 
   // A background taken under a day ago is not retaken.
-  await fetch(`${s.base}/__scheduled?cron=*/15+*+*+*+*`);
+  await freshFetch(`${s.base}/__scheduled?cron=*/15+*+*+*+*`);
   assert.equal((await s.d1("SELECT max(version) AS v FROM lens_backgrounds WHERE account = 'cronacct'"))[0].v, before + 1);
 });
 
@@ -371,7 +371,7 @@ async function dueAccount(account, texts, idBase) {
   await s.d1(`UPDATE lens_backgrounds SET created_at = created_at - 25 * 3600000 WHERE account = '${account}'`);
 }
 const latestVersion = async (account) => (await s.d1(`SELECT max(version) AS v FROM lens_backgrounds WHERE account = '${account}'`))[0].v;
-const cron = () => fetch(`${s.base}/__scheduled?cron=*/15+*+*+*+*`);
+const cron = () => freshFetch(`${s.base}/__scheduled?cron=*/15+*+*+*+*`);
 const feed = (n) => Array.from({ length: n }, (_, i) => BG_TEXTS[i % BG_TEXTS.length]);
 
 test("the cron's gate counts only posts with text, so an account that saw only empty posts does not stop the next one", async () => {
@@ -434,7 +434,9 @@ test("48 ineligible lens accounts ahead of a healthy one cost the cron nothing, 
   await cron();
   assert.equal(await latestVersion("acd-healthy"), v + 1);
   const attempt = (await s.d1("SELECT d1_calls FROM lens_background_attempts WHERE account = 'acd-healthy'"))[0];
-  assert.ok(attempt.d1_calls < 50, `the run made ${attempt.d1_calls} D1 calls`);
+  // The whole invocation: the watcher lookup, the proposal expiry, the
+  // candidate query, the refresh's 6, the attempt row and the cron_runs row.
+  assert.equal(attempt.d1_calls, 11, `the run recorded ${attempt.d1_calls} D1 calls`);
   assert.deepEqual(await s.d1("SELECT account FROM lens_background_attempts WHERE account LIKE 'acc-inel-%'"), []);
 });
 
