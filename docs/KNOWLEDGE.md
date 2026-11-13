@@ -76,7 +76,7 @@ kworker sends blobs up to 8 MiB through `PUT`, and larger ones through the S3 AP
 
 Kinds: `save`, `link`, `image`, `video`, `bundle`. The lease pattern is the one in `worker/src/candidates.ts`: a claim leases with a fresh random `lease_token`, an expired lease can be claimed again with a new token, completing needs the current token, and the third expired lease fails the job.
 
-- `POST /k/jobs { kind, key, payload, deps?, again? }` creates a job (201), or returns the existing `(kind, key)` row (200, `created: false`). Both answer `{ created, requeued, job }`. `deps` lists job ids that must be `done` or `failed` before this one can be claimed; an id that names no job is 422 `unknown_dep`. `runs` starts at 1. `again: true` on a `done` or `failed` job puts it back to `queued` with the new payload and deps, adds one to `runs`, clears `result`, `error` and `expired_leases`, and answers `requeued: true`; on a queued or claimed job it changes nothing.
+- `POST /k/jobs { kind, key, payload, deps?, again? }` creates a job (201), or returns the existing `(kind, key)` row (200, `created: false`). Both answer `{ created, requeued, replaced, deferred, job }`. `deps` lists job ids that must be `done` or `failed` before this one can be claimed; an id that names no job is 422 `unknown_dep`. `runs` starts at 1. `again: true` on a `done` or `failed` job puts it back to `queued` with the new payload and deps, adds one to `runs`, clears `result`, `error` and `expired_leases`, and answers `requeued: true`. On a queued job it replaces the payload and deps in place (`replaced: true`). On a claimed job it keeps them as `pending` (`deferred: true`), and completing that attempt queues the job again with them in the same batch, so a save that ran again never leaves its bundle on old children.
 - `POST /k/jobs/claim { owner, kinds: [], ttl_s ≤ 3600, limit ≤ 10 }` → `{ jobs: [{ id, kind, key, payload, lease_token, lease_until, attempts, runs }] }`.
 - `POST /k/jobs/:id/heartbeat { owner, lease_token, ttl_s }` sets the lease to end `ttl_s` from now while `lease_token` is the current one, which includes an expired lease nobody has claimed again. → `{ id, lease_until }`.
 - `POST /k/jobs/:id/complete { owner, lease_token, state: "done"|"failed"|"queued", result?, error? }`. → the job row. `queued` hands the job back without a final state, clearing the owner and keeping `attempts`. Heartbeat and complete answer 409 `lease_lost` when the token is not the current lease, and 404 `job_missing` for an unknown id.
@@ -145,7 +145,7 @@ Each morning Sam reads one brief about the posts he saved in the last 24 hours. 
 
 ### `POST /k/intake` (token `KNOWLEDGE_INTAKE_TOKEN`, scope `kintake`)
 
-One save per request, at most 192 KiB of JSON. The `kintake` token may call this route and nothing else, so the extension can file saves but not read the store. Posting the same body again changes nothing; a different body for the same post (more context, say) runs the save again unless it is running now.
+One save per request, at most 192 KiB of JSON. The `kintake` token may call this route and nothing else, so the extension can file saves but not read the store. Posting the same body again changes nothing. A different body for the same post (more context, say) runs the save again: at once if it is finished or waiting, and after the current attempt if it is running, so a newer body is never acknowledged and then dropped.
 
 ```json
 {
@@ -180,11 +180,11 @@ One save per request, at most 192 KiB of JSON. The `kintake` token may call this
 - `thread`: the author's self-thread in order, the save included, when the job walked it. `upstream`: the posts the save replies to, nearest first (the reply-parent walk).
 - `context`: at most 120 posts around the save: replies, quotes, posts linking it. Each needs `id`, `author_handle`, `text`; `reply_to`, `quoted_id`, `view`, `created_at` and `links` (URL strings or `{ url, expanded }`) are optional. kworker's relevance gate decides which to keep, so send them unfiltered. Set `context_capped: true` when the job's 80-post cap cut the context short.
 - `run_id`, `account` and `schema` are required; `captured_at` and `views_read` are optional.
-- Answers: 201 `{ post_id, intake_sha, job: { id, state, created: true, requeued: false } }` for a new save, 200 for one already filed (`requeued` says whether it runs again). A bad field is 400 `invalid_request` naming it (`post.text must be a string …`, `context[3].id must be …`); over 192 KiB is 413 `too_large`.
+- Answers: 201 `{ post_id, intake_sha, job: { id, state, created: true, requeued: false, replaced: false, deferred: false } }` for a new save, 200 for one already filed: `requeued` (a finished save runs again), `replaced` (a waiting save takes the new body), or `deferred` (a running save runs again with it when the current attempt ends). A bad field is 400 `invalid_request` naming it (`post.text must be a string …`, `context[3].id must be …`); over 192 KiB is 413 `too_large`.
 
-### `GET /k/digest?since=<ISO or epoch ms>&limit=<1..100>` (scope `kworker`)
+### `GET /k/digest?since=<time>[&cursor=<next_cursor>]&limit=<1..100>` (scope `kworker`)
 
-`{ since, until, count, truncated, next_since, pending_saves, saves: [{ version, finished_at, card }] }` for each save whose latest bundle was registered at or after `since`, oldest first, at most about 30 KB. When the answer is cut, `truncated` is true and `next_since` is where to ask again. `pending_saves` counts saves still queued or running.
+`{ since, until, pending_saves, count, truncated, next_cursor, saves: [{ version, finished_at, card }] }` for each save whose latest bundle was registered at or after `since`, oldest first by (finish time, post id), at most 30 KiB of UTF-8 per page and always at least one save. `since` is epoch milliseconds or an ISO time with a zone (`2026-11-13T07:00:00Z`, `2026-11-13T02:00:00-05:00`); anything else is 400. When a page is cut, `truncated` is true; ask again with the same `since` and `cursor=<next_cursor>`, which resumes strictly after the last save returned, so saves that finished in the same millisecond come once each. `pending_saves` counts saves whose save or bundle job is still queued or running, so a save with work outstanding is never missing from both the cards and the count.
 
 A card, written by kworker with the bundle (at most 4 KiB):
 

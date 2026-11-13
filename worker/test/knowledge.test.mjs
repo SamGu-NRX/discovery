@@ -186,7 +186,7 @@ test("jobs: the third expired lease fails the job instead of handing it out agai
   assert.equal(row.expired_leases, 3);
 });
 
-test("jobs: again requeues a done job with its new payload and one more run, and changes nothing on a queued one", async () => {
+test("jobs: again requeues a done job with its new payload and one more run, and replaces a queued one's payload", async () => {
   await job("save", "again-1");
   const [c] = await claim(["save"]);
   expect(await finish(c, "done", { result: { kept: 3 } }), 200);
@@ -196,12 +196,14 @@ test("jobs: again requeues a done job with its new payload and one more run, and
   assert.equal(r.job.state, "queued");
   assert.equal(r.job.runs, 2);
   assert.deepEqual(r.job.payload, { v: 2 });
+  // Waiting, it takes the newer payload in place: no extra run (since mvp-loop;
+  // the claimed case is in intake.test.mjs).
   const still = expect(await k("POST", "/k/jobs", { kind: "save", key: "again-1", payload: { v: 3 }, again: true }), 200);
-  assert.equal(still.requeued, false);
+  assert.deepEqual([still.requeued, still.replaced], [false, true]);
   assert.equal(still.job.runs, 2);
-  assert.deepEqual(still.job.payload, { v: 2 });
+  assert.deepEqual(still.job.payload, { v: 3 });
   const [next] = await claim(["save"]);
-  assert.deepEqual(next.payload, { v: 2 });
+  assert.deepEqual(next.payload, { v: 3 });
   expect(await finish(next), 200);
 });
 

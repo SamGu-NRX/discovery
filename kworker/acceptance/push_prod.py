@@ -82,15 +82,21 @@ def main() -> None:
         sent_bytes += b["size"]
     report["blobs"] = {"local": len(blobs), "already_in_prod": len(have), "sent": sent, "sent_mb": round(sent_bytes / 1e6, 1), "over_95_mib": too_big}
 
+    # A row naming a blob production lacks (written locally after the listing
+    # above, or over 95 MiB) waits for the next push instead of failing it.
+    in_prod = have | {b["sha256"] for b in blobs if b["sha256"] not in too_big}
     fetch_cols = ["url_hash", "canonical_url", "final_url", "etag", "last_modified", "content_sha", "mime", "http_status", "rung", "status", "immutable", "note"]
     fetches = [{k: r[k] for k in fetch_cols if r[k] is not None} for r in rows(con, "SELECT * FROM fetches")]
-    report["fetches"] = post_batches(prod, "/k/fetches", "rows", fetches, 50)
+    ready = [f for f in fetches if not f.get("content_sha") or f["content_sha"] in in_prod]
+    report["fetches"] = {"sent": post_batches(prod, "/k/fetches", "rows", ready, 50), "waiting_for_blob": len(fetches) - len(ready)}
     der_cols = ["input_sha", "step", "provider", "model", "prompt_v", "output_sha", "input_tokens", "output_tokens", "ms"]
     ders = [{k: r[k] for k in der_cols if r[k] is not None} for r in rows(con, "SELECT * FROM derivations")]
-    report["derivations"] = post_batches(prod, "/k/derivations", "rows", ders, 50)
+    ready = [d for d in ders if d["output_sha"] in in_prod]
+    report["derivations"] = {"sent": post_batches(prod, "/k/derivations", "rows", ready, 50), "waiting_for_blob": len(ders) - len(ready)}
     ver_cols = ["item_kind", "item_id", "save_id", "verdict", "reason", "stage", "score", "text_sha", "gate_v", "pack_sha", "pack_row"]
     vers = [{k: r[k] for k in ver_cols if r[k] is not None} for r in rows(con, "SELECT * FROM verdicts")]
-    report["verdicts"] = post_batches(prod, "/k/verdicts", "rows", vers, 200)
+    ready = [v for v in vers if not v.get("pack_sha") or v["pack_sha"] in in_prod]
+    report["verdicts"] = {"sent": post_batches(prod, "/k/verdicts", "rows", ready, 200), "waiting_for_blob": len(vers) - len(ready)}
     for p in rows(con, "SELECT host, start_rung, notes FROM domain_policy"):
         prod.post("/k/domain-policy", json={k: v for k, v in p.items() if v is not None}).raise_for_status()
 

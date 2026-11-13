@@ -36,12 +36,16 @@ interface JobRow {
   error: string | null;
   created_at: number;
   updated_at: number;
+  pending_payload: string | null;
+  pending_deps: string | null;
 }
 
 // The lease token goes only to the claimant, in the claim response.
 function present(row: JobRow) {
-  const { lease_token, payload, deps, result, ...rest } = row;
-  return { ...rest, payload: parsed(payload), deps: parsed(deps), result: parsed(result) };
+  const { lease_token, payload, deps, result, pending_payload, pending_deps, ...rest } = row;
+  // pending: a run requested while this one holds the lease (runAgain).
+  const pending = pending_payload === null ? null : { payload: parsed(pending_payload), deps: parsed(pending_deps) };
+  return { ...rest, payload: parsed(payload), deps: parsed(deps), result: parsed(result), pending };
 }
 
 function ttl(v: unknown): number {
@@ -74,20 +78,40 @@ export async function createJob(env: Env, b: Record<string, unknown>): Promise<R
   if (inserted) return json({ created: true, requeued: false, job: present(inserted) }, 201);
 
   const existing = (await env.DB.prepare("SELECT * FROM knowledge_jobs WHERE kind = ? AND key = ?").bind(kind, key).first<JobRow>())!;
-  if (b.again !== true || (existing.state !== "done" && existing.state !== "failed")) return json({ created: false, requeued: false, job: present(existing) });
+  if (b.again !== true) return json({ created: false, requeued: false, replaced: false, deferred: false, job: present(existing) });
   if (deps.includes(existing.id)) throw new KError(422, "dep_cycle", `deps must not name the job itself (${existing.id})`);
-  // expired_leases restarts, or a job failed for lease expiry would fail at
-  // its next expiry. attempts keeps counting across runs.
-  const requeued = await env.DB.prepare(
-    `UPDATE knowledge_jobs SET state = 'queued', payload = ?2, deps = ?3, runs = runs + 1, expired_leases = 0,
-       owner = NULL, lease_token = NULL, lease_until = NULL, result = NULL, error = NULL, updated_at = ?4
-     WHERE id = ?1 AND state IN ('done', 'failed') RETURNING *`,
-  )
-    .bind(existing.id, payload, depsJson, now)
-    .first<JobRow>();
-  // Null only if another request requeued it between the two statements.
-  const row = requeued ?? (await env.DB.prepare("SELECT * FROM knowledge_jobs WHERE id = ?").bind(existing.id).first<JobRow>())!;
-  return json({ created: false, requeued: requeued !== null, job: present(row) });
+  const again = await runAgain(env, existing.id, payload, depsJson, now);
+  return json({ created: false, ...again.how, job: present(again.row) });
+}
+
+// Asks for a job to run (again) with this payload and these deps:
+// - done or failed: queued again (requeued);
+// - queued: takes the new payload and deps in place (replaced), so a save
+//   that ran again cannot leave its bundle job on the old children;
+// - claimed: the request is kept as pending (deferred), and completeJob
+//   queues it in the same batch that finishes the running attempt.
+// expired_leases restarts on a requeue, or a job failed for lease expiry
+// would fail at its next expiry; attempts keeps counting across runs.
+export async function runAgain(env: Env, id: string, payload: string, depsJson: string, now: number) {
+  const db = env.DB;
+  const [requeued, replaced, deferred, row] = await db.batch<JobRow>([
+    db
+      .prepare(
+        `UPDATE knowledge_jobs SET state = 'queued', payload = ?2, deps = ?3, runs = runs + 1, expired_leases = 0, owner = NULL, lease_token = NULL,
+           lease_until = NULL, result = NULL, error = NULL, pending_payload = NULL, pending_deps = NULL, updated_at = ?4
+         WHERE id = ?1 AND state IN ('done', 'failed') RETURNING id`,
+      )
+      .bind(id, payload, depsJson, now),
+    // runs and updated_at mark the row the first statement just queued, which
+    // this one must leave alone; D1 runs a batch's statements in order.
+    db.prepare(`UPDATE knowledge_jobs SET payload = ?2, deps = ?3, updated_at = ?4 WHERE id = ?1 AND state = 'queued' AND updated_at != ?4 RETURNING id`).bind(id, payload, depsJson, now),
+    db.prepare(`UPDATE knowledge_jobs SET pending_payload = ?2, pending_deps = ?3 WHERE id = ?1 AND state = 'claimed' RETURNING id`).bind(id, payload, depsJson),
+    db.prepare("SELECT * FROM knowledge_jobs WHERE id = ?").bind(id),
+  ]);
+  return {
+    how: { requeued: requeued.results.length > 0, replaced: replaced.results.length > 0, deferred: deferred.results.length > 0 },
+    row: row.results[0],
+  };
 }
 
 export async function claimJobs(env: Env, b: Record<string, unknown>) {
@@ -161,14 +185,28 @@ export async function completeJob(env: Env, id: string, b: Record<string, unknow
   const result = b.result === undefined ? null : jsonField(b.result, "result", RESULT_MAX);
   const error = optText(b.error, "error", 4000);
   // "queued" hands the job back: it clears the owner and keeps attempts. A
-  // final state keeps who finished it.
-  const row = await env.DB.prepare(
-    `UPDATE knowledge_jobs SET state = ?3, result = ?4, error = ?5, owner = CASE WHEN ?3 = 'queued' THEN NULL ELSE ?2 END,
-       lease_until = NULL, lease_token = NULL, updated_at = ?6
-     WHERE id = ?1 AND owner = ?2 AND lease_token = ?7 AND state = 'claimed' RETURNING *`,
-  )
-    .bind(id, owner, state, result, error, Date.now(), token)
-    .first<JobRow>();
+  // final state keeps who finished it. A run requested while this attempt
+  // held the lease (pending_payload) is queued in the same batch, so it is
+  // never lost between the completion and a second request.
+  const db = env.DB;
+  const now = Date.now();
+  const [done, again] = await db.batch<JobRow>([
+    db
+      .prepare(
+        `UPDATE knowledge_jobs SET state = ?3, result = ?4, error = ?5, owner = CASE WHEN ?3 = 'queued' THEN NULL ELSE ?2 END,
+           lease_until = NULL, lease_token = NULL, updated_at = ?6
+         WHERE id = ?1 AND owner = ?2 AND lease_token = ?7 AND state = 'claimed' RETURNING *`,
+      )
+      .bind(id, owner, state, result, error, now, token),
+    db
+      .prepare(
+        `UPDATE knowledge_jobs SET state = 'queued', payload = pending_payload, deps = pending_deps, pending_payload = NULL, pending_deps = NULL,
+           runs = runs + (?2 != 'queued'), expired_leases = 0, owner = NULL, result = NULL, error = NULL, updated_at = ?3
+         WHERE id = ?1 AND pending_payload IS NOT NULL AND updated_at = ?3 AND state = ?2 AND lease_token IS NULL RETURNING *`,
+      )
+      .bind(id, state, now),
+  ]);
+  const row = again.results[0] ?? done.results[0];
   return row ? present(row) : leaseRefusal(env, id, owner);
 }
 

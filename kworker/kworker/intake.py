@@ -38,10 +38,13 @@ def expansion(intake: dict) -> dict:
     thread = [_thread_post(post if t["id"] == sid else t, t["id"] == sid) for t in thread_in]
     thread_ids = {t["id"] for t in thread}
 
-    upstream = (intake.get("upstream") or [None])[0]
+    # The reply-parent walk, nearest parent first: a saved reply is read and
+    # judged with the posts it answers.
+    upstream = [{"id": u["id"], "url": u["url"], "author_handle": u["author_handle"], "text": u.get("text") or ""} for u in intake.get("upstream") or []]
+    up_ids = {u["id"] for u in upstream}
     candidates = []
     for c in intake.get("context") or []:
-        if c["id"] in thread_ids or c["id"] == (upstream or {}).get("id"):
+        if c["id"] in thread_ids or c["id"] in up_ids:
             continue
         kind = "reply" if c.get("reply_to") else ("quote" if c.get("quoted_id") == sid else "linking")
         links = [l["expanded"] for l in _links(c.get("links"))] + [u for u in URL_RE.findall(c.get("text") or "") if "t.co/" not in u]
@@ -72,7 +75,7 @@ def expansion(intake: dict) -> dict:
         },
         "saved_by": [intake["account"]],
         "thread": thread,
-        "upstream": upstream and {"id": upstream["id"], "url": upstream["url"], "author_handle": upstream["author_handle"], "text": upstream.get("text") or ""},
+        "upstream": upstream,
         "quoted": quoted,
         "candidates": candidates,
         "reply_views": [v.get("view") for v in intake.get("views_read") or [] if v.get("view")],

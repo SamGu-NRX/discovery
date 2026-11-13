@@ -64,3 +64,39 @@ def test_card_fits_the_workers_limit_and_names_blocked():
     assert card["status"] == "blocked"
     assert card["missing"] == ["link https://a: blocked at rung 7 (login wall)"]
     assert card["verdict"]["label"] == "try"
+
+
+def test_card_that_cannot_fit_raises_instead_of_looping():
+    # Review of f8c8d6f: with one link left and the shortest excerpt, the
+    # old loop kept "shrinking" without changing anything.
+    import pytest
+
+    from kworker.bundle import CardTooLarge, fit_card
+
+    b = bundle(text="z" * 5000, links=1)
+    b["url"] = "https://x.com/" + "u" * 5000
+    with pytest.raises(CardTooLarge, match="after every cut"):
+        make_card(b)
+    # A long URL in a link is dropped, the last link included.
+    b2 = bundle(links=1)
+    b2["links"][0]["url"] = "https://e.com/" + "v" * 5000
+    card = make_card(b2)
+    assert card["links"] == [] and len(canonical_json(card).encode("utf-8")) <= CARD_MAX
+    assert fit_card({"post_id": "1", "url": "u", "context": [], "links": [], "missing": [], "excerpt": "", "verdict": {"why": "", "action": ""}, "author": "a"})["url"] == "u"
+
+
+def test_a_saved_reply_is_judged_with_the_posts_it_answers():
+    from kworker.bundle import _save_text
+
+    body = intake(upstream=[
+        {"id": "2119000000000000002", "url": "https://x.com/p/status/2119000000000000002", "author_handle": "parent", "text": "the question"},
+        {"id": "2119000000000000001", "url": "https://x.com/g/status/2119000000000000001", "author_handle": "grand", "text": "the root post"},
+    ])
+    body["post"]["reply_to"] = "2119000000000000002"
+    e = expansion(body)
+    assert [u["author_handle"] for u in e["upstream"]] == ["parent", "grand"]
+    assert not {m["what"] for m in e["missing"]} & {"upstream"}
+    b = bundle()
+    b["upstream"] = e["upstream"]
+    text = _save_text(b)
+    assert text.index("the root post") < text.index("the question") < text.index("@corbtt: x")

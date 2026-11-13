@@ -28,7 +28,7 @@ export CI=1 WRANGLER_SEND_METRICS=false
 "$W" whoami | grep -E 'logged in|Account' | head -3
 
 umask 077
-for name in discovery-admin-token discovery-websub-secret discovery-ingest-token discovery-runner-token discovery-inbox-token discovery-bridge-token discovery-knowledge; do
+for name in discovery-admin-token discovery-websub-secret discovery-ingest-token discovery-runner-token discovery-inbox-token discovery-bridge-token discovery-knowledge discovery-knowledge-intake; do
   [ -s "$S/$name" ] || openssl rand -hex 32 > "$S/$name"
   chmod 600 "$S/$name"
 done
@@ -65,6 +65,7 @@ url=$(grep -oE 'https://discovery-watcher\.[a-z0-9-]+\.workers\.dev' .wrangler/d
 "$W" secret put INBOX_TOKEN < "$S/discovery-inbox-token"
 "$W" secret put BRIDGE_TOKEN < "$S/discovery-bridge-token"
 "$W" secret put KNOWLEDGE_TOKEN < "$S/discovery-knowledge"
+"$W" secret put KNOWLEDGE_INTAKE_TOKEN < "$S/discovery-knowledge-intake"
 for pair in APNS_KEY_P8:discovery-apns-key-p8 APNS_KEY_ID:discovery-apns-key-id APNS_TEAM_ID:discovery-apns-team-id             APNS_TOPIC:discovery-apns-topic GITHUB_PR_TOKEN:discovery-github-pr-token GEMINI_API_KEY:discovery-gemini-api-key; do
   if [ -s "$S/${pair#*:}" ]; then
     "$W" secret put "${pair%%:*}" < "$S/${pair#*:}"

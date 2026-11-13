@@ -168,6 +168,9 @@ def build(ctx: Ctx, payload: dict) -> dict:
             "tombstone_pack": gate.get("tombstone_pack"),
         },
         "post": {"text": post["text"]},
+        # The posts this one replies to, nearest first. Older expansions held
+        # one parent or none.
+        "upstream": _chain(exp.get("upstream")),
         "thread": thread,
         "quoted": exp.get("quoted"),
         "replies": replies,
@@ -210,7 +213,10 @@ SAVE_TEXT_MAX = 9000  # characters of the save shown to the verdict model
 def _save_text(b: dict) -> str:
     """The save as the verdict model sees it: verbatim text first, then what
     the pipeline read from its media and links, each part cut short."""
-    parts = [f"@{b['author']['handle']}: {b['post']['text']}"]
+    # The parents first, oldest at the top, so a saved reply is read in the
+    # order of the conversation.
+    parts = [f"(replying to @{u['author_handle']}) {u['text'][:800]}" for u in reversed(b.get("upstream") or [])][-4:]
+    parts.append(f"@{b['author']['handle']}: {b['post']['text']}")
     parts += [f"(thread) {t['text'][:600]}" for t in b["thread"] if not t["is_save"]][:6]
     if b.get("quoted"):
         parts.append(f"(quoted @{b['quoted'].get('author_handle')}) {(b['quoted'].get('text') or '')[:600]}")
@@ -285,14 +291,42 @@ def make_card(b: dict) -> dict:
         "links": links,
         "media": {"photos": sum(1 for m in b["media"] if m["kind"] == "photo"), "videos": sum(1 for m in b["media"] if m["kind"] in ("video", "gif"))},
     }
-    # Shrink the longest parts until the card fits.
-    while len(canonical_json(card).encode("utf-8")) > CARD_MAX:
-        if card["context"]:
-            card["context"].pop()
-        elif len(card["links"]) > 1:
-            card["links"].pop()
+    return fit_card(card)
+
+
+class CardTooLarge(ValueError):
+    pass
+
+
+def _size(card: dict) -> int:
+    return len(canonical_json(card).encode("utf-8"))
+
+
+def fit_card(card: dict) -> dict:
+    """Drops or cuts the least important parts until the card fits CARD_MAX.
+    Each step must shrink the card, or it is skipped; when no step can, the
+    card cannot fit and the job fails with the reason, instead of looping."""
+
+    def steps():
+        yield lambda c: c["context"].pop() if c["context"] else None
+        yield lambda c: c["links"].pop() if c["links"] else None
+        yield lambda c: c["missing"].pop() if c["missing"] else None
+        yield lambda c: c.__setitem__("excerpt", _cut(c["excerpt"], max(40, len(c["excerpt"]) // 2)))
+        yield lambda c: c["verdict"].__setitem__("why", _cut(c["verdict"]["why"], max(40, len(c["verdict"]["why"]) // 2)))
+        yield lambda c: c["verdict"].__setitem__("action", _cut(c["verdict"]["action"], max(20, len(c["verdict"]["action"]) // 2)))
+        yield lambda c: c.__setitem__("author", _cut(c["author"], 60))
+
+    size = _size(card)
+    while size > CARD_MAX:
+        for step in steps():
+            trial = json.loads(canonical_json(card))
+            step(trial)
+            new = _size(trial)
+            if new < size:
+                card, size = trial, new
+                break
         else:
-            card["excerpt"] = _cut(card["excerpt"], max(40, len(card["excerpt"]) // 2))
+            raise CardTooLarge(f"card for {card.get('post_id')} is {size} bytes after every cut, over {CARD_MAX} (url {len(card.get('url') or '')} characters)")
     return card
 
 
@@ -384,6 +418,11 @@ def render_md(b: dict) -> str:
     save_media = next((t["media"] for t in b["thread"] if t["is_save"]), [])
     if save_media:
         out += ["Media in this post: " + ", ".join(f"[{mid}](#{mid}) {media_by_id[mid]['kind']}" for mid in save_media), ""]
+
+    if b.get("upstream"):
+        out += [f"## Replying to ({len(b['upstream'])} {'post' if len(b['upstream']) == 1 else 'posts'}, oldest first)", ""]
+        for u in reversed(b["upstream"]):
+            out += [f"- **@{u['author_handle']}** <{u['url']}>", ""] + ["  " + line for line in _quote(u["text"]).splitlines()] + [""]
 
     if b.get("quoted"):
         q = b["quoted"]
@@ -493,3 +532,9 @@ def render_md(b: dict) -> str:
             out += [f"- {m['what']}: {m['reason']}" for m in limits]
             out.append("")
     return "\n".join(out).rstrip() + "\n"
+
+
+def _chain(up) -> list[dict]:
+    if not up:
+        return []
+    return list(up) if isinstance(up, list) else [up]

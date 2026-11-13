@@ -8,6 +8,13 @@
 ALTER TABLE bundles ADD COLUMN card_json TEXT;
 CREATE INDEX bundles_created ON bundles (created_at);
 
+-- A request to run a job again that arrives while the job is claimed (a new
+-- intake body, a bundle whose children changed). completeJob queues it in
+-- the same batch that finishes the running attempt, so it is never
+-- acknowledged and then lost.
+ALTER TABLE knowledge_jobs ADD COLUMN pending_payload TEXT;
+ALTER TABLE knowledge_jobs ADD COLUMN pending_deps TEXT;
+
 -- The newest intake of each save: what the daily job posted, by whom, when.
 CREATE TABLE intake (
   post_id TEXT PRIMARY KEY,

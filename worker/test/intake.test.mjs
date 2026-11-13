@@ -53,9 +53,11 @@ test("intake files one save job per post; the same body changes nothing, a new o
   assert.equal(first.job.created, true);
   const job = await jobOf("1900000000000000101");
   assert.deepEqual(job.payload, { post_id: "1900000000000000101", intake_sha: first.intake_sha });
-  // The stored blob is the posted body, byte for byte.
+  // The stored blob is the posted body, byte for byte, under that body's hash.
+  const posted = JSON.stringify(body);
+  assert.equal(first.intake_sha, sha(posted));
   const stored = await k("GET", `/k/blobs/${first.intake_sha}`);
-  assert.equal(sha(Buffer.from(stored.text)), first.intake_sha);
+  assert.equal(stored.text, posted);
 
   const again = expect(await k("POST", "/k/intake", body, { token: "knowledge_intake" }), 200);
   assert.deepEqual([again.job.created, again.job.requeued, again.job.id], [false, false, first.job.id]);
@@ -99,31 +101,97 @@ async function bundleWithCard(id, card) {
   return k("POST", "/k/bundles", { post_id: id, md_sha: sha(md), json_sha: sha(js), completeness: "complete", missing: [], saved_by: ["sdotgu"], author: "a", search_text: "x", card });
 }
 
-test("the digest returns cards of saves finished since a time, as stored, under 30 KB", async () => {
+test("a changed body while the save is running is kept and runs after it, not acknowledged and lost", async () => {
+  // Review of f8c8d6f, P1 3: the newer sha was stored, the claimed job
+  // finished on the old one, and nothing ran the new body.
+  const id = "1900000000000000601";
+  const first = expect(await k("POST", "/k/intake", save(id), { token: "knowledge_intake" }), 201);
+  const claimed = expect(await k("POST", "/k/jobs/claim", { owner: "t", kinds: ["save"], ttl_s: 60, limit: 10 }), 200).jobs.find((j) => j.key === id);
+  assert.equal(claimed.payload.intake_sha, first.intake_sha);
+  const newer = expect(await k("POST", "/k/intake", save(id, { context: [{ id: "1900000000000000602", author_handle: "z", text: "later" }] }), { token: "knowledge_intake" }), 200);
+  assert.deepEqual([newer.job.deferred, newer.job.requeued, newer.job.state], [true, false, "claimed"]);
+  expect(await k("POST", `/k/jobs/${claimed.id}/complete`, { owner: "t", lease_token: claimed.lease_token, state: "done" }), 200);
+  const after = await jobOf(id);
+  assert.equal(after.state, "queued");
+  assert.equal(after.payload.intake_sha, newer.intake_sha);
+  assert.equal(after.pending, null);
+});
+
+test("a save that runs again replaces its waiting bundle job and defers a running one", async () => {
+  // Review of f8c8d6f, P1 4: again=true left a queued or claimed bundle job
+  // on its old payload, so the save's new children were never bundled.
+  const job = (payload) => k("POST", "/k/jobs", { kind: "bundle", key: "1900000000000000701", payload, again: true });
+  expect(await job({ v: 1 }), 201);
+  const replaced = expect(await job({ v: 2 }), 200);
+  assert.deepEqual([replaced.replaced, replaced.job.state, replaced.job.payload], [true, "queued", { v: 2 }]);
+  const claimed = expect(await k("POST", "/k/jobs/claim", { owner: "t", kinds: ["bundle"], ttl_s: 60, limit: 10 }), 200).jobs.find((j) => j.key === "1900000000000000701");
+  assert.deepEqual(claimed.payload, { v: 2 });
+  const deferred = expect(await job({ v: 3 }), 200);
+  assert.deepEqual([deferred.deferred, deferred.job.state, deferred.job.pending.payload], [true, "claimed", { v: 3 }]);
+  const done = expect(await k("POST", `/k/jobs/${claimed.id}/complete`, { owner: "t", lease_token: claimed.lease_token, state: "done" }), 200);
+  assert.deepEqual([done.state, done.payload, done.pending], ["queued", { v: 3 }, null]);
+});
+
+// Every page from since on, following next_cursor; fails on a repeat.
+async function allPages(since, limit) {
+  const pages = [];
+  let cursor = null;
+  for (let n = 0; n < 50; n++) {
+    const r = await k("GET", `/k/digest?since=${since}&limit=${limit}${cursor ? `&cursor=${cursor}` : ""}`);
+    expect(r, 200);
+    pages.push({ ids: r.body.saves.map((x) => x.card.post_id), bytes: Buffer.byteLength(r.text), body: r.body });
+    if (!r.body.truncated) return pages;
+    cursor = r.body.next_cursor;
+  }
+  throw new Error("digest paging did not end");
+}
+
+test("the digest returns cards of saves finished since a time, as stored", async () => {
   expect(await bundleWithCard("1900000000000000401", { post_id: "1900000000000000401", excerpt: "older" }), 201);
   await new Promise((r) => setTimeout(r, 20));
   const since = Date.now();
   const card = { post_id: "1900000000000000402", url: "https://x.com/a/status/1900000000000000402", verdict: { label: "try", why: "a repo Sam can install" }, links: [{ url: "https://github.com/o/r", repo: { name: "o/r", stars: 12 } }] };
   expect(await bundleWithCard("1900000000000000402", card), 201);
-
   const d = expect(await k("GET", `/k/digest?since=${since}`), 200);
   assert.deepEqual(d.saves.map((x) => x.card.post_id), ["1900000000000000402"]);
   assert.deepEqual(d.saves[0].card, card);
   assert.equal(d.truncated, false);
-  assert.equal(typeof d.pending_saves, "number");
-  expect(await k("GET", "/k/digest"), 400, "invalid_request");
-
   // A card over 4 KiB is refused when the bundle is registered.
   expect(await bundleWithCard("1900000000000000403", { excerpt: "y".repeat(5000) }), 400, "invalid_request");
+});
 
-  // Enough cards to pass 30 KB: the answer stops early and says where to resume.
-  const since2 = Date.now();
-  for (let i = 0; i < 12; i++) expect(await bundleWithCard(`19000000000000005${String(i).padStart(2, "0")}`, { post_id: "x", excerpt: "z".repeat(3500) }), 201);
-  const page = await k("GET", `/k/digest?since=${since2}`);
-  expect(page, 200);
-  assert.ok(page.text.length <= 31 * 1024, `digest was ${page.text.length} bytes`);
-  assert.equal(page.body.truncated, true);
-  assert.ok(page.body.next_since);
-  const rest = expect(await k("GET", `/k/digest?since=${encodeURIComponent(page.body.next_since)}`), 200);
-  assert.equal(page.body.count + rest.count, 12);
+test("digest pages with saves finished in the same millisecond end, with each save once", async () => {
+  // Review of f8c8d6f, P1 2: next_since was the first excluded row's time,
+  // so with two saves at the same instant and limit 1 the first came back forever.
+  const ids = ["1900000000000000801", "1900000000000000802", "1900000000000000803"];
+  for (const id of ids) expect(await bundleWithCard(id, { post_id: id }), 201);
+  const t = 4102444800000; // 2100-01-01, after every other bundle in this run
+  s.d1(`UPDATE bundles SET created_at = ${t} WHERE post_id IN (${ids.map((i) => `'${i}'`).join(",")})`);
+  const pages = await allPages(t, 1);
+  assert.deepEqual(pages.map((p) => p.ids), [[ids[0]], [ids[1]], [ids[2]]]);
+});
+
+test("a digest page stays under 30 KB of UTF-8 and moves on", async () => {
+  // 12 cards of about 3.9 KB of two-byte characters: counted in UTF-16 units
+  // they look half that size.
+  const ids = Array.from({ length: 12 }, (_, i) => `19000000000000009${String(i).padStart(2, "0")}`);
+  for (const id of ids) expect(await bundleWithCard(id, { post_id: id, excerpt: "é".repeat(1900) }), 201);
+  const t = 4102444900000;
+  s.d1(`UPDATE bundles SET created_at = ${t} WHERE post_id IN (${ids.map((i) => `'${i}'`).join(",")})`);
+  const pages = await allPages(t, 100);
+  assert.ok(pages.length >= 2, `${pages.length} page(s)`);
+  for (const p of pages) assert.ok(p.bytes <= 30 * 1024, `a page was ${p.bytes} bytes`);
+  assert.deepEqual(pages.flatMap((p) => p.ids), ids);
+});
+
+test("pending_saves counts saves whose bundle is still to come; since is checked", async () => {
+  const before = expect(await k("GET", "/k/digest?since=0&limit=1"), 200).pending_saves;
+  // A save whose save job is done but whose bundle job waits still counts.
+  expect(await k("POST", "/k/jobs", { kind: "bundle", key: "1900000000000001001", payload: {} }), 201);
+  assert.equal(expect(await k("GET", "/k/digest?since=0&limit=1"), 200).pending_saves, before + 1);
+  for (const bad of ["99999999999999999", "2026-11-13", "yesterday", "2026-11-13T07:00:00"]) {
+    expect(await k("GET", `/k/digest?since=${bad}`), 400, "invalid_request");
+  }
+  expect(await k("GET", "/k/digest?since=2026-11-13T07:00:00Z"), 200);
+  expect(await k("GET", "/k/digest?since=2026-11-13T02:00:00.5-05:00"), 200);
 });

@@ -179,7 +179,7 @@ class Nov12:
             },
             "saved_by": _accounts(post),
             "thread": thread,
-            "upstream": upstream,
+            "upstream": [upstream] if upstream else [],
             "quoted": quoted,
             "candidates": candidates,
             "reply_views": views,

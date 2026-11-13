@@ -3,28 +3,37 @@
 // POST /k/intake: the extension's daily job posts one save at a time
 // (schema kintake/1). The Worker checks the shape, stores the body as a
 // blob, and files one `save` job per post for kworker. One save per request
-// keeps JSON.parse and the hash well inside 10 ms of CPU.
+// is meant to keep JSON.parse and the hash inside Workers Free's 10 ms of
+// CPU. That is not measured: once deployed, the lead times a 192 KiB intake
+// in production with `wrangler tail` (cpuTime per request), and if it goes
+// over, INTAKE_MAX_BYTES comes down to what fits.
 //
-// GET /k/digest: each finished save's card since a time, for the morning
-// brief. Cards are stored as JSON text and concatenated, never parsed.
+// GET /k/digest: each finished save's card, for the morning brief. Cards are
+// stored as JSON text and concatenated, never parsed.
 
 import type { Env } from "../check";
 import { json, randomHex, readText } from "../http";
 import { storeBytes } from "./blobs";
 import { postId } from "./bundles";
 import { invalid, KError, list, obj, sha256Hex, text } from "./common";
+import { runAgain } from "./jobs";
 
 export const INTAKE_MAX_BYTES = 192 * 1024;
 const CONTEXT_MAX = 120;
 const DIGEST_MAX_BYTES = 30 * 1024;
 const DIGEST_LIMIT = 100;
+// The largest epoch milliseconds a JavaScript Date holds.
+const DATE_MAX_MS = 8.64e15;
+// The documented ISO form: date, T, time with optional fraction, Z or an offset.
+const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,9})?(Z|[+-]\d{2}:\d{2})$/;
+const CURSOR = /^(\d{1,16})\.([1-9][0-9]{0,18})$/;
 
-function checkPost(v: unknown, field: string, needsText = true) {
+function checkPost(v: unknown, field: string) {
   const p = obj(v, field);
   postId(p.id, `${field}.id`);
   text(p.url, `${field}.url`, 2000);
   text(p.author_handle, `${field}.author_handle`, 100);
-  if (needsText && typeof p.text !== "string") invalid(`${field}.text must be a string (empty when the post has none)`);
+  if (typeof p.text !== "string") invalid(`${field}.text must be a string (empty when the post has none)`);
   if (p.media !== undefined) {
     list(p.media, `${field}.media`, 20, 0).forEach((m, i) => {
       const o = obj(m, `${field}.media[${i}]`);
@@ -81,28 +90,31 @@ export async function intake(env: Env, req: Request): Promise<Response> {
   )
     .bind(randomHex(16), id, payload, now)
     .first<{ id: string; state: string }>();
-  if (job) return json({ post_id: id, intake_sha: sha, job: { id: job.id, state: job.state, created: true, requeued: false } }, 201);
+  if (job) return json({ post_id: id, intake_sha: sha, job: { id: job.id, state: job.state, created: true, requeued: false, replaced: false, deferred: false } }, 201);
 
-  // The same save again. A new body runs it again unless it is running now;
-  // the same body changes nothing.
-  const updated = await env.DB.prepare(
-    `UPDATE knowledge_jobs SET payload = ?2, deps = '[]', updated_at = ?3,
-       state = 'queued', runs = runs + (state IN ('done', 'failed')), expired_leases = 0, result = NULL, error = NULL
-     WHERE kind = 'save' AND key = ?1 AND state != 'claimed' AND json_extract(payload, '$.intake_sha') IS NOT ?4
-     RETURNING id, state`,
-  )
-    .bind(id, payload, now, sha)
-    .first<{ id: string; state: string }>();
-  const row = updated ?? (await env.DB.prepare("SELECT id, state FROM knowledge_jobs WHERE kind = 'save' AND key = ?").bind(id).first<{ id: string; state: string }>())!;
-  return json({ post_id: id, intake_sha: sha, job: { id: row.id, state: row.state, created: false, requeued: updated !== null } });
+  // The same save again. The same body changes nothing. A new body runs the
+  // save again: at once if it is finished or waiting, after the running
+  // attempt if it is claimed (runAgain keeps it pending), so it is never
+  // acknowledged and then dropped.
+  const existing = (await env.DB.prepare("SELECT id, state, payload, pending_payload FROM knowledge_jobs WHERE kind = 'save' AND key = ?").bind(id).first<{ id: string; state: string; payload: string; pending_payload: string | null }>())!;
+  const current = existing.pending_payload ?? existing.payload;
+  if ((JSON.parse(current) as { intake_sha?: string }).intake_sha === sha) {
+    return json({ post_id: id, intake_sha: sha, job: { id: existing.id, state: existing.state, created: false, requeued: false, replaced: false, deferred: false } });
+  }
+  const again = await runAgain(env, existing.id, payload, "[]", now);
+  return json({ post_id: id, intake_sha: sha, job: { id: existing.id, state: again.row.state, created: false, ...again.how } });
 }
 
+// since: epoch milliseconds or the documented ISO form, inside Date's range.
 function sinceParam(url: URL): number {
   const raw = url.searchParams.get("since");
-  if (raw === null || raw === "") invalid("since must be set: an ISO time or epoch milliseconds");
-  const n = /^\d+$/.test(raw) ? Number(raw) : Date.parse(raw);
-  if (!Number.isFinite(n)) invalid("since must be an ISO time or epoch milliseconds");
-  return n;
+  if (raw === null || raw === "") invalid("since must be set: an ISO time (2026-11-13T07:00:00Z) or epoch milliseconds");
+  let ms: number;
+  if (/^\d{1,16}$/.test(raw)) ms = Number(raw);
+  else if (ISO.test(raw)) ms = Date.parse(raw);
+  else invalid("since must be an ISO time like 2026-11-13T07:00:00Z or epoch milliseconds");
+  if (!Number.isFinite(ms) || ms > DATE_MAX_MS) invalid("since is outside the range a date can hold");
+  return ms;
 }
 
 interface CardRow {
@@ -114,45 +126,71 @@ interface CardRow {
   card_json: string | null;
 }
 
+const enc = new TextEncoder();
+const byteLength = (s: string) => enc.encode(s).byteLength;
+
+// A bundle registered before cards existed: its status and the first three
+// gaps, each cut short, so it stays far below a page.
+function legacyCard(r: CardRow): string {
+  const missing = (JSON.parse(r.missing_json) as { what: string; reason: string }[]).slice(0, 3).map((m) => `${m.what}: ${String(m.reason).slice(0, 160)}`);
+  return JSON.stringify({ post_id: r.post_id, status: r.completeness, missing, card: null });
+}
+
+// GET /k/digest?since=<time>[&cursor=<created_at>.<post_id>]&limit=<n>
+// Pages run oldest first by (created_at, post_id). The first page starts at
+// since (inclusive); next_cursor resumes strictly after the last save
+// returned, so saves finished in the same millisecond are neither repeated
+// nor skipped. Each page holds at least one save, so paging always moves.
 export async function digest(env: Env, url: URL): Promise<Response> {
   const since = sinceParam(url);
   const limitRaw = url.searchParams.get("limit");
   const limit = limitRaw === null ? 50 : Number(limitRaw);
   if (!Number.isInteger(limit) || limit < 1 || limit > DIGEST_LIMIT) invalid(`limit must be an integer from 1 to ${DIGEST_LIMIT}`);
+  const cursorRaw = url.searchParams.get("cursor");
+  let after: [number, string] | null = null;
+  if (cursorRaw !== null) {
+    const m = CURSOR.exec(cursorRaw);
+    if (!m) invalid("cursor must be the next_cursor of an earlier page");
+    after = [Number(m[1]), m[2]];
+  }
   const db = env.DB;
   const [rows, pending] = await db.batch<Record<string, unknown>>([
     db
       .prepare(
         `SELECT post_id, version, created_at, completeness, missing_json, card_json FROM bundles b
          WHERE created_at >= ?1 AND version = (SELECT max(version) FROM bundles WHERE post_id = b.post_id)
+           AND (?3 IS NULL OR created_at > ?3 OR (created_at = ?3 AND post_id > ?4))
          ORDER BY created_at, post_id LIMIT ?2`,
       )
-      .bind(since, limit + 1),
-    db.prepare("SELECT count(*) AS n FROM knowledge_jobs WHERE kind = 'save' AND state IN ('queued', 'claimed')"),
+      .bind(since, limit + 1, after?.[0] ?? null, after?.[1] ?? null),
+    // A save still has outstanding work while its save job or its bundle job
+    // is queued or running; the card appears only when the bundle is done.
+    db.prepare("SELECT count(DISTINCT key) AS n FROM knowledge_jobs WHERE kind IN ('save', 'bundle') AND state IN ('queued', 'claimed')"),
   ]);
   const found = rows.results as unknown as CardRow[];
-  const cards: string[] = [];
-  let bytes = 0;
-  let nextSince: number | null = null;
-  for (const [i, r] of found.entries()) {
-    // A bundle registered before cards existed gets the fields its row has.
-    const card = r.card_json ?? JSON.stringify({ post_id: r.post_id, status: r.completeness, missing: JSON.parse(r.missing_json), card: null });
-    const withMeta = `{"version":${r.version},"finished_at":${JSON.stringify(new Date(r.created_at).toISOString())},"card":${card}}`;
-    if (i >= limit || bytes + withMeta.length > DIGEST_MAX_BYTES) {
-      nextSince = r.created_at;
-      break;
-    }
-    cards.push(withMeta);
-    bytes += withMeta.length + 1;
-  }
   const head = {
     since: new Date(since).toISOString(),
     until: new Date().toISOString(),
-    count: cards.length,
-    truncated: nextSince !== null,
-    next_since: nextSince === null ? null : new Date(nextSince).toISOString(),
     pending_saves: (pending.results[0] as { n: number }).n,
   };
-  const headJson = JSON.stringify(head);
+  // The envelope's own bytes count: head fields, count, truncated, the cursor.
+  const envelope = byteLength(JSON.stringify({ ...head, count: 100, truncated: true, next_cursor: "9".repeat(16) + "." + "9".repeat(19), saves: [] }));
+  const cards: string[] = [];
+  let bytes = envelope;
+  let last: CardRow | null = null;
+  let truncated = false;
+  for (const r of found) {
+    const item = `{"version":${r.version},"finished_at":${JSON.stringify(new Date(r.created_at).toISOString())},"card":${r.card_json ?? legacyCard(r)}}`;
+    const size = byteLength(item) + 1;
+    if (cards.length >= limit || (cards.length > 0 && bytes + size > DIGEST_MAX_BYTES)) {
+      truncated = true;
+      break;
+    }
+    cards.push(item);
+    bytes += size;
+    last = r;
+  }
+  const tail = { count: cards.length, truncated, next_cursor: truncated && last ? `${last.created_at}.${last.post_id}` : null };
+  const headJson = JSON.stringify({ ...head, ...tail });
   return new Response(`${headJson.slice(0, -1)},"saves":[${cards.join(",")}]}`, { headers: { "content-type": "application/json" } });
 }
