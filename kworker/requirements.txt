@@ -1,0 +1,13 @@
+# Pinned so a wiped folder reinstalls the same pipeline (latest on PyPI on
+# 2026-11-12).
+httpx==0.28.1
+trafilatura==2.3.1
+faster-whisper==1.2.1
+fastembed==0.9.1
+playwright==1.65.1
+boto3==1.44.1
+pytest==9.2.0
+# CUDA 12 runtime libraries for faster-whisper (ctranslate2 4.9) on the GPU.
+# Without a CUDA GPU kworker falls back to the CPU and these sit unused.
+nvidia-cublas-cu12==12.9.2.10; sys_platform == "win32" or sys_platform == "linux"
+nvidia-cudnn-cu12==9.28.1.4; sys_platform == "win32" or sys_platform == "linux"

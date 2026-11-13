@@ -5,7 +5,7 @@
 import type { Env } from "./check";
 import { HttpError } from "./http";
 
-export type Scope = "admin" | "ingest" | "runner" | "inbox" | "agent:dot" | "agent:t3" | "agent:grok";
+export type Scope = "admin" | "ingest" | "runner" | "inbox" | "agent:dot" | "agent:t3" | "agent:grok" | "kworker";
 
 const encoder = new TextEncoder();
 
@@ -31,6 +31,7 @@ export async function callerScope(req: Request, env: Env): Promise<Scope> {
     ["agent:dot", env.MAIL_DOT_TOKEN],
     ["agent:t3", env.MAIL_T3_TOKEN],
     ["agent:grok", env.MAIL_GROK_TOKEN],
+    ["kworker", env.KNOWLEDGE_TOKEN],
   ];
   for (const [scope, secret] of scopes) {
     if (secret && (await sameSecret(m[1], secret))) return scope;

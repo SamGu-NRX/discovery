@@ -18,6 +18,9 @@
   // Workers AI, used only by POST /embed (bge-base-en-v1.5). Local wrangler
   // dev reaches the real service for this binding; the tests never call it.
   "ai": { "binding": "AI" },
+  // The knowledge store's bytes (docs/KNOWLEDGE.md). Local wrangler dev
+  // keeps its own copy under the state directory.
+  "r2_buckets": [{ "binding": "KNOWLEDGE", "bucket_name": "x-knowledge" }],
   "durable_objects": {
     "bindings": [{ "name": "WATCHER", "class_name": "WatcherDO" }]
   },
