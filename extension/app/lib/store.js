@@ -102,13 +102,32 @@ const pauseLock = createLock();
 // is made, before any await, so a signal handled in this worker is visible to
 // pausedOrPausing() even while its write is still in flight.
 let pausesInFlight = 0;
-export function extendPause(until = new Date(Date.now() + PAUSE_MS).toISOString()) {
+// Each call is logged with its reason (pauseLog, the last 50), so the fetch
+// page's "Clear error pause" can tell a pause from failed requests apart
+// from one X asked for (lib/unpause.js).
+export function extendPause(until = new Date(Date.now() + PAUSE_MS).toISOString(), reason = "unrecorded") {
   pausesInFlight += 1;
   return pauseLock(async () => {
     const existing = await getPauseUntil();
-    if (!existing || Date.parse(existing) < Date.parse(until)) await setLocal({ pauseUntil: until });
+    const log = [...(await getLocal("pauseLog", [])), { at: new Date().toISOString(), until, reason }].slice(-50);
+    await setLocal({ pauseLog: log, ...(!existing || Date.parse(existing) < Date.parse(until) ? { pauseUntil: until } : {}) });
   }).finally(() => {
     pausesInFlight -= 1;
+  });
+}
+
+// Lifts the pause when errorPauseVerdict() allows it, under the same lock as
+// extendPause(), and logs the clear (pauseClears, the last 50).
+export function clearErrorPause(verdictFor) {
+  return pauseLock(async () => {
+    if (pausesInFlight > 0) return { clearable: false, why: "a pause is being written" };
+    const got = await chrome.storage.local.get(["pauseUntil", "pauseLog", "pendingBackOff"]);
+    const verdict = verdictFor({ ...got, pageSignals: await pendingPageSignals(), now: Date.now() });
+    if (!verdict.clearable) return verdict;
+    const clears = [...(await getLocal("pauseClears", [])), { at: new Date().toISOString(), until: got.pauseUntil, basis: verdict.basis }].slice(-50);
+    await chrome.storage.local.remove(["pauseUntil", "backOffReportedUntil", "pendingBackOff"]);
+    await setLocal({ pauseClears: clears });
+    return verdict;
   });
 }
 

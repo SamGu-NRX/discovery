@@ -52,6 +52,15 @@ export async function acquireFetchRun(id, sessionBusy) {
 }
 
 export async function beatFetchRun(id, { tabId = null, windowId = null } = {}) {
+  // A restarted service worker has lost `owner`. Chrome stops an idle one
+  // after about 30 s, and a page waiting out a rate limit in a hidden window
+  // can be throttled to fewer beats than that: on Nov 12 rescore-pilot7 lost
+  // its claim this way 8 minutes into a 473 s wait and stopped. The run in
+  // session storage is still this one while its last beat is fresh.
+  if (!owner) {
+    const { fetchRun } = await chrome.storage.session.get("fetchRun");
+    if (!owner && fetchRun?.owner === id && fresh(fetchRun.heartbeatAt)) owner = { id, heartbeatAt: fetchRun.heartbeatAt };
+  }
   if (!owner || owner.id !== id) return false;
   owner.heartbeatAt = Date.now();
   await chrome.storage.session.set({ fetchRun: { owner: id, heartbeatAt: owner.heartbeatAt, tabId, windowId } });

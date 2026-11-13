@@ -2,7 +2,7 @@
 // into contract batches, sends them to the Worker, and runs scheduled sessions.
 
 import { captureToBatch } from "./lib/capture.js";
-import { acquireFetchRun, beatFetchRun, releaseFetchRun } from "./lib/fetchlock.js";
+import { acquireFetchRun, beatFetchRun, fetchRunHeldAnywhere, releaseFetchRun } from "./lib/fetchlock.js";
 import { focalTweetIdFromUrl, operationFromUrl } from "./lib/ops.js";
 import { dropStoredSince, enqueue, flush } from "./lib/outbox.js";
 import { ParseError } from "./lib/parse.js";
@@ -15,7 +15,9 @@ import {
   sessionTabId,
   startSession,
 } from "./lib/session.js";
+import { errorPauseVerdict } from "./lib/unpause.js";
 import {
+  clearErrorPause,
   createLock,
   extendPause,
   getLocal,
@@ -134,6 +136,13 @@ async function handle(message, sender) {
     case "fetch-batch":
       if (!fromExtensionPage) return { error: "only the fetch page sends fetch batches" };
       return queueFetchBatch(message);
+    case "clear-error-pause":
+      // The fetch page's "Clear error pause" button (lib/unpause.js says
+      // which pauses it may lift). Never while a session or run is going.
+      if (!fromExtensionPage) return { error: "only the fetch page clears a pause" };
+      if (sessionInfo() !== null) return { clearable: false, why: "a session is running" };
+      if (await fetchRunHeldAnywhere()) return { clearable: false, why: "a fetch run is going" };
+      return clearErrorPause(errorPauseVerdict);
     case "fetch-signal":
       // X told a fetch run to back off: the same pause and report as a 429
       // seen in any tab.
@@ -283,7 +292,7 @@ async function onBackOff(tabId, reason, detail) {
   // Every X signal pauses sessions in chrome.storage.local before this
   // returns. A session's own record of the signal lives in session storage,
   // which a browser restart clears before the session could write its pause.
-  await extendPause();
+  await extendPause(undefined, reason);
   if (accepted) return;
   await backOffLock(async () => {
     await recordProblem("x", detail);
