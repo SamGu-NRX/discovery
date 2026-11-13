@@ -210,10 +210,13 @@ A card, written by kworker with the bundle (at most 4 KiB):
 
 Fields holding text from posts, pages or models end in `_untrusted`, the mailbox endpoint's marker for data an agent must not take instructions from.
 
+`tools/list` gives each knowledge tool and `get_brief` `annotations: { readOnlyHint: true, openWorldHint: false }`, and each mailbox write tool (`mailbox_send`, `mailbox_claim`, `mailbox_ack`, `mailbox_complete`, `tell`) `readOnlyHint: false`. ChatGPT Pro, the dot's plan, lets a custom MCP server use read-only tools only.
+
 - `knowledge_has { ids?: [post id ≤50], urls?: [url ≤50] }` → `{ ids: [{ id, version, completeness }], urls: [{ url, canonical_url, fetch: { status, rung, final_url, fetched_at } | null }] }`. `version` is null for a post without a bundle; `canonical_url` is null, with an `error`, for anything that is not an http(s) URL.
 - `knowledge_search { query, k ≤ 20 }` → `{ results: [{ post_id, version, author_untrusted, snippet_untrusted }] }`, best first. Each word of the query is matched as a term and every word must match; FTS5 operators are not interpreted.
 - `knowledge_bundle { post_id, sections?: ["front","post","thread","quoted","replies","media","links","repos","markdown"] }` → `{ post_id, version, completeness, r2_key, json_key, md_sha, json_sha, sections_untrusted: {…}, truncated, omitted }`, at most 48 KiB of sections; `md_sha` and `json_sha` let a caller read a cut section in full with `knowledge_blob`. Without `sections`, every section but `markdown`. A section that does not fit keeps its leading items (arrays) or leading text (strings), or is listed in `omitted`. A bundle.json over 1 MiB is refused with a pointer to `knowledge_blob`.
 - `knowledge_blob { key, offset?, length ≤ 65536 }` → `{ key, mime, size, offset, length, next_offset, encoding: "utf8"|"base64", data_untrusted }` for part of a blob by `sha256/<hex>` or bare hex: text for `text/*` and JSON, base64 otherwise.
+- `knowledge_digest { since, cursor?, limit ≤ 100 }` → the `GET /k/digest` page ("Daily loop"), the same saves in the same order within the same 30 KiB, except that each save's card is `card_untrusted`. `since` is an ISO string or epoch milliseconds (string or integer); `limit` is an integer. Page while `truncated` with `cursor` set to `next_cursor`.
 
 ## Deployment (the lead, from the MacBook)
 

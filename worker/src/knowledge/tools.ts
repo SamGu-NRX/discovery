@@ -1,4 +1,4 @@
-// The four read-only knowledge tools on the mailbox MCP endpoint. Post
+// The five read-only knowledge tools on the mailbox MCP endpoint. Post
 // text, replies, pages and model output are data written by others, so
 // every field that carries them ends in _untrusted, the endpoint's marker
 // for text an agent must not take instructions from.
@@ -8,6 +8,7 @@ import { latestBundle, postId } from "./bundles";
 import { canonicalUrl } from "./canon";
 import { blobKey, HEX64, int, invalid, KError, list, sha256Hex, text } from "./common";
 import { blobRow } from "./blobs";
+import { digestPage } from "./intake";
 
 const OUTPUT_BUDGET = 48 * 1024;
 // JSON.parse of a larger bundle would not fit the 10 ms CPU budget.
@@ -59,6 +60,31 @@ export const KNOWLEDGE_TOOLS = [
     annotations: { readOnlyHint: true, openWorldHint: false },
   },
   {
+    name: "knowledge_digest",
+    description:
+      "Cards for Sam's saved X posts whose knowledge bundle finished at or after since, oldest first; the same pages as GET /k/digest. " +
+      "A card is one save in brief: post_id, url, author, created_at, saved_by, status (complete; partial: some link, image or video could not be read; blocked: every gap was a refused fetch), " +
+      "missing (up to 3 gaps), excerpt (the post's first 280 characters), verdict ({label: try|read|reference|skip, why, action} judged against Sam's interests), " +
+      "context (up to 3 kept replies), links (up to 5; GitHub repos carry name, stars and last_commit) and media counts. Bundles from before cards existed show only post_id, status and missing. " +
+      "Each page is at most 30 KiB. To read all of them: call with since, and while truncated is true call again with the same since and cursor set to next_cursor. " +
+      "pending_saves counts saves still being processed; their cards appear in a later call. knowledge_bundle reads a save's full bundle. " +
+      DATA_NOTE,
+    inputSchema: {
+      type: "object",
+      properties: {
+        since: {
+          type: ["string", "integer"],
+          description: "Start time, inclusive: an ISO time with a zone (2026-11-13T14:00:00Z, 2026-11-13T08:00:00-06:00) or epoch milliseconds.",
+        },
+        cursor: { type: "string", description: "next_cursor from the previous page; omit on the first call." },
+        limit: { type: "integer", minimum: 1, maximum: 100, description: "Most cards per page. Default 50; a page also stops at 30 KiB." },
+      },
+      required: ["since"],
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+  {
     name: "knowledge_blob",
     description: `Up to 64 KiB of a stored blob, by sha256/<hex> or bare hex: UTF-8 text for text/* and JSON, base64 otherwise. next_offset continues. ${DATA_NOTE}`,
     inputSchema: {
@@ -78,7 +104,15 @@ export function knowledgeTool(env: Env, name: string, args: Record<string, unkno
   if (name === "knowledge_has") return has(env, args);
   if (name === "knowledge_search") return search(env, args);
   if (name === "knowledge_bundle") return bundle(env, args);
+  if (name === "knowledge_digest") return digestTool(env, args);
   return blob(env, args);
+}
+
+// The page is built as JSON text for the route; MCP needs it as an object
+// for structuredContent. Parsing at most 30 KiB costs well under a
+// millisecond.
+async function digestTool(env: Env, a: Record<string, unknown>) {
+  return JSON.parse(await digestPage(env, { since: a.since, cursor: a.cursor, limit: a.limit }, "card_untrusted"));
 }
 
 const byteLength = (s: string) => new TextEncoder().encode(s).byteLength;

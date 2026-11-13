@@ -250,7 +250,7 @@ test("canonical URLs: every vector in docs/knowledge-canon-vectors.json, through
 test("knowledge tools through POST /mcp with a mail agent token: listed read-only, has reports bundles and fetches, bundle and blob read stored data", async () => {
   const list = await k("POST", "/mcp", { jsonrpc: "2.0", id: ++rpcId, method: "tools/list" }, { token: "mail_t3" });
   const tools = list.body.result.tools.filter((t) => t.name.startsWith("knowledge_"));
-  assert.deepEqual(tools.map((t) => t.name), ["knowledge_has", "knowledge_search", "knowledge_bundle", "knowledge_blob"]);
+  assert.deepEqual(tools.map((t) => t.name), ["knowledge_has", "knowledge_search", "knowledge_bundle", "knowledge_digest", "knowledge_blob"]);
   for (const t of tools) assert.equal(t.annotations.readOnlyHint, true, t.name);
 
   const id = "1900000000000000002";

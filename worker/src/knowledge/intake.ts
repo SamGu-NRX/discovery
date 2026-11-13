@@ -105,16 +105,41 @@ export async function intake(env: Env, req: Request): Promise<Response> {
   return json({ post_id: id, intake_sha: sha, job: { id: existing.id, state: again.row.state, created: false, ...again.how } });
 }
 
+// The digest's arguments, as GET /k/digest's query string carries them
+// (strings) or as the knowledge_digest tool's JSON does (since may be a
+// number, limit must be one).
+export interface DigestArgs {
+  since: unknown;
+  cursor?: unknown;
+  limit?: unknown;
+}
+
 // since: epoch milliseconds or the documented ISO form, inside Date's range.
-function sinceParam(url: URL): number {
-  const raw = url.searchParams.get("since");
-  if (raw === null || raw === "") invalid("since must be set: an ISO time (2026-11-13T07:00:00Z) or epoch milliseconds");
+function sinceMs(raw: unknown): number {
+  if (raw === undefined || raw === null || raw === "") invalid("since must be set: an ISO time (2026-11-13T07:00:00Z) or epoch milliseconds");
   let ms: number;
-  if (/^\d{1,16}$/.test(raw)) ms = Number(raw);
+  if (typeof raw === "number") {
+    if (!Number.isInteger(raw) || raw < 0) invalid("since in epoch milliseconds must be a whole number of at least 0");
+    ms = raw;
+  } else if (typeof raw !== "string") invalid("since must be an ISO time string or epoch milliseconds");
+  else if (/^\d{1,16}$/.test(raw)) ms = Number(raw);
   else if (ISO.test(raw)) ms = Date.parse(raw);
   else invalid("since must be an ISO time like 2026-11-13T07:00:00Z or epoch milliseconds");
   if (!Number.isFinite(ms) || ms > DATE_MAX_MS) invalid("since is outside the range a date can hold");
   return ms;
+}
+
+function limitOf(raw: unknown): number {
+  if (raw === undefined || raw === null) return 50;
+  if (typeof raw !== "number" || !Number.isInteger(raw) || raw < 1 || raw > DIGEST_LIMIT) invalid(`limit must be an integer from 1 to ${DIGEST_LIMIT}`);
+  return raw;
+}
+
+function cursorOf(raw: unknown): [number, string] | null {
+  if (raw === undefined || raw === null) return null;
+  const m = typeof raw === "string" ? CURSOR.exec(raw) : null;
+  if (!m) invalid("cursor must be the next_cursor of an earlier page");
+  return [Number(m[1]), m[2]];
 }
 
 interface CardRow {
@@ -148,17 +173,20 @@ function legacyCard(r: CardRow): string {
 // returned, so saves finished in the same millisecond are neither repeated
 // nor skipped. Each page holds at least one save, so paging always moves.
 export async function digest(env: Env, url: URL): Promise<Response> {
-  const since = sinceParam(url);
-  const limitRaw = url.searchParams.get("limit");
-  const limit = limitRaw === null ? 50 : Number(limitRaw);
-  if (!Number.isInteger(limit) || limit < 1 || limit > DIGEST_LIMIT) invalid(`limit must be an integer from 1 to ${DIGEST_LIMIT}`);
-  const cursorRaw = url.searchParams.get("cursor");
-  let after: [number, string] | null = null;
-  if (cursorRaw !== null) {
-    const m = CURSOR.exec(cursorRaw);
-    if (!m) invalid("cursor must be the next_cursor of an earlier page");
-    after = [Number(m[1]), m[2]];
-  }
+  const q = url.searchParams;
+  const limit = q.get("limit");
+  const page = await digestPage(env, { since: q.get("since"), cursor: q.get("cursor"), limit: limit === null ? null : Number(limit) });
+  return new Response(page, { headers: { "content-type": "application/json" } });
+}
+
+// One digest page as JSON text, at most DIGEST_MAX_BYTES of UTF-8. Cards are
+// stored as JSON text and spliced in unparsed. cardField names each save's
+// card: "card" for the route, "card_untrusted" for the MCP tool, whose
+// convention marks fields holding text from posts, pages or models.
+export async function digestPage(env: Env, a: DigestArgs, cardField: "card" | "card_untrusted" = "card"): Promise<string> {
+  const since = sinceMs(a.since);
+  const limit = limitOf(a.limit);
+  const after = cursorOf(a.cursor);
   const db = env.DB;
   const [rows, pending] = await db.batch<Record<string, unknown>>([
     db
@@ -186,7 +214,7 @@ export async function digest(env: Env, url: URL): Promise<Response> {
   let last: CardRow | null = null;
   let truncated = false;
   for (const r of found) {
-    const item = `{"version":${r.version},"finished_at":${JSON.stringify(new Date(r.created_at).toISOString())},"card":${r.card_json ?? legacyCard(r)}}`;
+    const item = `{"version":${r.version},"finished_at":${JSON.stringify(new Date(r.created_at).toISOString())},"${cardField}":${r.card_json ?? legacyCard(r)}}`;
     const size = byteLength(item) + 1;
     if (cards.length >= limit || (cards.length > 0 && bytes + size > DIGEST_MAX_BYTES)) {
       truncated = true;
@@ -198,5 +226,5 @@ export async function digest(env: Env, url: URL): Promise<Response> {
   }
   const tail = { count: cards.length, truncated, next_cursor: truncated && last ? `${last.created_at}.${last.post_id}` : null };
   const headJson = JSON.stringify({ ...head, ...tail });
-  return new Response(`${headJson.slice(0, -1)},"saves":[${cards.join(",")}]}`, { headers: { "content-type": "application/json" } });
+  return `${headJson.slice(0, -1)},"saves":[${cards.join(",")}]}`;
 }

@@ -431,7 +431,7 @@ test("the MCP endpoint: initialize advertises events, tools say they need no acc
   // The knowledge tools (src/knowledge/tools.ts) share this endpoint, and
   // the dot also has get_brief and tell (docs/APPROVALS.md).
   assert.deepEqual(tools.map((t) => t.name).sort(), [
-    "get_brief", "knowledge_blob", "knowledge_bundle", "knowledge_has", "knowledge_search", "mailbox_ack", "mailbox_claim", "mailbox_complete", "mailbox_send", "tell",
+    "get_brief", "knowledge_blob", "knowledge_bundle", "knowledge_digest", "knowledge_has", "knowledge_search", "mailbox_ack", "mailbox_claim", "mailbox_complete", "mailbox_send", "tell",
   ]);
   assert.ok(tools.every((t) => t.securitySchemes?.[0]?.type === "noauth" && t._meta?.securitySchemes?.[0]?.type === "noauth"));
   assert.deepEqual((await rpc(mcpPath(), "events/list", {})).body.result.events.map((e) => e.name), ["task_available"]);
@@ -450,6 +450,28 @@ test("the MCP endpoint: initialize advertises events, tools say they need no acc
   const t3 = await rpc("/mcp", "events/subscribe", { name: "task_available", arguments: {}, delivery: { mode: "webhook", url: `${FIXTURE}/hook/t3`, secret: VECTOR.secret } }, "mail_t3");
   assert.equal(t3.body.error?.code, -32602, "t3 is woken by webhook, not events");
   assert.deepEqual(await s.d1("SELECT id FROM mcp_subscriptions"), []);
+});
+
+test("tools/list on the dot's URL marks every read tool read-only and closed-world, and every write tool not read-only", async () => {
+  // ChatGPT Pro lets a custom MCP server use read-only tools only, and
+  // readOnlyHint defaults to false (MCP 2025-11-25, ToolAnnotations).
+  const tools = (await rpc(mcpPath(), "tools/list", {})).body.result.tools;
+  const hints = Object.fromEntries(tools.map((t) => [t.name, t.annotations]));
+  const reads = { readOnlyHint: true, openWorldHint: false };
+  const writes = { readOnlyHint: false };
+  assert.deepEqual(hints, {
+    knowledge_has: reads,
+    knowledge_search: reads,
+    knowledge_bundle: reads,
+    knowledge_digest: reads,
+    knowledge_blob: reads,
+    get_brief: reads,
+    mailbox_send: writes,
+    mailbox_claim: writes,
+    mailbox_ack: writes,
+    mailbox_complete: writes,
+    tell: writes,
+  });
 });
 
 test("the cron retries a failed wake at most 3 times, then leaves it dead", async () => {

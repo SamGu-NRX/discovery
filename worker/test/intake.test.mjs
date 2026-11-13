@@ -297,3 +297,90 @@ test("since takes epoch milliseconds in range or an ISO time with a zone", async
   expect(await k("GET", "/k/digest?since=2026-11-13T07:00:00Z"), 200);
   expect(await k("GET", "/k/digest?since=2026-11-13T02:00:00.5-05:00"), 200);
 });
+
+// knowledge_digest, the digest as a tool on the mailbox MCP endpoint.
+let rpcId = 0;
+async function digestTool(args, { token = "mail_dot", path = "/mcp" } = {}) {
+  return k("POST", path, { jsonrpc: "2.0", id: ++rpcId, method: "tools/call", params: { name: "knowledge_digest", arguments: args } }, { token });
+}
+async function digestToolOk(args, opts) {
+  const r = expect(await digestTool(args, opts), 200);
+  assert.ok(!r.result.isError, JSON.stringify(r.result));
+  assert.deepEqual(JSON.parse(r.result.content[0].text), r.result.structuredContent);
+  return r.result.structuredContent;
+}
+async function toolPages(since, limit, opts) {
+  const pages = [];
+  let cursor;
+  for (let n = 0; n < 20; n++) {
+    const d = await digestToolOk({ since, limit, ...(cursor ? { cursor } : {}) }, opts);
+    pages.push(d);
+    if (!d.truncated) return pages;
+    cursor = d.next_cursor;
+  }
+  return pages;
+}
+// The route's page with each card under the tool's field name; until is the
+// time of the call, so it is left out.
+const asTool = ({ until, saves, ...rest }) => ({ ...rest, saves: saves.map(({ card, ...s }) => ({ ...s, card_untrusted: card })) });
+const withoutUntil = ({ until, ...rest }) => rest;
+
+test("knowledge_digest returns the route's pages card for card, through every mail agent token", async () => {
+  const ids = ["1900000000000001201", "1900000000000001202", "1900000000000001203"];
+  for (const [i, id] of ids.entries()) expect(await bundleWithCard(id, { post_id: id, excerpt: `card ${i}`, verdict: { label: "try", why: "w", action: "a" } }), 201);
+  const t = 4105000000000;
+  pinTime(ids, t);
+  const route = (await allPages(t, 2)).map((p) => asTool(p.body));
+  assert.deepEqual(route.flatMap((p) => p.saves.map((x) => x.card_untrusted.post_id)), ids);
+  const viaPath = { token: "none", path: `/mcp/dot/${s.vars.MAIL_DOT_TOKEN}` };
+  for (const opts of [viaPath, { token: "mail_dot" }, { token: "mail_t3" }, { token: "mail_grok" }]) {
+    assert.deepEqual((await toolPages(t, 2, opts)).map(withoutUntil), route, JSON.stringify(opts));
+  }
+  // since as epoch milliseconds in a number or a string, or as ISO, is the same start.
+  const iso = new Date(t).toISOString();
+  for (const since of [String(t), iso]) assert.deepEqual((await toolPages(since, 2)).map(withoutUntil), route, since);
+});
+
+test("knowledge_digest pages stay within 30 KiB of UTF-8 and reach every save once", async () => {
+  const ids = Array.from({ length: 12 }, (_, i) => `19000000000000013${String(i).padStart(2, "0")}`);
+  for (const id of ids) expect(await bundleWithCard(id, { post_id: id, excerpt: "é".repeat(1900) }), 201);
+  const t = 4105100000000;
+  pinTime(ids, t);
+  const pages = await toolPages(t, 100);
+  assert.ok(pages.length > 1, "twelve 3.9 KB cards cannot fit one page");
+  for (const p of pages) assert.ok(Buffer.byteLength(JSON.stringify(p)) <= 30 * 1024, `a page was ${Buffer.byteLength(JSON.stringify(p))} bytes`);
+  assert.deepEqual(pages.flatMap((p) => p.saves.map((x) => x.card_untrusted.post_id)), ids);
+});
+
+test("knowledge_digest is listed and callable only with the dot, t3 and grok tokens", async () => {
+  for (const token of ["mail_dot", "mail_t3", "mail_grok"]) {
+    const list = expect(await k("POST", "/mcp", { jsonrpc: "2.0", id: ++rpcId, method: "tools/list" }, { token }), 200);
+    const t = list.result.tools.find((x) => x.name === "knowledge_digest");
+    assert.ok(t, token);
+    assert.equal(t.annotations.readOnlyHint, true);
+  }
+  for (const token of ["knowledge", "knowledge_intake", "runner", "inbox", "ingest"]) expect(await digestTool({ since: 0 }, { token }), 403);
+  // The room token is a path credential (/room/<token>), not a bearer one.
+  for (const token of ["none", "mail_room"]) expect(await digestTool({ since: 0 }, { token }), 401);
+  expect(await digestTool({ since: 0 }, { token: "none", path: `/mcp/dot/${s.vars.MAIL_DOT_TOKEN}x` }), 401);
+  // Only the dot authenticates by path.
+  expect(await digestTool({ since: 0 }, { token: "none", path: `/mcp/t3/${s.vars.MAIL_T3_TOKEN}` }), 401);
+});
+
+test("knowledge_digest refusals are tool results that name the argument", async () => {
+  for (const [args, word] of [
+    [{}, "since"],
+    [{ since: "yesterday" }, "since"],
+    [{ since: -1 }, "since"],
+    [{ since: 1.5 }, "since"],
+    [{ since: 0, limit: "5" }, "limit"],
+    [{ since: 0, limit: 101 }, "limit"],
+    [{ since: 0, cursor: "123" }, "cursor"],
+    [{ since: 0, cursor: 5 }, "cursor"],
+  ]) {
+    const r = expect(await digestTool(args), 200).result;
+    assert.equal(r.isError, true, JSON.stringify(args));
+    assert.equal(r.structuredContent.status, 400, JSON.stringify(args));
+    assert.match(r.structuredContent.error, new RegExp(word), JSON.stringify(args));
+  }
+});
