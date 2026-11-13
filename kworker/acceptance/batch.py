@@ -19,7 +19,12 @@ from pathlib import Path
 
 from acceptance.run import KWORKER, kworker_env
 
+# This checkout's venv, or the interpreter running this script.
 PY = KWORKER / ".venv" / "Scripts" / "python.exe"
+if not PY.exists():
+    import sys
+
+    PY = Path(sys.executable)
 
 
 def sh(args: list[str], env: dict, log: Path) -> str:
@@ -41,7 +46,8 @@ def sh(args: list[str], env: dict, log: Path) -> str:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("which", choices=["nov12", "oct26"])
+    ap.add_argument("which", choices=["nov12", "oct26", "drain"])
+    ap.add_argument("--snapshot", type=Path, help="drain: the Nov 12 snapshot the report reads judgments from")
     ap.add_argument("--base", default="http://127.0.0.1:8871")
     ap.add_argument("--repo", type=Path)
     ap.add_argument("--worktree", type=Path)
@@ -59,6 +65,11 @@ def main() -> None:
         env["KWORKER_X_CACHE"] = str(snap / "archive" / "2026-11-12" / "raw" / "fxtwitter")
         sh([str(PY), "-m", "kworker", "run"], env, log)
         report = ["--nov12", "--nov12-snapshot", str(snap)]
+    elif a.which == "drain":
+        # Only run what is queued (the intake dry run filed it); queueing the
+        # archive again would replace the intake payloads.
+        sh([str(PY), "-m", "kworker", "run"], env, log)
+        report = ["--nov12", "--nov12-snapshot", str(a.snapshot)]
     else:
         sh([str(PY), "-m", "kworker", "enqueue-archive", "--archive", str(a.archive), "--all"], env, log)
         sh([str(PY), "-m", "kworker", "run"], env, log)
