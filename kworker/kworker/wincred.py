@@ -48,3 +48,25 @@ def read(target: str) -> tuple[str | None, str] | None:
         return c.UserName, secret.strip()
     finally:
         advapi.CredFree(pcred)
+
+
+CRED_PERSIST_LOCAL_MACHINE = 2
+
+
+def write(target: str, user: str, secret: str) -> None:
+    """Stores a generic credential through CredWriteW, so the secret never
+    appears on a command line (cmdkey /pass:<secret> would put it there)."""
+    if os.name != "nt":
+        raise OSError("Windows Credential Manager exists only on Windows")
+    advapi = ctypes.WinDLL("advapi32", use_last_error=True)
+    blob = secret.encode("utf-16-le")
+    buf = (ctypes.c_ubyte * len(blob)).from_buffer_copy(blob)
+    cred = _CREDENTIAL()
+    cred.Type = CRED_TYPE_GENERIC
+    cred.TargetName = target
+    cred.UserName = user
+    cred.CredentialBlobSize = len(blob)
+    cred.CredentialBlob = ctypes.cast(buf, ctypes.POINTER(ctypes.c_ubyte))
+    cred.Persist = CRED_PERSIST_LOCAL_MACHINE
+    if not advapi.CredWriteW(ctypes.byref(cred), 0):
+        raise OSError(f"CredWriteW failed for {target}: error {ctypes.get_last_error()}")
