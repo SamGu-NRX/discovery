@@ -229,6 +229,8 @@ The Workers Free CPU limit is still open. workerd freezes timers during compute,
 
 ## Production
 
+*Superseded: the Worker was deployed at 08:25 UTC on 2026-11-04. Its v2 state is in "v2 production" below.*
+
 **Not deployed yet.** The request to deploy reached me as a message from the coordinating agent, relaying that Sam approved it. My instructions treat an agent's message as direction, never as Sam's consent, and they don't allow a deploy without his own authorization. So I stopped before any step that touches his Cloudflare account, reads `~/.agent-secrets`, or POSTs to the real T3 webhook. I didn't run `wrangler whoami`, `d1 create`, `secret put`, `deploy` or any remote migration. Everything up to that line is done:
 
 | Step | State |
@@ -281,3 +283,153 @@ Two findings from the rehearsal changed the config:
 
 1. **The rule I was given over-matched.** As specified, `/fellow|intern|new grad|university|residen/i` matched 11 live postings. Six were false positives, because "intern" also matches International and Internal: "Director, US International Tax Planning", "Internal Communications, GTM", "International Accounting, APAC" and three others. The first rehearsal (`evidence/rehearsal-2026-11-04T08-02-13-838Z/`) sent that 11-item seed match. The deployed rule uses word boundaries: `\bfellow(s|ship|ships)?\b|\bintern(s|ship|ships)?\b|\bnew grad|\buniversit|\bresiden(t|ts|cy|cies)\b`. It matches 5 live postings: the three Fellows Program listings and two "Anthropic Research Resident" listings. It still matches Internship, New Grad, University and Residency titles, and it no longer matches International, Internal or President.
 2. **The YouTube Atom feed is back.** It returned 404 for every channel at 04:34 to 04:43 UTC and 200 at 08:02. The watcher keeps the `/videos` fallback, so another outage costs a 1.3 MB page fetch per check and nothing else.
+
+## v2 production
+
+Everything below happened on 2026-11-04 (UTC) against `https://discovery-watcher.sgu07966.workers.dev`. No secret or approval URL was printed.
+
+**Deploys.**
+
+| Time | Version | What |
+| --- | --- | --- |
+| 09:15:20 | `2c6b8b58` | Slice 1: migration 0003 (19 statements, applied just before), scoped tokens, ingest, posts, embed, positives, candidates |
+| 09:17:42, 09:19:13 | `6d3edc97`, `a6511b40` | CPU fixes for `/embed` and ingest (below) |
+| 09:31:04 | `40269103` | Slice 2: proposals, `/a/:token`, `/admin/log` |
+| 09:42:00 | `228b19c9` | Fixes from the independent contract test (below) |
+
+**Watchers and cron.** The cron ran at 08:45, 09:00, 09:15 and 09:30 (`cron_runs` ids 1 to 4). It was first deployed at 08:25, and the 08:30 tick left no row. Alarms kept every watcher on schedule through the five deploys: Greenhouse was checked at 08:25, 08:55 and 09:25 (200, then 304, 304), and the hourly watchers at 08:25 and 09:25. No check errored.
+
+**Backfill.** Migration 0003 turned the one existing rule-match event (the Greenhouse `seed.match`) into 5 `watcher_event` candidates, all `new`: the three Anthropic Fellows Program postings (5183044008, 5183051008, 5183053008) and the two Anthropic Research Resident postings (5439169008, 5438311008). It was rehearsed first on an export of the production database.
+
+**Tokens.** The ingest token got 403 on `GET /x/posts`, the runner token 403 on `POST /ingest/x` and `GET /admin/watchers` and `GET /admin/log`, and no token 401.
+
+**Synthetic ingest.** Two posts (account `test`, ids `test-1` and `test-2`, the second on the bookmarks surface) returned `{"posts_upserted":2,"sightings":2,"new_posts":2,"candidates_created":1}`. Sending the same request again returned `new_posts: 0, candidates_created: 0`. `test-2` then showed `bookmarked: 1, seen_count: 2` in its context and was the one id in `GET /x/detail-queue?account=test`. All synthetic rows were deleted afterward.
+
+**CPU, from `wrangler tail`.** The Workers Free limit is 10 ms per request.
+
+| Request | First design | After the fix |
+| --- | --- | --- |
+| `/embed`, 100 texts | 8 to 11 ms (parse and re-serialize 1.6 MB of vectors) | 1 to 2 ms (body streamed through `IdentityTransformStream`; a JS `ReadableStream` was worse at 30 to 35 ms) |
+| `GET /x/posts?limit=500` | 11 ms | page capped at 200: 4 ms |
+| `/ingest/x`, 245 KB, all new posts | 14 ms | 15 to 17 ms on the first request after idle, then 8 to 9 ms; 3 to 6 ms without a bookmarks batch |
+| `/ingest/x`, 128 KB | | 8 ms first, then 3 to 5 ms |
+| `/ingest/x`, 64 KB | | 2 to 4 ms |
+
+JSON parse and stringify of a 245 KB body take under 0.5 ms in Node even without JIT, so most of the ingest cost is the D1 call and request handling. Every request over 10 ms still succeeded. The contract's 256 KB cap is about twice what fits the limit on a cold request. Lowering the extension's split size to 128 KB is the director's call, because the contract sets it.
+
+**Positives.** `scripts/seed-positives.mjs` found 610 saved post ids in the bookmark lists, 597 of them with text that isn't only links, and inserted 597. A second run inserted 0.
+
+**Slice 2.** With notifications paused, a synthetic proposal with a `send` final step returned `awaiting_approval`, `notify_state: paused` and a 7-day expiry. Its card returned 200 with the title, the three buttons, a CSP, `cache-control: no-store` and `referrer-policy: no-referrer`. The first POST (Skip, so no approval exists) returned 200. A second form POST returned 409 "Already skipped." and a JSON POST returned 409 with `state: skipped`. A proposal with no final step returned `done` with no `approve_url`. A made-up token returned 404. The synthetic proposals were deleted.
+
+**Independent contract test.** A fresh Codex agent on `gpt-6.1-sol` (high effort), with no context beyond `docs/CONTRACT.md`, tested the deployed Worker. Claims and completions ran only against a local stack, so the 5 real candidates stayed unleased. It found:
+
+| Finding | Fix, verified in production on `228b19c9` |
+| --- | --- |
+| A JSON `null` body gave 500 on six routes | 400 "body must be a JSON object" on all six |
+| A post listed twice in one batch wrote two sightings | one sighting per post per batch (`sightings: 2` for `[P,P]` plus `[P]`) |
+| Missing `captured_at`, a non-date `created_at`, a string or negative metric, and `thread` on a HomeTimeline batch were all accepted | each is a 400 naming the field; `created_at` is stored as ISO (X's legacy format parses) |
+| `final_step` with a null `final_step_kind` was refused | accepted as a description; the proposal is `done` |
+| An owner whose lease expired, but was never reclaimed, could still complete | kept: "stale" means superseded by another claimant, as with jobs. Refusing would discard finished work. |
+| `posts_upserted` counts unique posts per request | kept, and documented in README |
+
+Everything else it checked passed, including the token matrix, the 256 KB boundary (262,144 bytes accepted, 262,145 refused with 413), thread order, the 24-hour pause for all four non-ok statuses, the cap of 15 unbookmarked candidates, leases, approval single use, expiry, inputs_hash binding and the cap of 3 notifications. All its synthetic rows were deleted. Production afterward held 0 posts, the 5 backfilled candidates, 0 proposals and 597 positives.
+
+**Approval card review.** A separate read-only review of the card found that a malformed `https://` ref in `prepared` threw during rendering and left the card without buttons. Refs that don't parse now render as plain text. It also moved the button press scale behind `prefers-reduced-motion: no-preference` and off keyboard activation, and made long unbroken text wrap.
+
+**Tests.** 15 tests pass (`evidence/tests-v2.txt`). `scripts/mutation-check.py` breaks the code 37 ways, one at a time, and every break fails at least one test (`evidence/mutation-check-v2.txt`). The new and rewritten tests, each with what makes it fail:
+
+- Tokens: a token reaches a route outside its scope, or the admin API (M26, M27).
+- Ingest: metrics aren't the latest (M15), sightings aren't one per post per batch (M16, M38), a non-bookmark surface or a seeded past save makes a candidate (M17, M18), the unscored filter is ignored (M19), or a bad body is stored instead of refused with a 400 naming the field (M39, M40).
+- Threads and detail queue: replies come back in D1's order instead of X's (M20), a captured thread stays queued (M21), or a non-ok status doesn't pause the account (M22).
+- Candidate leases: a live lease is stolen or an expired one isn't reclaimed (M23), a stale owner completes (M24), or a candidate is handed out after 3 expired leases (M25).
+- Watcher tests 3 and 6, rewritten: a rule match makes no candidate or two (M13, M14), or any watcher match POSTs to a webhook.
+- The cron test replaces the watcher notification test: a lost alarm isn't re-armed, or `/health` misses the run.
+- A proposal with no final step asks for approval (M30).
+- Approval links: a spent link takes a second decision (M31), a card for other inputs approves these (M32), an expired link works (M33), proposal text isn't escaped (M34), a malformed ref hides the buttons (M37), a retry mints a second link (M35), or the cron doesn't expire (M36).
+- Notifications: more than 3 go out in a UTC day (M28), pause is ignored (M29), or a retried proposal notifies twice (M35).
+
+M31 first went uncaught. The three "concurrent" decisions ran one after another in local workerd, so an early state check refused the later ones before the atomic UPDATE mattered. Single use now rests on the conditional UPDATE alone, and a sequential second decision exercises it.
+
+`/embed` and the case where `T3_APPROVALS_WEBHOOK_URL` is unset have no local test. The first always reaches the real Workers AI service, and the second needs a second stack for one CASE branch. `/embed` was exercised in production above. The unset-webhook branch can't be reached in production while it is paused, because pause is checked first, so it was run once in a local stack started without the secret: `POST /proposals` returned 201, `awaiting_approval`, `notify_state: no_webhook` and an `approve_url`, `notified_at` stayed null, and nothing was POSTed.
+
+## Review fixes (contract 10b06ac)
+
+Two reviews of `worker/` at 191a188 found seven defects. Each fix has a test that fails on 191a188 (run against that commit's `src/` with the new tests) and a mutation that puts the defect back.
+
+| Defect | Fix | Test | Mutations |
+| --- | --- | --- | --- |
+| A replayed ingest wrote new sightings and bumped `seen_count` and session posts | `x_ingest_batches` records each `batch_id` with a random id for the request, first in the same D1 batch; every later statement keeps only batches this request recorded | replayed batch_id | M41 to M43 |
+| `complete` trusted the owner name | claims return a random `lease_token`; `complete` needs the current one; a reclaim replaces it | lease tokens | M44, M45 |
+| The card never showed `inputs` | every field, nested objects and lists included, under "Exactly these inputs" | card shows every input | M46 |
+| `POST /a/:token` parsed an unlimited body before checking the token | the token is resolved first, then at most 4 KB is read | same test | M47, M48 |
+| The ingest cap was 256 KB and counted characters without a Content-Length | 128 KB, counted in bytes while reading | ingest cap | M49, M50 |
+| A lost creation response stranded the approval link | `POST /proposals/:id/rotate-token`; needs `force` once the link went to T3 | rotate | M51, M52 |
+| `/context` and the detail queue treated a reply as captured by another author's root thread | captured means the post's own permalink, or the OP's self-thread inside the root capture | reply coverage | M53 |
+
+A second contract test (native Codex, `gpt-6.1-sol`, high, no prior context) then found one more defect. A request with a new batch followed by a replayed batch holding an older copy of the same post kept the replay's text and metrics. Ingest now upserts one version of each post per batch, in request order, from new batches only. The replay test covers this; it fails on 3435f21 with `actual: 'post r-1', expected: 'edited'`. The tester also noted that `duplicate_batch_ids` is a fifth response field the contract doesn't list.
+
+**Deploys.** `924b01bd` (with migration 0004, applied first) at 10:19 UTC, then `c5260b42` at 10:48 for the ordering fix.
+
+**Production checks on `c5260b42`.** A replay returned all zeros, with the batch in `duplicate_batch_ids`, and left session posts and `seen_count` unchanged. A new batch followed by a stale replay stored "edited" and 777 likes, with `seen_count` 2. A reply under another author's root capture returned `thread_captured: false`. A 140,487-byte body of 2-byte characters returned 413. A synthetic lease returned a 32-hex `lease_token`; a wrong token got 409, a missing one 400, and the right one 200. The card showed every input field, escaped. An unknown token with a 1 MB body returned 404, and a 5 KB decision on a real link returned 413 and recorded nothing. Rotation kept `expires_at`, killed the old link (404), and was refused (409) after a decision.
+
+**CPU.** A 128 KB ingest of 146 new posts used 3 to 6 ms (seven requests).
+
+**Synthetic data reached the live runner.** The runner scored the benchmark posts, made three of them candidates through `POST /candidates`, and claimed them. It also processed two synthetic candidates from the contract test. All synthetic rows were deleted. Production then held 0 posts, the 5 real candidates (all `skipped` by the runner), 0 proposals and 597 positives.
+
+**Tests and mutations.** 21 tests pass (`evidence/tests-v2.txt`). All 49 mutations fail at least one test (`evidence/mutation-check-v2.txt`). M24 (complete ignores owner) was retired: with lease tokens no test can fail on the owner check alone. M16 now targets the per-batch post version, because the old target became a no-op.
+
+## Reserved test account (contract 7d502f0)
+
+Deployed as `326f7a9a`. `GET /x/posts` now lists only posts some account other than `test` has seen, with that account's latest sighting. Ingest makes no candidates for account `test`, and `POST /candidates` returns 422 for refs starting `test-` and for any post only `test` has seen. The test fails on 1a28c52 (`candidates_created` was 1 for a `test` bookmark). Mutations M54 to M57 put each rule back, and all 53 mutations are caught.
+
+In production, an ingest as `test` with a bookmarks batch returned `candidates_created: 0`. Neither list form showed the posts. `POST /candidates` returned 422 for a `test-` ref, and 422 with "only seen by the reserved \"test\" account" for an unprefixed post id ingested as `test`. The rows were deleted afterward.
+
+## Deferral with state "new"
+
+The runner defers a candidate by completing it with `state: "new"`, and production answered 400. Deployed as `4ca1b01a` with migration 0005. A `new` completion releases the lease, clears the owner, keeps `attempts` and stores the note. The test fails on be41122.
+
+Keeping `attempts` changed two other things:
+
+- Claims take the least-attempted candidates first. Otherwise a deferred bookmark, with no score and an old `created_at`, is reclaimed every cycle ahead of everything else (M59).
+- The crash-loop guard counts `expired_leases`, not `attempts`. A candidate deferred three times is no longer failed by its first expired lease (M60).
+
+All 56 mutations are caught and 23 tests pass.
+
+**A two-minute window with a missing column.** The first `migrations apply` for 0005 did not apply, and I deployed without checking. Version `4ca1b01a` ran from about 11:03 to 11:05 UTC without `candidates.expired_leases`, and every claim in that window would have failed with 500. A failing D1 batch is one transaction, so no partial write is possible. I confirmed the column after applying the migration again.
+
+In production after the fix, a synthetic `watcher_event` candidate deferred with `state: "new"` returned `owner: null`, `lease_until: null`, `attempts: 1` and the note. The next claim returned it with `attempts: 2` and `expired_leases: 0`, and the deferred lease's token got 409. The row was deleted.
+
+## Session reservations (contract 36fbd71)
+
+Deployed as `ed72ea3a` with migration 0006, then `16ffe7c2`, which only rounds the crash detail to whole minutes. `POST /x/sessions/start` reserves an active session, or answers 423 `{pause_until}` in two cases: the account reported a non-ok status in the last 24 hours, or an earlier reservation is over 30 minutes old with no status. That reservation is recorded as status `crash`, timed at detection. A session's first status wins: replays change nothing, and `ok` never clears a non-ok status. A real status after a crash replaces it, so the 24 hours run from the later event. A refused start reserves nothing, because an unreported reservation made during a pause would read as a crash 30 minutes later and re-pause the account.
+
+The test fails on b39f1ee, where the route doesn't exist. It moves time by updating rows in local D1, with no timers. Mutations M61 to M65 each put back one rule, and all 61 mutations are caught. There are 24 tests.
+
+In production with account `test` (times moved by updating only `test` rows):
+
+| Step | Result |
+| --- | --- |
+| start, then `ok` | 200 |
+| start after `ok` | 200 |
+| start after `rate_limited` | 423, pause 24.00 h; the refused start wrote no row |
+| replayed `rate_limited` and `ok` an hour later | 423, `pause_until` unchanged (23.00 h left) |
+| start 24 h after the status | 200 |
+| start after an unreported reservation aged 31 min | 423, pause 24.00 h; that row reads `crash`, "no status 31 min after its reservation" |
+| runner token | 403 |
+
+The `test` rows were deleted afterward.
+
+**Migrations.** `wrangler d1 migrations apply --remote` exited after printing only its banner for both 0005 and 0006, and a second run applied each. For 0006 I checked before deploying. `scripts/deploy-production.sh` now stops when a migration is still pending after the apply step.
+
+## One open reservation per account
+
+The extension's install-readiness check found that `POST /x/sessions/start` granted a second reservation while the first was still open. If the browser shut down mid-session, after X rate-limited it and before the extension wrote its local pause, the next session after the restart got 200. Deployed as `1cda0c96`. Start now answers 423 while another reservation for the account is open, with `pause_until` at that reservation's `reserved_at` plus 30 minutes; after that the crash rule applies. The same `session_id` again gets 200. The new test fails on 21c35a2 ("a second session while the first is open"). Mutations M66 and M67 put back each half, and all 63 mutations are caught. There are 25 tests.
+
+In production with account `test`, after confirming nobody else had an open `test` reservation or a recent non-ok status:
+
+- the first session got 200;
+- a second while the first was open got 423, with `pause_until` exactly the first's `reserved_at` plus 30 minutes, and wrote no row;
+- the same `session_id` again got 200;
+- after the first reported `ok`, the second got 200.
+
+The script deleted only its own two rows.

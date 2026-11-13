@@ -1,0 +1,139 @@
+# X capture extension
+
+A Manifest V3 extension for Helium (or any Chromium) that copies posts out of X's own web responses in Sam's logged-in browser and sends them to the discovery Worker (`POST /ingest/x`, see [docs/CONTRACT.md](../docs/CONTRACT.md)). It never writes anything to X.
+
+The loadable extension is `app/`. The rest of this folder is tests and this file.
+
+## What it captures
+
+X's web app loads posts through GraphQL. A script in the page wraps `fetch` and `XMLHttpRequest`, copies the response of these operations, and leaves the request and response untouched:
+
+| Operation | Surface |
+| --- | --- |
+| HomeTimeline | home_for_you |
+| HomeLatestTimeline | home_following |
+| Bookmarks | bookmarks |
+| TweetDetail | detail |
+| SearchTimeline | search |
+| UserTweets, UserOriginalsTimeline, UserRepliesTimeline | profile (sent as op `UserTweets`) |
+| ListLatestTweetsTimeline | list |
+
+X retired `UserTweets` in August 2026 for the `User*Timeline` operations, so those are captured too and reported under the contract's `UserTweets` op.
+
+The service worker turns each response into one contract batch:
+
+- Every post becomes the contract's normalized post. The text comes from `note_tweet` when the post is long, and posts behind a `TweetWithVisibilityResults` wrapper are unwrapped.
+- `position` counts down the whole feed on that page load, so the 30th post on the second page has position 29.
+- Quoted and reposted originals go in the same batch at the position of the post that carried them. Bookmark batches are the exception, because the Worker marks every post in one as bookmarked.
+- Ads, cursors, who-to-follow cards, deleted posts, visibility-limited entries without a result, and empty Tweet results without `legacy` are skipped. A response in which every tweet lacks `legacy` fails instead, since that means X moved the field.
+- On a permalink (TweetDetail), the batch also carries `thread`. `root_id` is the permalink's post. `op_self_thread_ids` is that post plus every post by the same author linked to it by `in_reply_to`: the earlier posts it continues and the continuations below it. `reply_ids` is every other post in the conversation, in X's order: module by module, and within a module in item order, with "show more" items placed where `TimelineAddToModule` puts them. Each later page of the permalink sends the thread so far, because the Worker overwrites the thread row.
+
+If a response lacks a field the contract needs, or has an entry type the parser does not know, the whole response is dropped and the popup shows the error. The parser never fills in a guess. X changes these payloads without notice, and a loud failure is easier to fix than months of wrong rows.
+
+Each capture is cut once, when it is queued, into pieces that each fit a request alone. Each piece carries `batch_id` `<capture uuid>:<piece index>`, the Worker's idempotency key, and the thread goes on the last piece. Pieces wait in `chrome.storage.local` until the Worker accepts them, so a closed browser or a short Worker outage loses nothing. Chrome gives an extension 10 MiB of local storage. The outbox may use 7 MiB, which is a few hundred captured responses, and the rest stays free for config, stats and session records. Past 7 MiB the oldest unsent pieces are dropped, a single oversized capture's own early pieces included, and the popup says so. If Chrome refuses a write anyway, the older half of the outbox is dropped, then half again, until the new capture fits; the problem is recorded after space is freed. The extension does not ask for `unlimitedStorage`: a Worker outage long enough to fill 7 MiB should show up as a problem, not grow storage without limit. Requests of at most 128 KB, the contract's cap, carry whole pieces. When the Worker accepts a request, its pieces leave storage in the next write, before any other bookkeeping. If the browser stops between the Worker's answer and that write, the pieces are sent again, and the Worker ignores a `batch_id` it has already applied; no client can rule out that resend. A piece whose request failed is retried under the same `batch_id`. The only failures that drop a piece are 400, 413 and 422, which mean the Worker can never accept it; each drop is reported in the popup. Every other failure, a 404 included, is retried. The pieces leave storage in the same write that adds them to today's count and, for bookmarks, to the sent bookmark ids, so those never fall out of step. A capture counts as stored once its pieces are written; a response the service worker is still processing when Chrome stops it is lost, like any message in flight.
+
+## Modes
+
+The popup has three modes.
+
+- **Passive** (default). Whatever Sam scrolls himself is captured with `mode: "passive"`. All passive captures from one day share one `session_id`.
+- **Active**. Passive capture, plus a read-only session at most every 3 hours with up to 20 minutes of random delay.
+- **Off**. Nothing is captured and no session runs. Switching to Off also stops a session already running, before it opens a window if it is still starting, and drops any capture not yet stored, including one being processed at that moment: pieces stored after the switch are removed, and that removal runs again at the next start if the worker stopped first.
+
+"Run session now" starts a session right away in Passive or Active mode.
+
+## An active session
+
+Before anything else, a session asks the Worker to reserve it (`POST /x/sessions/start`). A pause that is still being written counts as a pause, both just before and just after reserving: a session that finds one reserves nothing, or, if already reserved, stops before its window opens and reports `ok` to close the reservation. Only a 200 lets it open a window. The Worker refuses with 423 for 24 hours after any non-ok status for the account, so the pause holds even if this extension lost its own state. Any other answer means no session: 423 while paused, 409 for a session id that is closed or another account's (every session uses a fresh id), 404 from a Worker without the endpoint, or a network failure. A request whose answer was lost is sent once more under the same id, which the Worker answers with 200 again while that session is open. A refused session reserved nothing, reports nothing and stores the `pause_until` it was given. A session reserves under the last logged-in handle the extension saw and reports its status under that same account; if X shows another account during the session, it stops with `error`. Every status report's answer carries the account's `pause_until` too, and the extension stores it.
+
+1. It opens an unfocused blank window, records it, then loads `https://x.com/home` in it, so a worker that stops in between leaves a blank window rather than an X page nothing knows about. X opens home on whichever tab, For You or Following, was last used in this browser, and no URL selects one. A session never clicks, so it reads the tab X opens, and its batches are labeled by the operation X used (`home_for_you` or `home_following`). If home opens on Following, the session status says so. Choosing For You once by hand in Helium fixes it, because X remembers the choice.
+2. It scrolls about one screen every 2 to 4 seconds, for at most 40 screens or 6 minutes. Each scroll is instant, so it is over before the page can change its path; the pause between screens sets the pace.
+3. It opens `https://x.com/i/bookmarks`. If X lands on `/i/history` without loading bookmarks, it opens `https://x.com/i/history/bookmarks`. It scrolls until it reaches a bookmark already sent (the newest 200 sent ids are kept locally) or for 15 screens.
+4. It asks `GET /x/detail-queue` for up to 5 post ids and opens each permalink, scrolling its replies for up to 4 screens.
+5. It closes the window and reports `POST /ingest/x/status`.
+
+It checks the page after every load and every screen. On a login wall, a rate-limit or "limited" message, a challenge or CAPTCHA, a GraphQL 429 (or X error code 88), or a GraphQL 401 in any X tab, it stops, reports `login_wall`, `rate_limited`, `challenge` or `error`, and pauses sessions for 24 hours. On any other page than the one it opened, it stops with `error` before reading or scrolling it. It also honors the `pause_until` the Worker returns. Every X signal, whether a session takes it or not, writes the 24-hour pause to `chrome.storage.local` before its handler returns, so a browser restart, which clears the session's own record in `chrome.storage.session`, cannot lose it. X's rate-limit error (code 88) is checked as soon as a response is decoded, before the mode check and the parser, so a response the parser rejects still pauses sessions. The page hook also checks every GraphQL response for code 88 itself and sends that verdict as a message of its own, without the body. For operations the extension does not capture, and for a response an XHR reads as `responseType = "json"` (which has no text to forward), the verdict is all that is sent. Sam's own X tabs are watched too. `content/detect.js`, the same read-only check sessions use, checks each page by URL, selectors and visible text only (an element counts only if it is rendered, not hidden by `visibility` or `opacity`, and more than 1 px each way after clipping, so X's hidden inputs and text are ignored): 1.5 s after each URL change, and every 5 s while the tab is visible (30 s while hidden), since a login prompt or limit message can also appear on the same URL. A blocker it finds is handled exactly like a 429. It is sent when it appears, every 30 minutes while it stays, and anew if it clears and returns. A report counts as sent only when the service worker answers `{ok: true}`, which it does after the pause is stored; a send that fails while the worker restarts, or gets `{error}` back, goes again at the next check. A 429, a 401 or a code 88 from the page hook is resent the same way, every 2 seconds up to 30 times, outside the queue that keeps captures in order. Before its first send, the page also stores each signal in `chrome.storage.local` under a key of its own (`pageSignal:<uuid>`). The service worker removes that key once it has stored the pause, drains any left over at startup and every minute, and starts no session while one is stored, so a signal the worker never answered still pauses sessions. A rate limit seen in any X tab while a session runs, or while a new session is waiting for restart recovery to finish, is reported once, as that session's status. One seen while Sam browses with no session running pauses sessions and is reported once under the day's passive session; the pause and the report are stored in one write, and a report that has not reached the Worker is retried every minute and at the next start. Closing the session window or pressing Stop in the popup ends the session with status `ok` and the reason in `detail`, even when a browser call fails because the window is gone.
+
+X's own signals (rate limit, login wall, challenge) replace a harmless stop such as Stop in the popup, a closed window or Off. A 429 that arrives after Sam pressed Stop, while the window is still opening, or while the session closes and sends its last captures, is reported as `rate_limited`; the status is chosen immediately before it is sent. A session's record says `reserved` only after the Worker's 200; recovery silently drops a record without it that holds no blocking signal, since nothing happens on X before that point (a reservation that reached the Worker unrecorded is closed by its 30-minute crash rule, which pauses the account). A record that is not reserved but holds a 429 or login wall seen while it was reserving pauses sessions and is reported with that status. So is a session whose reservation was refused after it took such a signal. A session writes its stop reason to `chrome.storage.session` as soon as it stops, and any later signal at once, and a completion checkpoint when it finishes. If the service worker restarts mid-session, the next start closes the window and reports the session. Only a record carrying the `final` mark, which teardown writes once no later signal can join the session, can be reported `ok`. Without it, a recorded blocking reason is reported as that reason, and anything else as `error` with detail `interrupted`, since a signal may have been lost with a write in flight. A blocker the page shows is recorded before anything else is written. A signal that arrives while recovery closes the old window becomes part of that report, and is written into the old record at once, so a second restart still reports it. With no stop and no checkpoint, it reports `error` with detail `interrupted`, because an unrecorded login wall or rate limit may have ended it. The record stays until the Worker accepts the session's status, whether a session's own teardown or a recovery sent it, and no new session starts before then; the popup shows such a session as not yet sent. The first write after the Worker accepts a status is a receipt in the record, so a restart after it does not send the status again; one between the Worker's answer and the receipt does. Starting is reserved before anything else runs, so an alarm and the popup cannot start two sessions at once. A new session also waits for any restart recovery to report the old session first, and a session removes its record before it frees the slot, so one session's teardown never deletes another's record.
+
+### At most 50 requests to X before a timeline
+
+Detection can miss a block, for example a wall X has redesigned. So each session also counts the requests its window makes to `x.com` and its subdomains, observed through `chrome.webRequest`, which cannot change or block them. Requests X's own service worker makes carry no tab, so those from any x.com page count too; that can only trip the cap early. Until X has delivered a home timeline with at least one post to the session, the 50th request (K = 50) stops the session with `error`, closes its window and pauses sessions for 24 hours, whatever the page shows. Once a timeline has arrived X is serving the account, the cap no longer applies, and later blocks are left to detection. A session that starts while X is still blocking usually makes far fewer requests, because it stops at the first block it sees.
+
+This is a stop at the 50th request, not a ceiling on requests. `chrome.webRequest` in Manifest V3 can only observe, so requests the page issues before the window has closed still go out. In the e2e test a page calling X every 40 ms was stopped at exactly 50, but a page that fires 200 requests in one burst sends all 200 (found in a readiness review of 34aed35). A true ceiling needs a hook that holds each request until the extension allows it. Chromium offers two: `chrome.debugger`'s Fetch domain, which also grants input control and shows a "started debugging this browser" bar, and blocking `webRequest`, which Manifest V3 allows only for policy-installed extensions.
+
+Why 50: there is no live measurement behind it. In the fixtures, a complete session made 12 requests to X, and a session stopped by a login wall or by a 429 on the first `HomeTimeline` made 3. A live home page makes calls the fixture does not, such as X's own logging and settings requests, before its timeline arrives, but how many is not known; 50 leaves room for one such load. Too low a limit would trip on every healthy session, each reporting `error` with `X took 50 requests without showing a timeline` and pausing for a day, which the Worker's status rows would show. Too high a limit lets a blocked start make that many more requests, once per start. Every status detail ends with `x_requests=<n>`, the session's count, so the first live sessions show how much of the 50 a healthy start uses, and K (`PROBATION_REQUEST_CAP` in `app/lib/session.js`) can be set from that.
+
+## Read-only guarantee
+
+Session code can do two things to X: open a URL it built and scroll. It clicks nothing, because a click runs the page's own handlers on the element and every ancestor, and page code could turn any click into another action. The code enforces this in four places.
+
+- `app/lib/xurl.js` is the only source of URLs. `navigate()` and `openWindow()` in `app/lib/session.js` refuse any value that module did not build. The detail queue supplies ids only, and an id must be all digits before it goes into `https://x.com/i/status/<id>`.
+- Each built URL carries the paths X may show for it (for a permalink, `/i/status/<id>` or `/<handle>/status/<id>`). After every load the session checks the tab's path and stops on anything else. The page agent checks the path again inside the same synchronous step that scrolls, because the page can change its path between the service worker's check and the agent running.
+- `app/content/page-agent.js` is the only code that runs inside a session page. Its command table has `inspect` and `scroll`, nothing else. It has no command that clicks, types, focuses or submits.
+- Sam's own tabs never receive the page agent. Content scripts there only copy responses and run `detect.js`, which reads the page and has no way to act on it.
+
+Passive capture never acts on the page at all.
+
+The page-to-extension channel is a detached DOM element handed over during `document_start`, before any X script runs. This differs from the brief's `window.postMessage` plus nonce: X's scripts can read every `postMessage`, and with it the nonce, which would let them forge captures. Page scripts share the hook's world and can replace built-ins later, so the hook keeps its own references to every built-in it calls (`dispatchEvent`, `addEventListener`, the XHR, `Response` and `URL` getters, `Promise.prototype.then`), taken before any page script runs, and reads XHR results only from trusted load events. A message is one string of fields joined by NUL, built by concatenation and never by `JSON.stringify`, which would call a `toJSON` a page script puts on `Object.prototype`. The operation a response belongs to is read from the response itself (`Response.url`, `XMLHttpRequest.responseURL`, through saved getters), never from what the page passed to `fetch` or `open`, and only an https URL on `x.com` or `api.x.com` counts, since a `data:` URL can carry any path; the service worker applies the same host rule. A Request with a fake `url`, a URL object whose `toString` changes, a reopened XHR, or a Response swapped in through a `then` getter therefore cannot attach a GraphQL label to another body. `test/hook.test.js` replaces those built-ins, sets `Object.prototype.toJSON`, fires a fake XHR load and tries each of those mislabelings, and checks that only X's real responses arrive.
+
+Two limits remain. Page code runs in the page, so a scroll handler X installed could act on any scroll, the extension's or Sam's; the extension itself only calls `scrollBy`. And a 429 on any GraphQL operation, not only the captured ones, is reported, because X's rate limits apply to the account. Captured text is treated as data. Nothing in the extension follows instructions found in a post.
+
+## Install in Helium
+
+1. Open `helium://extensions` (or `chrome://extensions`) and turn on Developer mode.
+2. Click "Load unpacked" and choose `extension/app` (not `extension/`, whose `node_modules` Chromium refuses to load).
+3. Pin the extension, open its popup, and under Connection paste the Worker URL (`https://discovery-watcher.<subdomain>.workers.dev`) and the ingest token from `~/.agent-secrets/discovery-ingest-token`. Press Save. The token field never shows the token again, only its last four characters.
+4. Open x.com once while logged in. The popup's header shows the handle it read from X's side nav, and "posts sent today" starts counting.
+
+Permissions are `storage`, `alarms`, `scripting` and `webRequest` (observation only, to count a session window's requests; see the cap above), with host access to `https://x.com/*`, `https://*.x.com/*` and `https://*.workers.dev/*`. Content scripts run on `x.com` only; the subdomain access is there because `webRequest` reports a request only to an extension with access to its host, and X's pages also call `api.x.com`. A Worker on another host asks for access to that host when it is saved.
+
+## Where state lives
+
+In `chrome.storage.local` of the browser profile, readable from the service worker console:
+
+- `config`: `mode`, `workerUrl`, `ingestToken`, and optional overrides. `account` is the handle used when the side nav shows none. `intervalHours`, `jitterMinutes`, `homeMaxScreens`, `homeMaxMinutes`, `bookmarksMaxScreens`, `detailMaxPosts` and `detailMaxScreens` may be lowered but never raised past the limits above. `loadConfig()` clamps them.
+- `outbox` holds pieces not yet accepted, at most 7 MiB. `stats` holds today's posts sent and parse errors.
+- `lastSession`, `nextSessionAt`, `pauseUntil` and `lastProblem` back the popup.
+- `sentBookmarkIds` and `lastAccount`.
+- `pageSignal:<uuid>`, a back-off signal an X page stored and the service worker has not yet paused on.
+- `pendingBackOff`, a passive back-off report not yet accepted by the Worker, and `backOffReportedUntil`, which limits those reports to one a day.
+
+The running or last unreported session's record, `activeSession`, lives in `chrome.storage.session`: it survives a service worker restart but not closing the browser.
+
+Per-page feed offsets and permalink threads live in `chrome.storage.session` and clear when the browser closes.
+
+## Pause or remove
+
+- Choose Off in the popup to stop all capture, or Passive to stop scheduled sessions.
+- Press Stop session in the popup to end a running session.
+- To remove it, use Remove on the extension's card at `helium://extensions`. That also deletes its stored config, token and unsent batches.
+
+## Tests
+
+```sh
+cd extension
+npm install
+npm test
+```
+
+- `test/capture.test.js` covers normalization, note tweets, the visibility wrapper, cursor and module entries, display order, quoted and reposted posts, the bookmark rule, loud failures, and self-thread versus replies across permalink pages, including posts added to an earlier module, a reply also shown under Discover more, and a focal post inside a module.
+- `test/batch.test.js` covers cutting captures into pieces with `batch_id` and the 128 KB cap.
+- `test/outbox.test.js` runs the outbox against a local Worker that fails one request, and checks that only unsent pieces are retried, under the same `batch_id`. It also fills storage past Chrome's quota, which the test's fake storage enforces, and checks that the newest captures and room for other state survive.
+- `test/session-recovery.test.js` checks what a restarted service worker reports for a half-finished session.
+- `test/session-races.test.js` runs `session.js` and `background.js` with a stubbed browser through interleavings of start, stop, teardown, restart recovery, captures, a late 429 and switching to Off. Its crash tests kill the service worker at a chosen step, by abandoning one copy of `session.js` mid-flight, and restart it with a fresh copy that shares only stored state.
+- `test/detect.test.js` checks in real Chromium DOM that a login control or warning text counts as a blocker only when the page shows it.
+- `test/page-agent.test.js` checks in real Chromium DOM that the page agent has no click, type or submit command and fires no input while reading or scrolling.
+- `test/hook.test.js` loads `hook.js` and `bridge.js` into a page the way the extension does and checks that page scripts cannot forge a capture or take the channel.
+- `test/bridge.test.js` runs `bridge.js` with a stubbed service worker and a manual clock, and checks that a blocker report or a 429 is sent again until the worker acknowledges it, and stays stored when it never is.
+- `test/e2e.test.js` loads `app/` into a throwaway Chromium profile and deletes the profile afterward. Chromium resolves `x.com` to a local HTTPS server holding fixture pages and fails every other hostname, so the test cannot reach the real X. It checks passive capture through both `fetch` and XHR, a full session by navigation alone (pages visited, no clicks, thread and `batch_id`s sent, status `ok`), that a login wall, a GraphQL 429 or a redirect to an unexpected page stops a session, that a session stopped by a login wall or a 429 makes no more than K requests to X, that a page calling X without a timeline is closed at K and pauses sessions, and that two simultaneous starts run one session.
+
+## Not yet checked against live X
+
+The fixtures follow twitter-web-exporter's documented shapes, not a live capture. The first live run should check:
+
+- where `https://x.com/i/bookmarks` lands, whether `https://x.com/i/history/bookmarks` exists and loads bookmarks, and that the GraphQL operation is still called `Bookmarks`;
+- which home tab X opens in Helium; if it is Following, choose For You once by hand;
+- that the unfocused session window keeps loading posts while other windows cover it. Chromium may treat a fully covered window as hidden and slow its timers;
+- that the popup header shows the right handle;
+- how many of its 50 requests a healthy session start uses (`x_requests` in the status detail).

@@ -13,20 +13,32 @@ export const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const WRANGLER = join(ROOT, "node_modules/.bin/wrangler");
 const ENV = { ...process.env, CI: "1", WRANGLER_SEND_METRICS: "false" };
 
+const LOCAL_SECRETS = ["ADMIN_TOKEN", "WEBSUB_SECRET", "INGEST_TOKEN", "RUNNER_TOKEN"];
+
+// Creates .dev.vars, or adds any secret it lacks, with random local values.
 export function devVars() {
   const path = join(ROOT, ".dev.vars");
-  if (!existsSync(path)) {
-    writeFileSync(path, `ADMIN_TOKEN=${randomBytes(24).toString("hex")}\nWEBSUB_SECRET=${randomBytes(24).toString("hex")}\n`, { mode: 0o600 });
+  const read = () =>
+    existsSync(path)
+      ? Object.fromEntries(
+          readFileSync(path, "utf8")
+            .split("\n")
+            .filter((l) => l.includes("="))
+            .map((l) => [l.slice(0, l.indexOf("=")), l.slice(l.indexOf("=") + 1).trim()]),
+        )
+      : {};
+  const vars = read();
+  const missing = LOCAL_SECRETS.filter((k) => !vars[k]);
+  if (missing.length) {
+    const lines = Object.entries(vars).map(([k, v]) => `${k}=${v}`);
+    for (const k of missing) lines.push(`${k}=${randomBytes(24).toString("hex")}`);
+    writeFileSync(path, lines.join("\n") + "\n", { mode: 0o600 });
   }
-  return Object.fromEntries(
-    readFileSync(path, "utf8")
-      .split("\n")
-      .filter((l) => l.includes("="))
-      .map((l) => [l.slice(0, l.indexOf("=")), l.slice(l.indexOf("=") + 1).trim()]),
-  );
+  return read();
 }
 
-export async function startStack({ port, fixturePort, inspectorPort, logFile, persistTo }) {
+// webhook: false starts the Worker with T3_APPROVALS_WEBHOOK_URL unset.
+export async function startStack({ port, fixturePort, inspectorPort, logFile, persistTo, webhook = true }) {
   const vars = devVars();
   // Without persistTo (the tests), state goes in a throwaway directory under
   // .wrangler/ that stop() removes.
@@ -42,7 +54,7 @@ export async function startStack({ port, fixturePort, inspectorPort, logFile, pe
   const proc = spawn(
     WRANGLER,
     ["dev", "--port", String(port), "--ip", "127.0.0.1", "--inspector-port", String(inspectorPort), "--persist-to", stateDir, "--test-scheduled", "--show-interactive-dev-session=false",
-      "--var", `T3_WEBHOOK_URL:http://127.0.0.1:${fixturePort}/t3-webhook`],
+      ...(webhook === false ? [] : ["--var", `T3_APPROVALS_WEBHOOK_URL:http://127.0.0.1:${fixturePort}/t3-webhook`])],
     { cwd: ROOT, env: ENV, stdio: ["ignore", "pipe", "pipe"] },
   );
   const lines = [];
@@ -58,8 +70,11 @@ export async function startStack({ port, fixturePort, inspectorPort, logFile, pe
   const base = `http://127.0.0.1:${port}`;
   const auth = { authorization: `Bearer ${vars.ADMIN_TOKEN}`, "content-type": "application/json" };
 
-  async function call(method, path, body, { raw = false } = {}) {
-    const res = await fetch(base + path, { method, headers: auth, body: body === undefined ? undefined : JSON.stringify(body) });
+  // token: "admin" (default), "ingest", "runner", or "none".
+  async function call(method, path, body, { raw = false, token = "admin" } = {}) {
+    const headers = { "content-type": "application/json" };
+    if (token !== "none") headers.authorization = `Bearer ${vars[`${token.toUpperCase()}_TOKEN`]}`;
+    const res = await fetch(base + path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
     if (raw) return res;
     const text = await res.text();
     const data = text ? JSON.parse(text) : null;
@@ -94,6 +109,13 @@ export async function startStack({ port, fixturePort, inspectorPort, logFile, pe
     }
   }
 
+  // Runs SQL against the same local D1 the Worker uses, for setting up states
+  // that would otherwise need waiting (an overdue watcher).
+  function d1(sql) {
+    const out = execFileSync(WRANGLER, ["d1", "execute", "DB", "--local", "--persist-to", stateDir, "--json", "--command", sql], { cwd: ROOT, env: ENV, stdio: "pipe" });
+    return JSON.parse(out.toString())[0].results;
+  }
+
   async function stop() {
     proc.kill("SIGTERM");
     await new Promise((r) => (proc.exitCode !== null ? r() : proc.once("exit", r)));
@@ -102,5 +124,5 @@ export async function startStack({ port, fixturePort, inspectorPort, logFile, pe
     if (!persistTo) rmSync(stateDir, { recursive: true, force: true });
   }
 
-  return { base, call, control, waitForFetches, stop, lines, fixtureState: state, fixtureBase: `http://127.0.0.1:${fixturePort}`, vars, stateDir };
+  return { base, call, control, waitForFetches, d1, stop, lines, fixtureState: state, fixtureBase: `http://127.0.0.1:${fixturePort}`, vars, stateDir };
 }

@@ -1,7 +1,11 @@
 import type { Kind } from "./adapters";
+import { callerScope, type Scope } from "./auth";
+import { claimCandidates, completeCandidate, createCandidate, listCandidates } from "./candidates";
 import type { Env, WatcherRow } from "./check";
-import { DAILY_CAP, retryNotifications } from "./notify";
+import { HttpError, json, readJson, timeParam, utcDay } from "./http";
+import { APPROVAL_DAILY_CAP, approvalPage, createProposal, decide, expireProposals, listProposals, presentProposal, rotateToken } from "./proposals";
 import { handleDelivery, handleVerification, requestSubscription } from "./websub";
+import { addPositives, detailQueue, embed, ingest, ingestStatus, listPositives, listPosts, postContext, saveScores, startSession } from "./x";
 
 export { WatcherDO } from "./watcher";
 
@@ -11,34 +15,11 @@ const BACKSTOP_GRACE_MS = 60_000;
 
 const KINDS: Kind[] = ["atom", "greenhouse", "hn", "page", "youtube_page"];
 
-class HttpError extends Error {
-  constructor(
-    readonly status: number,
-    message: string,
-  ) {
-    super(message);
-  }
-}
-
-const json = (data: unknown, status = 200) =>
-  new Response(JSON.stringify(data, null, 2), { status, headers: { "content-type": "application/json" } });
-
 function stub(env: Env, watcherId: string) {
   return env.WATCHER.get(env.WATCHER.idFromName(watcherId));
 }
 
-function requireAdmin(req: Request, env: Env) {
-  if (!env.ADMIN_TOKEN) throw new HttpError(500, "ADMIN_TOKEN is not set; see .dev.vars.example");
-  if (req.headers.get("authorization") !== `Bearer ${env.ADMIN_TOKEN}`) throw new HttpError(401, "bad or missing bearer token");
-}
-
-async function body<T>(req: Request): Promise<T> {
-  try {
-    return (await req.json()) as T;
-  } catch {
-    throw new HttpError(400, "body must be JSON");
-  }
-}
+const body = <T>(req: Request) => readJson<T>(req);
 
 interface NewWatcher {
   id: string;
@@ -143,7 +124,68 @@ async function watcherDetail(env: Env, id: string) {
   return { watcher: w, alarm_at: await stub(env, id).alarmAt(), seen_items: seen?.n ?? 0, events: events.results, jobs: jobs.results, fetch_log: log.results };
 }
 
-async function route(req: Request, env: Env): Promise<Response> {
+type Handler = (req: Request, env: Env, url: URL, params: string[], ctx: ExecutionContext) => Promise<Response>;
+
+interface Route {
+  method: "GET" | "POST";
+  path: RegExp;
+  // Tokens that may call this route besides ADMIN_TOKEN, which may call all.
+  scopes: Scope[];
+  handler: Handler;
+}
+
+const ok = (p: Promise<unknown>, status = 200) => p.then((data) => json(data, status));
+
+// docs/CONTRACT.md, "Tokens". A token not listed for a route gets 403.
+const ROUTES: Route[] = [
+  { method: "POST", path: /^\/ingest\/x$/, scopes: ["ingest"], handler: (req, env) => ok(ingest(env, req)) },
+  { method: "POST", path: /^\/ingest\/x\/status$/, scopes: ["ingest"], handler: (req, env) => ok(ingestStatus(env, req)) },
+  { method: "GET", path: /^\/x\/detail-queue$/, scopes: ["ingest"], handler: (_r, env, url) => ok(detailQueue(env, url)) },
+  { method: "POST", path: /^\/x\/sessions\/start$/, scopes: ["ingest"], handler: (req, env) => startSession(env, req) },
+  { method: "GET", path: /^\/x\/posts$/, scopes: ["runner"], handler: (_r, env, url) => ok(listPosts(env, url)) },
+  { method: "POST", path: /^\/x\/posts\/scores$/, scopes: ["runner"], handler: (req, env) => ok(saveScores(env, req)) },
+  { method: "GET", path: /^\/x\/posts\/([^/]+)\/context$/, scopes: ["runner"], handler: (_r, env, _u, [id]) => ok(postContext(env, id)) },
+  { method: "POST", path: /^\/embed$/, scopes: ["runner"], handler: (req, env, _u, _p, ctx) => embed(env, req, ctx) },
+  { method: "POST", path: /^\/positives$/, scopes: ["runner"], handler: (req, env) => ok(addPositives(env, req)) },
+  { method: "GET", path: /^\/positives$/, scopes: ["runner"], handler: (_r, env, url) => ok(listPositives(env, url)) },
+  {
+    method: "POST",
+    path: /^\/candidates$/,
+    scopes: ["runner"],
+    handler: async (req, env) => {
+      const r = await createCandidate(env, await body(req));
+      return json(r.body, r.status);
+    },
+  },
+  { method: "GET", path: /^\/candidates$/, scopes: ["runner"], handler: (_r, env, url) => ok(listCandidates(env, url)) },
+  {
+    method: "POST",
+    path: /^\/proposals$/,
+    scopes: ["runner"],
+    handler: async (req, env) => {
+      const r = await createProposal(env, req);
+      return json(r.body, r.status);
+    },
+  },
+  { method: "GET", path: /^\/proposals$/, scopes: ["runner"], handler: (_r, env, url) => ok(listProposals(env, url)) },
+  { method: "POST", path: /^\/proposals\/([^/]+)\/rotate-token$/, scopes: ["runner"], handler: (req, env, _u, [id]) => ok(rotateToken(env, id, req)) },
+  { method: "GET", path: /^\/admin\/log$/, scopes: [], handler: (_r, env, url) => ok(activityLog(env, url)) },
+  { method: "POST", path: /^\/candidates\/claim$/, scopes: ["runner"], handler: async (req, env) => ok(claimCandidates(env, await body(req))) },
+  { method: "POST", path: /^\/candidates\/([^/]+)\/complete$/, scopes: ["runner"], handler: async (req, env, _u, [id]) => ok(completeCandidate(env, id, await body(req))) },
+];
+
+function match(req: Request, url: URL): { route: Route; params: string[] } | "wrong_method" | null {
+  let pathMatched = false;
+  for (const route of ROUTES) {
+    const m = url.pathname.match(route.path);
+    if (!m) continue;
+    pathMatched = true;
+    if (route.method === req.method) return { route, params: m.slice(1).map(decodeURIComponent) };
+  }
+  return pathMatched ? "wrong_method" : null;
+}
+
+async function route(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   const url = new URL(req.url);
   const parts = url.pathname.split("/").filter(Boolean);
 
@@ -161,13 +203,28 @@ async function route(req: Request, env: Env): Promise<Response> {
     });
   }
 
+  // Public: the approval link is its own credential.
+  if (parts[0] === "a" && parts.length === 2) {
+    if (req.method === "GET") return approvalPage(env, parts[1]);
+    if (req.method === "POST") return decide(env, parts[1], req);
+    throw new HttpError(405, `${req.method} is not allowed on /a/:token`);
+  }
+
   // Public: WebSub verification and delivery, authenticated by the hub's HMAC.
   if (parts[0] === "websub" && parts.length === 2) {
     if (req.method === "GET") return handleVerification(env, parts[1], url);
     if (req.method === "POST") return handleDelivery(env, parts[1], req);
   }
 
-  requireAdmin(req, env);
+  const scope = await callerScope(req, env);
+  const found = match(req, url);
+  if (found === "wrong_method") throw new HttpError(405, `${req.method} is not allowed on ${url.pathname}`);
+  if (found) {
+    if (scope !== "admin" && !found.route.scopes.includes(scope)) throw new HttpError(403, `the ${scope} token cannot call ${req.method} ${url.pathname}`);
+    return found.route.handler(req, env, url, found.params, ctx);
+  }
+  // Everything below is the watcher administration API: ADMIN_TOKEN only.
+  if (scope !== "admin") throw new HttpError(403, `the ${scope} token cannot call ${req.method} ${url.pathname}`);
 
   if (parts[0] === "admin" && parts[1] === "watchers") {
     const id = parts[2];
@@ -193,12 +250,25 @@ async function route(req: Request, env: Env): Promise<Response> {
     return json((await q.all()).results);
   }
   if (parts[0] === "admin" && parts[1] === "notifications" && !parts[2] && req.method === "GET") {
-    const today = new Date().toISOString().slice(0, 10);
-    const [rows, used] = await Promise.all([
-      env.DB.prepare("SELECT * FROM notifications ORDER BY id DESC LIMIT 100").all(),
-      env.DB.prepare("SELECT count(*) AS n FROM notifications WHERE day = ? AND state IN ('pending', 'sent', 'failed')").bind(today).first<{ n: number }>(),
+    const day = utcDay(Date.now());
+    const [used, recent, paused, legacy] = await env.DB.batch<Record<string, unknown>>([
+      env.DB.prepare("SELECT count(*) AS n FROM proposals WHERE notify_day = ? AND notify_state IN ('pending', 'sent', 'failed')").bind(day),
+      env.DB.prepare(
+        `SELECT id, title, state, notify_state, notify_day, notify_status, notify_error, notified_at, created_at FROM proposals
+         WHERE notify_state IS NOT NULL ORDER BY created_at DESC LIMIT 50`,
+      ),
+      env.DB.prepare("SELECT value FROM settings WHERE key = 'notifications_paused'"),
+      // Watcher matches stopped notifying in v2; these rows are from before.
+      env.DB.prepare("SELECT * FROM notifications ORDER BY id DESC LIMIT 100"),
     ]);
-    return json({ day: today, used_today: used?.n ?? 0, daily_cap: DAILY_CAP, notifications: rows.results });
+    return json({
+      day,
+      approvals_used_today: used.results[0].n,
+      daily_cap: APPROVAL_DAILY_CAP,
+      paused: paused.results[0]?.value === "1",
+      approvals: recent.results,
+      legacy_watcher_notifications: legacy.results,
+    });
   }
   if (parts[0] === "admin" && parts[1] === "notifications" && parts[2] === "pause" && req.method === "POST") {
     const b = await body<{ paused: boolean }>(req);
@@ -255,10 +325,47 @@ async function route(req: Request, env: Env): Promise<Response> {
   return json({ error: "not found" }, 404);
 }
 
+// What happened since a time, for the director's morning report. Each list is
+// capped at 200 rows; the counts are exact.
+async function activityLog(env: Env, url: URL) {
+  const now = Date.now();
+  const since = timeParam(url, "since") ?? now - 24 * 3600 * 1000;
+  const db = env.DB;
+  const [counts, sessions, candidates, proposals, events, cron] = await db.batch<Record<string, unknown>>([
+    db
+      .prepare(
+        `SELECT (SELECT count(*) FROM x_posts WHERE first_seen_at >= ?1) AS new_posts,
+                (SELECT count(*) FROM x_sightings WHERE seen_at >= ?1) AS sightings,
+                (SELECT count(*) FROM candidates WHERE created_at >= ?1) AS candidates_created,
+                (SELECT count(*) FROM proposals WHERE created_at >= ?1) AS proposals_created,
+                (SELECT count(*) FROM events WHERE ts >= ?1) AS watcher_events,
+                (SELECT count(*) FROM fetch_log WHERE ts >= ?1) AS watcher_checks,
+                (SELECT count(*) FROM fetch_log WHERE ts >= ?1 AND outcome = 'error') AS watcher_errors,
+                (SELECT count(*) FROM cron_runs WHERE ts >= ?1) AS cron_runs`,
+      )
+      .bind(since),
+    db.prepare("SELECT * FROM x_sessions WHERE started_at >= ?1 OR ended_at >= ?1 ORDER BY started_at DESC LIMIT 200").bind(since),
+    db.prepare("SELECT id, kind, ref, title, url, score, state, owner, attempts, origin, note, created_at, updated_at FROM candidates WHERE updated_at >= ?1 ORDER BY updated_at DESC LIMIT 200").bind(since),
+    db.prepare("SELECT * FROM proposals WHERE created_at >= ?1 OR decided_at >= ?1 ORDER BY created_at DESC LIMIT 200").bind(since),
+    db.prepare("SELECT id, watcher_id, ts, kind, dedupe_key FROM events WHERE ts >= ?1 ORDER BY id DESC LIMIT 200").bind(since),
+    db.prepare("SELECT * FROM cron_runs ORDER BY id DESC LIMIT 1"),
+  ]);
+  return {
+    since: new Date(since).toISOString(),
+    until: new Date(now).toISOString(),
+    counts: counts.results[0],
+    last_cron: cron.results[0] ?? null,
+    x_sessions: sessions.results,
+    candidates: candidates.results,
+    proposals: (proposals.results as unknown as Parameters<typeof presentProposal>[0][]).map(presentProposal),
+    watcher_events: events.results,
+  };
+}
+
 export default {
-  async fetch(req: Request, env: Env): Promise<Response> {
+  async fetch(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     try {
-      return await route(req, env);
+      return await route(req, env, ctx);
     } catch (e) {
       if (e instanceof HttpError) return json({ error: e.message }, e.status);
       console.error(e);
@@ -267,8 +374,7 @@ export default {
   },
 
   // The one cron (Workers Free allows five per account). Watchers schedule
-  // themselves; this catches lost alarms, retries failed notifications, and
-  // records the run for /health.
+  // themselves; this catches lost alarms and records the run for /health.
   async scheduled(controller: ScheduledController, env: Env): Promise<void> {
     const now = Date.now();
     const { results } = await env.DB.prepare(
@@ -282,10 +388,10 @@ export default {
       const r = await stub(env, w.id).checkNow("backstop");
       console.log(`[backstop] ${w.id} re-armed, next check in ${r.next_interval_s}s`);
     }
-    const retried = await retryNotifications(env, Date.now());
-    await env.DB.prepare("INSERT INTO cron_runs (ts, cron, overdue_checked, notifications_retried) VALUES (?1, ?2, ?3, ?4)")
-      .bind(now, controller.cron, results.length, retried)
+    const expired = await expireProposals(env, now);
+    await env.DB.prepare("INSERT INTO cron_runs (ts, cron, overdue_checked, notifications_retried) VALUES (?1, ?2, ?3, 0)")
+      .bind(now, controller.cron, results.length)
       .run();
-    console.log(`[cron] done overdue_checked=${results.length} notifications_retried=${retried}`);
+    console.log(`[cron] done overdue_checked=${results.length} proposals_expired=${expired}`);
   },
 } satisfies ExportedHandler<Env>;

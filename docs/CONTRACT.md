@@ -52,7 +52,7 @@ The extension normalizes X GraphQL into this shape. JSON paths are listed in the
 
 ## `POST /ingest/x`
 
-Request body, at most 256 KB (the extension splits larger captures, so a request stays inside the free plan's 10 ms CPU limit):
+Request body, at most 128 KB. The extension splits larger captures. In production a 245 KB ingest took 15–17 ms of CPU on a cold request, over the free plan's 10 ms limit, and 128 KB took 3–8 ms.
 
 ```json
 {
@@ -62,6 +62,7 @@ Request body, at most 256 KB (the extension splits larger captures, so a request
   "captured_at": "ISO time",
   "batches": [
     {
+      "batch_id": "stable id for this piece of a capture: <capture uuid>:<piece index>",
       "op": "HomeTimeline | HomeLatestTimeline | Bookmarks | TweetDetail | SearchTimeline | UserTweets | ListLatestTweetsTimeline",
       "surface": "home_for_you | home_following | bookmarks | detail | search | profile | list",
       "posts": [{ "...normalized post", "position": 0 }],
@@ -71,11 +72,15 @@ Request body, at most 256 KB (the extension splits larger captures, so a request
 }
 ```
 
-`thread` appears only on TweetDetail batches. The Worker upserts posts, always overwriting `metrics` with the latest values, and writes one sighting row per post per batch. A post first seen on the `bookmarks` surface sets `bookmarked = 1`.
+`thread` appears only on TweetDetail batches. `batch_id` is the idempotency key. The Worker records it with a uniqueness constraint in the same D1 batch as the writes, and a repeated `batch_id` writes no sightings and leaves counters unchanged, so retries and lost responses are safe. The Worker upserts posts, always overwriting `metrics` with the latest values, and writes one sighting row per post per batch. A post first seen on the `bookmarks` surface sets `bookmarked = 1`.
 
-The response is `{ "posts_upserted", "sightings", "new_posts", "candidates_created" }`.
+The response is `{ "posts_upserted", "sightings", "new_posts", "candidates_created", "duplicate_batch_ids" }`.
+
+Account `test` is reserved for synthetic checks. The Worker never lists its posts in `GET /x/posts`, never creates candidates from them, and refuses `POST /candidates` for refs starting with `test-`. Clean up test rows after each check.
 
 `POST /ingest/x/status` takes `{ "account", "session_id", "status": "ok | login_wall | rate_limited | challenge | error", "detail" }`. For any status other than `ok`, `GET /x/detail-queue` returns `{ "pause_until": "<ISO time 24 h later>" }` and extension sessions stop until then.
+
+`POST /x/sessions/start { account, session_id }` (INGEST_TOKEN) reserves an active session. The extension must get 200 before it opens any X window; any other answer, including a network failure, means no session. The Worker answers 423 `{ "pause_until" }` in three cases. First, any status other than `ok` was reported for that account in the last 24 hours. Second, an earlier reservation is more than 30 minutes old and never reported a status; the Worker records it as a crash and pauses 24 hours from detection. Third, another reservation for the account is still open (under 30 minutes, no status); `pause_until` is then that reservation's `reserved_at` plus 30 minutes, after which the crash rule applies. A repeated start with the same `session_id` returns 200, so a retry after a lost response is safe, and a refused start reserves nothing. A reservation stays open until `POST /ingest/x/status` closes it, so after a browser restart the extension reports its own open session before starting another. This guard makes the pause hold even if the extension loses its own state.
 
 `GET /x/detail-queue?account=` returns `{ "post_ids": [up to 5], "pause_until": null }`. These are candidates whose thread has not been captured yet. The extension opens each one's permalink during its next active session.
 
@@ -105,7 +110,7 @@ proposals(id TEXT PRIMARY KEY, candidate_ids_json, kind, title, why, evidence_js
 
 Scoring runs in the runner, because cosine similarity over hundreds of saves would exceed the Worker's CPU limit. The Worker only creates candidates that need no score.
 
-- The Worker creates a candidate on ingest for every post first seen on the `bookmarks` surface, because a save is Sam's explicit signal. Watcher rule matches become candidates of kind `watcher_event` and no longer post to T3.
+- The Worker creates a candidate on ingest for every post first seen on the `bookmarks` surface, except posts already in `positives` (seeded past saves), because a save is Sam's explicit signal. Watcher rule matches become candidates of kind `watcher_event` and no longer post to T3.
 - The runner pulls unscored posts and embeds them through `POST /embed`, using the post text, quoted text and link domains. It caches embeddings locally under `~/.discovery/cache/`.
 - A post's score is the mean of its top-5 cosine similarities to positives, minus the mean of its top-5 similarities to skipped proposals, plus a small author prior (author saved or approved before).
 - A post becomes a candidate when it ranks in the top 2% of its session or scores at least the threshold in the runner config (start at 0.75, measured on Sam's saves). Unbookmarked candidates are capped at 15 a day.
@@ -116,9 +121,9 @@ Scoring runs in the runner, because cosine similarity over hundreds of saves wou
 - `POST /embed { texts: [up to 100] }` returns `{ vectors: [[768 floats]] }` from Workers AI `@cf/baai/bge-base-en-v1.5`.
 - `GET /x/posts?unscored=1&limit=200` returns normalized posts with `account`, `bookmarked` and latest `surface` and `session_id`.
 - `POST /x/posts/scores { scores: [{ id, score, parts }] }`
-- `POST /candidates { kind, ref, title, url, score, score_parts }` is idempotent on `(kind, ref)`.
-- `POST /candidates/claim { owner, ttl_s, limit }` returns leased candidates. An expired lease can be reclaimed. Completing with a stale owner returns 409.
-- `POST /candidates/:id/complete { owner, state, note }`
+- `POST /candidates { kind, ref, title, url, score, score_parts }` is idempotent on `(kind, ref)`. It returns 429 after the 15th unbookmarked candidate of the UTC day.
+- `POST /candidates/claim { owner, ttl_s, limit }` returns leased candidates, each with a random `lease_token`. `owner` is a random runner instance id generated at startup, not hostname and PID. An expired lease can be reclaimed. Completing with a stale owner returns 409.
+- `POST /candidates/:id/complete { owner, lease_token, state, note }` succeeds only when `lease_token` matches the current lease. A reclaimed lease invalidates the old token. `state` is `proposed`, `done`, `skipped` or `failed`, or `new` to defer: that releases the lease and returns the candidate to the queue with `attempts` kept and `note` stored. Claims take the least-attempted candidates first. A candidate fails after its lease expires 3 times; deferrals don't count toward that.
 - `GET /x/posts/:id/context` returns the post, its quoted post, the captured thread (`op_self_thread` and `replies` in server order, each a normalized post) and `thread_captured: true|false`.
 - `POST /proposals` takes
   ```
@@ -132,7 +137,7 @@ Scoring runs in the runner, because cosine similarity over hundreds of saves wou
 
 ## Approval
 
-- `GET /a/:token` renders one plain card: title, why, what is prepared (with links), the final step, and Approve, Skip and Later buttons.
+- `GET /a/:token` renders one plain card: title, why, what is prepared (with links), the final step, a human-readable rendering of every field in `inputs` (the exact values the hash binds), and Approve, Skip and Later buttons. The token is resolved before any request body is read, and bodies over 4 KB are refused.
 - `POST /a/:token { decision: "approve|skip|later" }` is single-use and returns 409 after the first decision. Skip and later are recorded as labels for the scorer.
 - Notification target: `T3_APPROVALS_WEBHOOK_URL` (secret), body `{ event_id: proposal id, title, why, final_step, approve_url }`. A T3 thread bound to that webhook shows Sam one question card and POSTs his answer to `approve_url`.
 

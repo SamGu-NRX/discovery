@@ -1,0 +1,290 @@
+/* Sits in the browser's own chrome, so it uses the system UI face for labels
+   and the system monospace, with tabular figures, for every number. */
+:root {
+  --bg: #fafaf9;
+  --surface: #ffffff;
+  --text: #1c1d1f;
+  --muted: #6a6e75;
+  --line: #e4e4e1;
+  --track: #ececea;
+  --ok: #2f8a57;
+  --warn: #a8661a;
+  --bad: #b8402a;
+  --focus: #3b6fd8;
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1a1b1d;
+    --surface: #26282b;
+    --text: #e7e7e5;
+    --muted: #9a9ea5;
+    --line: #2f3135;
+    --track: #222427;
+    --ok: #5cc28a;
+    --warn: #e0a250;
+    --bad: #ec7a63;
+    --focus: #7aa2ff;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+body {
+  width: 300px;
+  margin: 0;
+  padding: 14px 14px 12px;
+  background: var(--bg);
+  color: var(--text);
+  font: 13px/1.4 system-ui, sans-serif;
+}
+
+.value,
+.figure,
+input {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.warn {
+  color: var(--warn);
+}
+
+header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 10px;
+}
+
+h1 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+#account {
+  font-size: 12px;
+}
+
+/* Mode switch. The thumb slides under the chosen option. */
+.segmented {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  padding: 2px;
+  border-radius: 8px;
+  background: var(--track);
+}
+
+.segmented .thumb {
+  position: absolute;
+  inset: 2px auto 2px 2px;
+  width: calc((100% - 4px) / 3);
+  border-radius: 6px;
+  background: var(--surface);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.12);
+  transform: translateX(calc(var(--index, 1) * 100%));
+  transition: transform 200ms var(--ease-out);
+}
+
+.segmented button {
+  position: relative;
+  padding: 5px 0;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition: color 150ms ease;
+}
+
+.segmented button[aria-checked="true"] {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.help {
+  min-height: 1.4em;
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.today {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 14px 0 10px;
+}
+
+.figure {
+  font-size: 26px;
+  font-weight: 500;
+  letter-spacing: -0.02em;
+}
+
+.facts {
+  margin: 0 0 12px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+
+.facts > div {
+  display: grid;
+  grid-template-columns: 88px 1fr;
+  gap: 8px;
+  padding: 3px 0;
+}
+
+.facts dt {
+  color: var(--muted);
+}
+
+.facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 6px;
+  border-radius: 50%;
+  vertical-align: 1px;
+  background: var(--muted);
+}
+
+.dot.ok {
+  background: var(--ok);
+}
+
+.dot.warn {
+  background: var(--warn);
+}
+
+.dot.bad {
+  background: var(--bad);
+}
+
+.problem {
+  color: var(--bad);
+  font-size: 12px;
+}
+
+button.primary,
+button.secondary {
+  border-radius: 7px;
+  font: inherit;
+  cursor: pointer;
+  transition: transform 120ms var(--ease-out), background-color 150ms ease, opacity 150ms ease;
+}
+
+button.primary {
+  width: 100%;
+  padding: 7px 0;
+  border: 0;
+  background: var(--text);
+  color: var(--bg);
+  font-weight: 600;
+}
+
+button.secondary {
+  padding: 5px 12px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--text);
+}
+
+button.primary:active:not(:disabled),
+button.secondary:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+button:focus-visible,
+input:focus-visible,
+summary:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+details {
+  margin-top: 6px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+
+summary {
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+  user-select: none;
+}
+
+form {
+  display: grid;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+label {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+input {
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12px;
+}
+
+.form-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+.form-row .help {
+  margin: 0;
+}
+
+#save-note,
+#run-note {
+  transition: opacity 150ms ease;
+}
+
+#save-note:empty,
+#run-note:empty {
+  opacity: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .segmented .thumb {
+    transition: none;
+  }
+}

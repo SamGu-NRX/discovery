@@ -1,7 +1,7 @@
 // Prints what a deployment is doing: /health, each watcher's fetch_log and
-// events, and every notification with its POST status. Read-only unless
-// --recheck is given, which forces one check of every watcher first (one
-// request per source) to show that a second run sends no duplicate POST.
+// events, and the watcher_event candidates. Read-only unless --recheck is
+// given, which forces one check of every watcher first (one request per
+// source) to show that a second run adds no duplicate candidate.
 //
 // Usage: node scripts/verify-production.mjs <base-url> <admin-token-file> [--recheck]
 
@@ -17,11 +17,12 @@ const get = async (path, method = "GET") => {
 };
 const iso = (ms) => (ms ? new Date(ms).toISOString() : "-");
 
-const before = flag === "--recheck" ? (await get("/admin/notifications")).notifications.length : null;
+const watcherCandidates = async () => (await get("/candidates?kind=watcher_event")).candidates;
+const before = flag === "--recheck" ? (await watcherCandidates()).length : null;
 if (flag === "--recheck") {
   for (const w of await get("/admin/watchers")) {
     const r = await get(`/admin/watchers/${w.id}/check`, "POST");
-    console.log(`recheck ${w.id}: source=${r.source} status=${r.status} outcome=${r.outcome} events=${r.events_created} notified=${r.notified}`);
+    console.log(`recheck ${w.id}: source=${r.source} status=${r.status} outcome=${r.outcome} events=${r.events_created} candidates=${r.candidates_created}`);
   }
 }
 
@@ -34,7 +35,7 @@ for (const w of await get("/admin/watchers")) {
   }
   for (const e of d.events) console.log(`  event ${e.id} ${e.kind} ${e.dedupe_key}`);
 }
-const n = await get("/admin/notifications");
-console.log(`\nnotifications day=${n.day} used_today=${n.used_today}/${n.daily_cap}`);
-for (const r of n.notifications) console.log(`  ${r.id} ${r.state} last_status=${r.last_status} attempts=${r.attempts} ${r.kind} ${r.event_id} "${r.title}"`);
-if (before !== null) console.log(`\nnotifications before recheck=${before} after=${n.notifications.length}`);
+const cands = await watcherCandidates();
+console.log(`\nwatcher_event candidates: ${cands.length}`);
+for (const c of cands) console.log(`  ${c.state} ${c.ref} "${c.title}" ${c.url ?? ""}`);
+if (before !== null) console.log(`\ncandidates before recheck=${before} after=${cands.length}`);
