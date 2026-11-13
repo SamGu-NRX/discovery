@@ -435,8 +435,9 @@ test("48 ineligible lens accounts ahead of a healthy one cost the cron nothing, 
   assert.equal(await latestVersion("acd-healthy"), v + 1);
   const attempt = (await s.d1("SELECT d1_calls FROM lens_background_attempts WHERE account = 'acd-healthy'"))[0];
   // The whole invocation: the watcher lookup, the proposal expiry, the
-  // candidate query, the refresh's 6, the attempt row and the cron_runs row.
-  assert.equal(attempt.d1_calls, 11, `the run recorded ${attempt.d1_calls} D1 calls`);
+  // candidate query, the refresh's 7 (its exemplars are thin posts, so one
+  // parent lookup), the attempt row and the cron_runs row.
+  assert.equal(attempt.d1_calls, 12, `the run recorded ${attempt.d1_calls} D1 calls`);
   assert.deepEqual(await s.d1("SELECT account FROM lens_background_attempts WHERE account LIKE 'acc-inel-%'"), []);
 });
 
@@ -489,4 +490,29 @@ test("a baseline recorded before 0031 gets its text back from x_posts, and the r
     ids,
     "written back in feed order",
   );
+});
+
+test("a thin reply is scored with the stored text of the post it replies to", async () => {
+  // Same fixture lens as the background test: on-topic words beside a
+  // shared word. "@carol" alone scores like the background; with its
+  // parent's text it is about agent harnesses.
+  const F = "football football football football ";
+  const ex = ["agent", "mcp", "harness", "agent mcp harness memory codex", "claude"].map((t) => F + t);
+  const ids = Array.from({ length: 10 }, (_, i) => String(9_940_000 + i));
+  await ingest("seed", ids.map((x, i) => post(x, ex[i % ex.length])));
+  await background("parentacct", ["recipe", "agent", "recipe recipe", "football", "claude"].map((t) => F + t));
+  await s.call("POST", "/lenses", { id: "parented", account: "parentacct", charter: "Agent harnesses.", exemplar_ids: ids });
+  await ingest("seed", [post("9941000", F + "agent mcp harness"), post("9941001", "@carol", { in_reply_to_id: "9941000" }), post("9941002", "@carol", { in_reply_to_id: "9949999" })]);
+
+  await s.control("label-reply", { mode: "garbage" }); // centroid labels
+  const { labels } = await s.call(
+    "POST",
+    "/lenses/parented/label",
+    { posts: [{ id: "9941001", text: "@carol", author_handle: "b" }, { id: "9941002", text: "@carol", author_handle: "b" }] },
+    { token: "ingest" },
+  );
+  await s.control("label-reply", { mode: "echo" });
+  assert.equal(labels[0].action, "open", `with its parent: ${JSON.stringify(labels[0])}`);
+  assert.notEqual(labels[1].action, "open", `parent not stored: ${JSON.stringify(labels[1])}`);
+  assert.ok(labels[0].taste > labels[1].taste);
 });

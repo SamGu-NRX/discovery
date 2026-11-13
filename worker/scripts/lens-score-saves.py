@@ -62,11 +62,17 @@ def is_thin(text):
     return len(words) < THIN_WORDS or len("".join(URL.findall(text))) * 2 > len(text.strip())
 
 
+MD_LINK = re.compile(r"\[([^\]]*)\]\([^)]*\)")
+
+
 def first_paragraph(text):
-    for block in re.split(r"\n\s*\n", text or ""):
-        clean = re.sub(r"\s+", " ", re.sub(r"!\[[^\]]*\]\([^)]*\)", " ", re.sub(r"<[^>]+>", " ", block))).strip()
-        if len(re.findall(r"[^\W\d_]", URL.sub("", clean))) >= 40:
-            return clean[:600]
+    """firstParagraph of src/lens-text.ts: only the first 20,000 characters;
+    a markdown link keeps its text, but its letters do not count as prose."""
+    for block in re.split(r"\n\s*\n", (text or "")[:20_000]):
+        tidy = re.sub(r"!\[[^\]]*\]\([^)]*\)", " ", re.sub(r"<[^>]+>", " ", block))
+        if len(re.findall(r"[^\W\d_]", URL.sub("", MD_LINK.sub(" ", tidy)))) < 40:
+            continue
+        return re.sub(r"\s+", " ", MD_LINK.sub(r"\1", tidy)).strip()[:600]
     return None
 
 
@@ -90,15 +96,74 @@ def linked_context(path):
             body.append(nxt)
         paragraph = first_paragraph("\n".join(body))
         if title or paragraph:
-            return "\n\n".join(p for p in (title, paragraph) if p)
+            return title or None, paragraph
     return None
 
 
-def with_link(path, text):
+def blocks(path):
+    """The raw file's [MARKER] sections, as (marker, rest of header line, text)."""
+    out, cur = [], None
+    for line in open(path, encoding="utf-8").read().splitlines():
+        m = re.match(r"^\[([A-Z0-9 ]+)\](.*)$", line)
+        if m:
+            cur = [m.group(1), m.group(2).strip(), []]
+            out.append(cur)
+        elif line.startswith("## LINKED "):
+            cur = None
+        elif cur is not None:
+            cur[2].append(line)
+    return [(k, rest, "\n".join(t).strip()) for k, rest, t in out]
+
+
+def parent_text(path, save_id):
+    """The post the save replies to: [PARENT POST TEXT] (another author), else
+    the author's own thread post just before the save (the newest one with a
+    smaller id), as the bundle's thread gives the Worker."""
+    bs = blocks(path)
+    for k, _, t in bs:
+        if k == "PARENT POST TEXT" and t:
+            return t
+    earlier = []
+    for i, (k, _, t) in enumerate(bs):
+        if k == "THREAD POST URL":
+            m = re.search(r"status/(\d+)", t)
+            text = bs[i + 2][2] if i + 2 < len(bs) and bs[i + 2][0] == "THREAD POST TEXT" else ""
+            if m and int(m.group(1)) < int(save_id) and text:
+                earlier.append((int(m.group(1)), text))
+    return max(earlier)[1] if earlier else None
+
+
+def image_texts(path):
+    """The text in the save's own images ([IMAGE TEXT n]), in order."""
+    return [t for k, _, t in blocks(path) if re.fullmatch(r"IMAGE TEXT \d+", k) and t]
+
+
+PART_MAX, TITLE_MAX, COMPOSED_MAX = 600, 200, 2_000
+FULL = ("parent", "images", "link")
+
+
+def with_context(path, text, save_id, parts):
+    """composeText of src/lens-text.ts: for a thin post, the parent, the
+    images' text and the link's title and paragraph, each trimmed and cut to
+    600 characters (a title to 200), the whole cut to 2,000."""
     if not is_thin(text):
         return text
-    ctx = linked_context(path)
-    return f"{text}\n\n{ctx}" if ctx else text
+    cut = lambda s, n: (s or "").strip()[:n]
+    out = [text]
+    if "parent" in parts:
+        out.append(cut(parent_text(path, save_id), PART_MAX))
+    if "images" in parts:
+        out.append(cut("\n".join(image_texts(path)), PART_MAX))
+    if "link" in parts:
+        ctx = linked_context(path)
+        if ctx:
+            title, para = ctx
+            out += [cut(title, TITLE_MAX), cut(para, PART_MAX)]
+    return "\n\n".join(p for p in out if p and p.strip())[:COMPOSED_MAX]
+
+
+def with_link(path, text, save_id=None):
+    return with_context(path, text, save_id, ("link",))
 
 
 def topics_by_save(path):
@@ -114,6 +179,7 @@ oct_topics = topics_by_save(oct_findings)
 nov_topics = topics_by_save(nov_findings)
 exemplars = {}
 exemplars_linked = {}
+exemplars_full = {}
 for f in os.listdir(raw_oct):
     sid = f.split(".")[0]
     if oct_topics.get(sid, set()) & HARNESS_TOPICS:
@@ -121,6 +187,7 @@ for f in os.listdir(raw_oct):
         if t:
             exemplars[sid] = t
             exemplars_linked[sid] = with_link(os.path.join(raw_oct, f), t)
+            exemplars_full[sid] = with_context(os.path.join(raw_oct, f), t, sid, FULL)
 
 disp = {}
 for line in open(nov_notes, encoding="utf-8"):
@@ -129,11 +196,13 @@ for line in open(nov_notes, encoding="utf-8"):
         disp[m.group(1)] = {"handle": m.group(2), "kept": m.group(3) == "kept"}
 saves = {}
 saves_linked = {}
+saves_full = {}
 for f in os.listdir(raw_nov):
     sid = f.split(".")[0]
     if sid in disp:
         saves[sid] = post_text(os.path.join(raw_nov, f))
         saves_linked[sid] = with_link(os.path.join(raw_nov, f), saves[sid])
+        saves_full[sid] = with_context(os.path.join(raw_nov, f), saves[sid], sid, FULL)
 
 model = TextEmbedding("BAAI/bge-base-en-v1.5", threads=2)
 unit = lambda m: m / np.linalg.norm(m, axis=-1, keepdims=True)
@@ -143,6 +212,8 @@ EX = unit(np.array(list(model.embed([exemplars[i] for i in ex_ids], batch_size=3
 SV = unit(np.array(list(model.embed([saves[i] for i in sv_ids], batch_size=32))))
 EXL = unit(np.array(list(model.embed([exemplars_linked[i] for i in ex_ids], batch_size=32))))
 SVL = unit(np.array(list(model.embed([saves_linked[i] for i in sv_ids], batch_size=32))))
+EXF = unit(np.array(list(model.embed([exemplars_full[i] for i in ex_ids], batch_size=32))))
+SVF = unit(np.array(list(model.embed([saves_full[i] for i in sv_ids], batch_size=32))))
 bg = unit(np.load(bg_path)).mean(axis=0)
 thin = [s for s in sv_ids if saves_linked[s] != saves[s]]
 
@@ -165,9 +236,10 @@ report = {
     "charter": CHARTER,
     "exemplars": {"count": len(ex_ids), "source": "Oct 26 saves whose findings carry a harness topic", "ids": ex_ids},
     "saves": {"scored": len(sv_ids), "without_post_text": [s for s in saves if not saves[s]], "kept": int(kept.sum()), "kept_with_harness_topic": int(harness.sum()),
-              "thin_with_link_context": len(thin), "thin_exemplars_with_link_context": sum(exemplars_linked[i] != exemplars[i] for i in ex_ids)},
+              "thin_with_link_context": len(thin), "thin_exemplars_with_link_context": sum(exemplars_linked[i] != exemplars[i] for i in ex_ids),
+              "thin_with_any_context": sum(saves_full[s] != saves[s] for s in sv_ids), "thin_exemplars_with_any_context": sum(exemplars_full[i] != exemplars[i] for i in ex_ids)},
 }
-for name, ex, sv in [("raw", EX, SV), ("centered", unit(EX - bg), unit(SV - bg)), ("centered_with_links", unit(EXL - bg), unit(SVL - bg))]:
+for name, ex, sv in [("raw", EX, SV), ("centered", unit(EX - bg), unit(SV - bg)), ("centered_with_links", unit(EXL - bg), unit(SVL - bg)), ("centered_with_context", unit(EXF - bg), unit(SVF - bg))]:
     c = unit(ex.mean(axis=0))
     ec = np.sort(ex @ c)
     open_at, glance_at = float(np.median(ec)), float(ec[int(np.floor(0.1 * (len(ec) - 1)))])

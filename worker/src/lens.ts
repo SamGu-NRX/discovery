@@ -7,7 +7,7 @@
 
 import { fail, HttpError, readJson, str } from "./http";
 import type { CountedStatement, LensEnv } from "./lens-budget";
-import { composeText, isThin, linkContext, readBundle } from "./lens-text";
+import { composeText, imageTexts, isThin, linkContext, readBundle, threadParent } from "./lens-text";
 import { centered, checkVectors, dot, isVector, meanOf, parseStoredVector, unit, VectorError } from "./lens-vec";
 import { EMBED_MODEL } from "./x";
 
@@ -231,12 +231,33 @@ async function storedBundles(env: LensEnv, ids: string[]): Promise<Map<string, u
   return out;
 }
 
+// The text of the post each of `ids` replies to, for those whose parent the
+// Worker stores in x_posts. One D1 call.
+async function parentTexts(env: LensEnv, ids: string[]): Promise<Map<string, string>> {
+  if (!ids.length) return new Map();
+  const { results } = await env.db
+    .prepare(
+      `SELECT p.id, parent.text FROM x_posts p JOIN x_posts parent ON parent.id = p.in_reply_to_id
+       WHERE p.id IN (SELECT value FROM json_each(?1)) AND length(parent.text) > 0`,
+    )
+    .bind(JSON.stringify(ids))
+    .all<{ id: string; text: string }>();
+  return new Map(results.map((r) => [r.id, r.text]));
+}
+
 // What each post embeds as: its own text, or for a post with little text of
-// its own, that plus its linked page's title and first paragraph
-// (src/lens-text.ts).
+// its own, that plus its parent post, the text in its images and its linked
+// page's title and first paragraph (src/lens-text.ts). The parent comes from
+// x_posts, else from the bundle's thread; images and link from the bundle.
 async function embeddingTexts(env: LensEnv, posts: { id: string; text: string }[]): Promise<string[]> {
-  const bundles = await storedBundles(env, posts.filter((p) => isThin(p.text)).map((p) => p.id));
-  return posts.map((p) => (bundles.has(p.id) ? composeText(p.text, linkContext(bundles.get(p.id))) : p.text));
+  const thin = posts.filter((p) => isThin(p.text)).map((p) => p.id);
+  const parents = await parentTexts(env, thin);
+  const bundles = await storedBundles(env, thin);
+  return posts.map((p) => {
+    if (!isThin(p.text)) return p.text;
+    const bundle = bundles.get(p.id) ?? null;
+    return composeText(p.text, { parent: parents.get(p.id) ?? threadParent(bundle), images: imageTexts(bundle, p.id), link: linkContext(bundle) });
+  });
 }
 
 // Embeds every distinct text of `groups` once, however many groups share it,

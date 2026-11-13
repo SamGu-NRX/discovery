@@ -133,7 +133,16 @@ The lens misses seven harness saves. Two of them have little post text. "@theo" 
 | open, before / after | 17 / 17 | 0.94 / 0.94 | 0.16 / 0.16 | 0.82 / 0.82 | 0.30 / 0.30 |
 | near, before / after | 86 / 89 | 0.81 / 0.80 | 0.71 / 0.72 | 0.47 / 0.45 | 0.85 / 0.85 |
 
-The AUC of kept saves against skipped ones moves from 0.80 to 0.82, and harness against the rest stays at 0.83. Link context reaches neither thin miss. Reaching them would take the parent post's text and a screenshot's text, which `lens.ts` does not add.
+The AUC of kept saves against skipped ones moves from 0.80 to 0.82, and harness against the rest stays at 0.83. Link context reaches neither thin miss.
+
+**Thin posts with parent and image text.** A thin post now also embeds with the post it replies to and the text in its own images. The parent comes from `x_posts`, or else from the bundle's thread; the image text comes from the bundle's vision reads. Each added part is cut to 600 characters, a title to 200, and the whole to 2,000. The re-score takes the parent and image text from the archive's raw files. 36 of the 170 saves got some context, and 2 of the 32 exemplars did. Mean subtracted, link context only against all three:
+
+| | Labeled | Precision vs kept | Recall of kept | Precision vs harness | Recall of harness |
+|---|---|---|---|---|---|
+| open, links / all | 17 / 17 | 0.94 / 0.94 | 0.16 / 0.16 | 0.82 / 0.82 | 0.30 / 0.30 |
+| near, links / all | 89 / 100 | 0.80 / 0.80 | 0.72 / 0.82 | 0.45 / 0.42 | 0.85 / 0.89 |
+
+The AUC of kept against skipped moves from 0.82 to 0.84, and harness against the rest from 0.83 to 0.84. "@theo" is now reached through its screenshot's text. "use hex by @kitlangton" rises from -0.01 to 0.27, still below `glance_at` (0.43): its parent asks for an open-source speech-to-text app, not anything about agent harnesses.
 
 ## Not yet checked
 
