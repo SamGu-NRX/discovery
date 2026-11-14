@@ -226,7 +226,8 @@ export async function runJobs(jobs, limits, io) {
 async function gate(run, io, operation = null) {
   if (io.stopRequested()) throw new RunStopped("stopped", stopDetail(io));
   if (run.requests >= run.limits.runCap) throw new RunStopped("cap", `reached the run cap of ${run.limits.runCap} requests`);
-  if (await io.paused()) throw new RunStopped("paused", "the extension is paused (an X signal in the last 24 hours)");
+  const paused = await io.paused();
+  if (paused) throw new RunStopped("paused", pausedDetail(paused));
   if (operation) await keepRateReserve(run, io, operation);
   if (run.lastRequestAt !== null) {
     const gap = run.limits.minGapMs + io.random() * run.limits.jitterMs;
@@ -235,7 +236,8 @@ async function gate(run, io, operation = null) {
   }
   // A signal can arrive while waiting, from this tab or any other.
   if (io.stopRequested()) throw new RunStopped("stopped", stopDetail(io));
-  if (await io.paused()) throw new RunStopped("paused", "the extension was paused while waiting");
+  const pausedNow = await io.paused();
+  if (pausedNow) throw new RunStopped("paused", `${pausedDetail(pausedNow)}, while waiting`);
   run.requests += 1;
   run.lastRequestAt = io.now();
 }
@@ -600,7 +602,19 @@ export function linkTargets(post, max) {
       continue;
     }
     if (/(^|\.)(x\.com|twitter\.com|t\.co)$/i.test(u.hostname)) continue;
-    const target = `${u.hostname.replace(/^www\./, "")}${u.pathname.replace(/\/$/, "")}`;
+    // The query string is part of what a link points at: without it,
+    // url:"youtube.com/watch" matched every YouTube post (the archive lead,
+    // Nov 14). Share-tracking parameters differ per copy of a link, not per
+    // page, so they are dropped; no run has measured whether X's url: search
+    // itself ignores them. The fragment never reaches the server, so it goes.
+    for (const key of [...u.searchParams.keys()]) {
+      if (/^(utm_.*|fbclid|gclid|igshid|mc_cid|mc_eid|si|ref_src)$/i.test(key)) u.searchParams.delete(key);
+    }
+    const target = `${u.hostname.replace(/^www\./, "")}${u.pathname.replace(/\/$/, "")}${u.search}`;
+    // searchUrl refuses a query over 200 characters, and that refusal would
+    // stop the run as a failed page load and pause for a day; such a link is
+    // not searched.
+    if (`url:"${target}"`.length > 200) continue;
     if (!out.includes(target)) out.push(target);
     if (out.length >= max) break;
   }
@@ -702,6 +716,12 @@ async function searchByPage(run, io, s, result) {
   const next = cursorsOf("SearchTimeline", verdict.json).find((c) => c.type === "Bottom");
   result.exhausted = !next || capture.primary.length === 0;
   result.morePages = !result.exhausted;
+}
+
+// io.paused() answers the pause's description (lib/store.js pauseReason)
+// or anything truthy.
+function pausedDetail(paused) {
+  return typeof paused === "string" ? `the extension is ${paused}` : "the extension is paused";
 }
 
 // The page passes the reason as a string; anything else is the old "Sam

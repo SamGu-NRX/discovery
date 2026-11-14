@@ -220,7 +220,7 @@ export async function startSession(trigger) {
   if (!reservation.ok) {
     s.finishing = true;
     s.statusDecided = true;
-    if (reservation.pauseUntil) await extendPause(reservation.pauseUntil);
+    if (reservation.pauseUntil) await extendPause(reservation.pauseUntil, "worker");
     const blocked = X_SIGNALS.has(s.stop?.reason);
     try {
       // A back-off signal this session took while reserving still has to be
@@ -266,7 +266,7 @@ async function run(s) {
     // The stop first, so the window's closing is not taken for the reason.
     requestStop("error", `X took ${s.xRequests} requests without showing a timeline (limit ${PROBATION_REQUEST_CAP})`);
     chrome.windows.remove(s.windowId).catch(() => {});
-    extendPause().catch(() => {});
+    extendPause(undefined, "error", `X took ${s.xRequests} requests without showing a timeline`).catch(() => {});
   };
   chrome.webRequest.onBeforeRequest.addListener(onRequest, { urls: ["https://x.com/*", "https://*.x.com/*"] });
 
@@ -348,7 +348,7 @@ async function finish(s, outcome) {
     ...s.notes,
   ].join("; ").slice(0, 1000);
 
-  if (status !== "ok") await extendPause();
+  if (status !== "ok") await extendPause(undefined, status, outcome.detail);
   let reported = false;
   try {
     const answer = await postStatus(s.config, { account, session_id: s.id, status, detail });
@@ -357,7 +357,7 @@ async function finish(s, outcome) {
     // after it does not send the status again.
     await publish(s, outcome, { final: true, statusSent: true });
     // The Worker's view of the account's pause, which may be longer.
-    if (pauseFrom(answer)) await extendPause(pauseFrom(answer));
+    if (pauseFrom(answer)) await extendPause(pauseFrom(answer), "worker");
   } catch (err) {
     if (reported) throw err;
     await recordProblem("worker", `session status not reported: ${err.message}`);
@@ -442,7 +442,7 @@ async function recoverRecord(record) {
   await chrome.storage.session.set({ activeSession: settled });
   const status = statusFor(outcome.reason);
   const detail = `${outcome.reason}: ${outcome.detail}; screens=${record.screens ?? 0} posts=${record.posts ?? 0}`.slice(0, 1000);
-  if (status !== "ok") await extendPause();
+  if (status !== "ok") await extendPause(undefined, status, outcome.detail);
   const config = await loadConfig();
   const account = record.reservedAccount ?? record.account ?? (await getLocal("lastAccount", null)) ?? config.account;
   const answer = await postStatus(config, { account, session_id: record.id, status, detail }).catch(() => null);
@@ -450,7 +450,7 @@ async function recoverRecord(record) {
   // The receipt first; without one the record stays, marked for the popup,
   // and the next start or restart reports it again.
   await chrome.storage.session.set({ activeSession: { ...settled, ...(reported ? { statusSent: true } : { awaitingReport: true }) } });
-  if (pauseFrom(answer)) await extendPause(pauseFrom(answer));
+  if (pauseFrom(answer)) await extendPause(pauseFrom(answer), "worker");
   await setLocal({
     lastSession: { ...record, endedAt: new Date().toISOString(), status, reason: outcome.reason, detail, reported },
   });
@@ -604,7 +604,7 @@ async function inspect(s) {
     if (!BLOCKING.has(s.stop?.reason)) s.stop = blocker;
     await publish(s);
     // Survives a browser restart, which clears the record above.
-    await extendPause();
+    await extendPause(undefined, blocker.reason, blocker.detail);
     throw new StopSession(s.stop.reason, s.stop.detail);
   }
   if (seen.account && !s.account) {

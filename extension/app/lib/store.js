@@ -108,14 +108,16 @@ const pauseLock = createLock();
 // is made, before any await, so a signal handled in this worker is visible to
 // pausedOrPausing() even while its write is still in flight.
 let pausesInFlight = 0;
-// Each call is logged with its reason (pauseLog, the last 50), so the fetch
-// page's "Clear error pause" can tell a pause from failed requests apart
-// from one X asked for (lib/unpause.js).
-export function extendPause(until = new Date(Date.now() + PAUSE_MS).toISOString(), reason = "unrecorded") {
+// Each call is logged with its reason and what happened (pauseLog, the last
+// 50), so the fetch page's "Clear error pause" can tell a pause from failed
+// requests apart from one X asked for (lib/unpause.js), and every refusal
+// can say which it was (pauseReason).
+export function extendPause(until = new Date(Date.now() + PAUSE_MS).toISOString(), reason = "unrecorded", detail = null) {
   pausesInFlight += 1;
   return pauseLock(async () => {
     const existing = await getPauseUntil();
-    const log = [...(await getLocal("pauseLog", [])), { at: new Date().toISOString(), until, reason }].slice(-50);
+    const entry = { at: new Date().toISOString(), until, reason, ...(detail ? { detail: String(detail).slice(0, 200) } : {}) };
+    const log = [...(await getLocal("pauseLog", [])), entry].slice(-50);
     await setLocal({ pauseLog: log, ...(!existing || Date.parse(existing) < Date.parse(until) ? { pauseUntil: until } : {}) });
   }).finally(() => {
     pausesInFlight -= 1;
@@ -147,6 +149,27 @@ export async function pendingPageSignals() {
     : Object.keys(await chrome.storage.local.get(null));
   const pending = keys.filter((key) => key.startsWith(PAGE_SIGNAL_PREFIX));
   return pending.length ? chrome.storage.local.get(pending) : {};
+}
+
+// What the current pause is, for every message that refuses or stops work
+// because of it, or null when nothing holds. Every pause used to be reported
+// as "after an X signal", including those from a failed request (Nov 12 to
+// 14: a full disk, a starved CPU, a search page that never loaded), which
+// sent the archive lead looking for an X signal that was never there.
+const PAUSE_REASONS = {
+  rate_limited: "X rate-limited a request",
+  login_wall: "X showed a login wall",
+  challenge: "X showed a challenge",
+  error: "a request failed outright (not a signal from X)",
+  worker: "the Worker asked for a pause",
+};
+export async function pauseReason() {
+  if (pausesInFlight > 0) return "pausing: a pause is being written";
+  const until = await getPauseUntil();
+  if (!until) return Object.keys(await pendingPageSignals()).length ? "pausing: an X page reported a signal that is still being handled" : null;
+  const entry = [...(await getLocal("pauseLog", []))].reverse().find((e) => Date.parse(e.until) > Date.now());
+  const what = (entry && PAUSE_REASONS[entry.reason]) ?? "reason not recorded";
+  return `paused until ${until}: ${what}${entry?.detail ? ` (${entry.detail})` : ""}`;
 }
 
 // True while sessions are paused, a pause is being written, or a page has

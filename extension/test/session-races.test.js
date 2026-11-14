@@ -1062,6 +1062,27 @@ test("a worker killed while removing a refused session's record reports nothing 
   assert.equal(fake.session.get("activeSession"), undefined);
 });
 
+// Nov 13–14: with no ingest token, the kept back-off report rewrote the
+// popup's Problem line every minute for 24 hours.
+test("a back-off report a profile cannot send waits without a problem line, and is dropped when its 24 hours are over", async () => {
+  await reset();
+  const { ingestToken, ...noToken } = CONFIG;
+  const report = { account: "owner", session_id: "p", status: "rate_limited", detail: "ViewerBadgeCounts answered HTTP 429" };
+  await chrome.storage.local.set({ config: noToken, pendingBackOff: report, backOffReportedUntil: new Date(Date.now() + 3600_000).toISOString(), lastProblem: null });
+  const flushed = async () => {
+    chrome.alarms.onAlarm.fire({ name: "flush" });
+    for (let i = 0; i < 20; i += 1) await new Promise((resolve) => realSetTimeout(resolve, 5));
+  };
+  await flushed();
+  assert.equal(fake.local.get("lastProblem"), null, "no problem line for a report that cannot be sent");
+  assert.deepEqual(fake.local.get("pendingBackOff"), report, "kept while its pause lasts");
+
+  await chrome.storage.local.set({ backOffReportedUntil: new Date(Date.now() - 1000).toISOString() });
+  await flushed();
+  assert.equal(fake.local.get("pendingBackOff"), null, "dropped once the pause it describes is over");
+  await chrome.storage.local.set({ config: CONFIG });
+});
+
 // Found in an install-readiness review of 99b794b: loadConfig dropped
 // modeChangedAt, so this startup cleanup never ran. It imports a second copy
 // of background.js, which adds listeners, so it stays the last test here.

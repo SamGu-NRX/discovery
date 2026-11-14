@@ -554,8 +554,16 @@ test("the fetch page's Clear error pause lifts a pause made only of failed reque
   assert.match(await press(), /pause not cleared: the pause includes rate_limited/);
   assert.equal((await worker.evaluate(() => chrome.storage.local.get("pauseUntil"))).pauseUntil, until);
 
-  // Failed requests only: cleared, and the clear is logged.
-  await set({ pauseUntil: until, pauseLog: [{ at: new Date().toISOString(), until, reason: "error" }], pendingBackOff: { status: "error", detail: "fetch mode: TweetDetail request failed: signal timed out" } });
+  // Failed requests only. A Start refused under it says so, not "an X
+  // signal" (Nov 14: the archive lead read every pause as one from X).
+  await set({ pauseUntil: until, pauseLog: [{ at: new Date().toISOString(), until, reason: "error", detail: "search page for url:\"a.example/b\" failed" }], pendingBackOff: { status: "error", detail: "fetch mode: TweetDetail request failed: signal timed out" } });
+  await page.fill("#job", JSON.stringify({ jobs: [{ type: "bookmarks_until", boundary: "1" }] }));
+  await page.click("#start");
+  await page.waitForFunction(() => /The extension is/.test(document.getElementById("status").textContent));
+  const refused = await page.textContent("#status");
+  assert.match(refused, /^The extension is paused until .*: a request failed outright \(not a signal from X\) \(search page for url:"a\.example\/b" failed\)\.$/);
+  assert.doesNotMatch(refused, /after an X signal/);
+  // Cleared, and the clear is logged.
   assert.match(await press(), /pause cleared \(1 pause record, all failed requests\)/);
   const after = await worker.evaluate(() => chrome.storage.local.get(["pauseUntil", "pendingBackOff", "pauseClears"]));
   assert.equal(after.pauseUntil, undefined);

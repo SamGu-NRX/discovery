@@ -526,6 +526,40 @@ test("search page loads are at least searchPageGapMs apart, 60 s by default, and
   assert.equal(parseJobs({ limits: { searchPageLoadsPerWindow: 30 }, jobs: [job] }).limits.searchPageLoadsPerWindow, 8, "30 per window is no longer allowed");
 });
 
+test("link searches keep the query string, drop share tracking, and skip a link too long to search", async () => {
+  const long = `https://example.com/${"p".repeat(190)}`;
+  const focal = post("300", "op", { urls: ["https://www.youtube.com/watch?v=AAA&si=share1", "https://youtube.com/watch?v=BBB&utm_source=x#t=10", long] });
+  const answer = (operation) => (operation === "TweetDetail" ? detail([{ type: "TimelineAddEntries", entries: [itemEntry(focal, "9000")] }]) : searchPage([], null));
+  const g = harness(answer);
+  const result = await run({ jobs: [{ type: "context", ids: ["300"], rankings: ["Relevance"], branches: false, quotes: false, mentions: false, conversation: false, upstream: false }] }, g);
+  assert.equal(result.stop, null, JSON.stringify(result.stop));
+  const queries = [...new Set(g.sends.filter((x) => x.page).map((x) => x.variables.rawQuery))];
+  assert.deepEqual(queries, ['url:"youtube.com/watch?v=AAA"', 'url:"youtube.com/watch?v=BBB"'], "each video its own search; the long link is not searched");
+});
+
+test("a search that matches nothing is zero results and the run goes on; a search page X never answers stops the run and pauses", async () => {
+  // On Nov 14 the archive's 397 search page loads came back 134 times with no
+  // posts (all 200, recorded as zero); the one that paused (13:35, Top) got
+  // no SearchTimeline answer at all, though the same query on Latest had 3.
+  const ids = ["500", "501"];
+  const job = { type: "context", ids, rankings: ["Relevance"], branches: false, mentions: false, links: false, conversation: false, upstream: false };
+  const detailFor = (v) => detail([{ type: "TimelineAddEntries", entries: [itemEntry(post(v.focalTweetId, "op"), "9000")] }]);
+  const empty = harness((operation, v) => (operation === "TweetDetail" ? detailFor(v) : searchPage([], null)));
+  const none = await run({ jobs: [job] }, empty);
+  assert.equal(none.stop, null);
+  assert.deepEqual(ids.map((id) => none.context[id].quotes.quoted_tweet_id.Latest.ids), [[], []], "both searched, both zero");
+  assert.deepEqual(empty.signals, []);
+
+  const silent = harness((operation, v) => {
+    if (operation === "TweetDetail") return detailFor(v);
+    throw new Error("X loaded no search results within 15 s");
+  });
+  const stopped = await run({ jobs: [job] }, silent);
+  assert.equal(stopped.stop.reason, "error");
+  assert.match(stopped.stop.detail, /search page for quoted_tweet_id:500 failed/);
+  assert.equal(silent.signals.length, 1, "a page that never answered pauses");
+});
+
 test("a new_saves run cut short still moves the boundary past the saves it finished, oldest first", async () => {
   // Bookmarks:-, Bookmarks:c1, TweetDetail:5, TweetDetail:4, then Stop.
   const log = [];

@@ -5,7 +5,7 @@
 
 import { FetchRefused, parseTemplate } from "../lib/fetchops.js";
 import { parseJobs, runJobs } from "../lib/fetchrun.js";
-import { getLocal, loadConfig, pausedOrPausing } from "../lib/store.js";
+import { getLocal, loadConfig, pauseReason } from "../lib/store.js";
 import { blankTabSettled } from "../lib/tabs.js";
 import { doneRepolls, postStatus, reserveSession } from "../lib/worker-api.js";
 import { bookmarksUrl, historyBookmarksUrl, isMintedXUrl, loadedOnX, permalinkUrl, searchUrl, xPath } from "../lib/xurl.js";
@@ -191,7 +191,8 @@ async function start() {
 // between this check and the run claiming the account.
 async function refuseToStart(owner) {
   if (running) return "A fetch run is already going.";
-  if (await pausedOrPausing()) return "The extension is paused after an X signal; see the popup.";
+  const paused = await pauseReason();
+  if (paused) return `The extension is ${paused}.`;
   // The Worker files batches under an account, so a run that sends them
   // needs it before it starts; a bundle-only run reads it from its own tab.
   if ($("to-worker").checked && !(await getLocal("lastAccount", null))) return "Open x.com once while logged in, so the account is known.";
@@ -236,7 +237,7 @@ async function run({ jobs, limits }, owner) {
       now: () => Date.now(),
       sleep,
       random: Math.random,
-      paused: () => pausedOrPausing(),
+      paused: () => pauseReason(),
       stopRequested: () => r.stop,
       prime: async (kind, arg) => {
         await prime(r, kind, arg);

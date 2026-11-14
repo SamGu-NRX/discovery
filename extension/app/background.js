@@ -26,6 +26,7 @@ import {
   loadConfig,
   localDay,
   PAGE_SIGNAL_PREFIX,
+  pauseReason,
   pausedOrPausing,
   pendingPageSignals,
   recordProblem,
@@ -309,7 +310,7 @@ async function onBackOff(tabId, reason, detail) {
   // Every X signal pauses sessions in chrome.storage.local before this
   // returns. A session's own record of the signal lives in session storage,
   // which a browser restart clears before the session could write its pause.
-  await extendPause(undefined, reason);
+  await extendPause(undefined, reason, detail);
   if (accepted) return;
   await backOffLock(async () => {
     await recordProblem("x", detail);
@@ -331,10 +332,23 @@ async function onBackOff(tabId, reason, detail) {
 async function sendPendingBackOff() {
   const report = await getLocal("pendingBackOff", null);
   if (!report) return;
+  // The report describes a pause that ends at backOffReportedUntil; past it
+  // there is nothing left to report. A profile with no Worker connection
+  // (Sam's @sdotgu Chrome has only the intake token, which may not call
+  // /ingest/x/status) can never send it: it waits without a problem line.
+  // Recording the failure every minute overwrote the popup's Problem line
+  // from Nov 13 to 14, hiding the daily run's own problems.
+  const until = await getLocal("backOffReportedUntil", null);
+  if (until && Date.parse(until) <= Date.now()) {
+    await setLocal({ pendingBackOff: null });
+    return;
+  }
+  const config = await loadConfig();
+  if (!config.workerUrl || !config.ingestToken) return;
   try {
     const answer = await postStatus(await loadConfig(), report);
     await setLocal({ pendingBackOff: null });
-    if (pauseFrom(answer)) await extendPause(pauseFrom(answer));
+    if (pauseFrom(answer)) await extendPause(pauseFrom(answer), "worker");
   } catch (err) {
     await recordProblem("worker", `back-off status not reported yet: ${err.message}`);
   }
@@ -398,7 +412,8 @@ async function setDailyState(account, state) {
 // fetch.html counts as its run going even when no request is in flight;
 // the daily run never starts beside it.
 async function dailyBusy() {
-  if (await pausedOrPausing()) return `the extension is paused after an X signal (until ${await getLocal("pauseUntil", "a pending signal is handled")})`;
+  const paused = await pauseReason();
+  if (paused) return `the extension is ${paused}`;
   if (sessionInfo() !== null) return "a capture session is running";
   if (await fetchRunHeldAnywhere()) return "a fetch run is going (the archive's)";
   const pages = await chrome.runtime.getContexts({ contextTypes: ["TAB"] });
