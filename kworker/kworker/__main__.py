@@ -53,6 +53,11 @@ def main(argv: list[str] | None = None) -> int:
         except jobs.DiskLow as e:
             print(json.dumps({"stopped": str(e)}))
             return 3
+        except jobs.Blocked as e:
+            # The scheduled task's log and its last result show this; the
+            # saves stay queued, so the digest counts them as pending.
+            print(json.dumps({"stopped": str(e)}))
+            return 4
         print(json.dumps({"jobs": len(done), "failed": sum(1 for d in done if d["state"] == "failed")}))
         return 1 if any(d["state"] == "failed" for d in done) else 0
 

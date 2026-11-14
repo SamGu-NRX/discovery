@@ -234,11 +234,18 @@ For kworker's S3 path, create an R2 API token scoped to Object Read & Write on `
 
 ### Credentials on the Zephyrus
 
-kworker reads two generic credentials from Windows Credential Manager when the matching environment variable is unset. They never enter the repo, D1, R2, a log or a message.
+kworker reads three generic credentials from Windows Credential Manager when the matching environment variable is unset. They never enter the repo, D1, R2, a log or a message.
 
 | Target name | User name | Password | Replaces |
 | --- | --- | --- | --- |
 | `discovery-knowledge-token` | anything (`kworker`) | the production `KNOWLEDGE_TOKEN` | `KNOWLEDGE_TOKEN` |
 | `discovery-r2-s3` | the R2 API token's access key id | its secret access key | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` |
+| `discovery-cliproxy` | the CLIProxyAPI gateway's URL (`http://127.0.0.1:8317`) | its key | `CLIPROXY_URL`/`CLIPROXY_KEY` (or `ANTHROPIC_BASE_URL`/`ANTHROPIC_AUTH_TOKEN`) |
 
 Add one in Control Panel, Credential Manager, Windows Credentials, "Add a generic credential", or from a terminal with `cmdkey /generic:discovery-knowledge-token /user:kworker /pass` (it prompts for the password, so the token never sits in shell history). `R2_S3_ENDPOINT` (`https://<account id>.r2.cloudflarestorage.com`) is not secret and stays an environment variable.
+
+Claude Code sessions get the gateway from T3, which sets it in each provider instance's environment; the scheduled drain runs outside them and reads `discovery-cliproxy` instead. `python kworker\scripts\store-cliproxy-credential.py` copies it from `~/.t3/userdata/settings.json` (instance `claudeAgent_claude_pool`) without printing the key; run it again when the key changes.
+
+### When the drain cannot reach a model
+
+A save fails only for a problem with the save. Before claiming, `kworker run` checks that each model step the claimable kinds use (`jobs.STEPS`) has a capability this machine can use, and that the gateway answers `GET /v1/models` when the gateway is the only one. If not, it claims nothing, prints `{"stopped": "blocked before claiming: …"}` and exits 4, so the scheduled task's log and last result show it and the saves stay queued (pending in the digest). If every capability of a step fails mid-job for this machine's reasons (no settings, a refused connection, HTTP 401/403/404/408/429/5xx, a used-up quota), the job is handed back `queued` with the reason in `error`, and the drain stops with exit 4; the next scheduled run tries again. A capability that rejected the input (another HTTP 4xx, `max_tokens`, an answer that is not JSON) still fails the job.

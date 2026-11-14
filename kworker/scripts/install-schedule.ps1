@@ -3,7 +3,10 @@
 # Scheduler task that runs `kworker run` against production every 15
 # minutes. A run that is still going when the next one is due is left
 # alone (MultipleInstances IgnoreNew). kworker reads KNOWLEDGE_TOKEN from
-# the discovery-knowledge-token credential and stops below 15 GB free.
+# the discovery-knowledge-token credential, the gateway from discovery-cliproxy
+# (kworker\scripts\store-cliproxy-credential.py), and stops below 15 GB free.
+# A run that is blocked (no usable model, gateway down) exits 4 and claims
+# nothing, so LastTaskResult shows 4.
 #
 #   powershell -File kworker\scripts\install-schedule.ps1 -Ref mvp-loop
 #   powershell -File kworker\scripts\install-schedule.ps1 -Uninstall

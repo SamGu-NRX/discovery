@@ -9,7 +9,7 @@ import threading
 import time
 import traceback
 
-from . import bundle, gate, intake, links, media, video
+from . import bundle, gate, intake, links, media, models, video
 from .api import KError
 from .canon import canonical_url, url_hash
 from .config import Config
@@ -141,6 +141,60 @@ def check_disk(path: str | None = None) -> int:
     return free
 
 
+# The model steps each kind's handler runs through models.run: save gates
+# (gate.run_gate), bundle judges (bundle.assess), image and video read.
+STEPS = {"save": ["gate_band"], "link": [], "image": ["image_read", "image_second_read"], "video": ["video_read"], "bundle": ["save_verdict"]}
+
+
+class Blocked(RuntimeError):
+    """This machine cannot run the claimable kinds' model steps. The drain
+    claims nothing, so the saves stay queued and show as pending."""
+
+
+def _configured(cfg: Config, cap: dict) -> bool:
+    if not cap["enabled"]:
+        return False
+    if cap["runs_on"] == "worker":
+        return bool(cap.get("available"))
+    if cap["provider"] == "cliproxy":
+        return cfg.cliproxy
+    # The other kworker providers are local (fastembed, faster-whisper).
+    return True
+
+
+def gateway_reachable(cfg: Config) -> str | None:
+    """None when the gateway answers GET /v1/models with the key; else why not."""
+    import httpx
+
+    try:
+        r = httpx.get(f"{cfg.cliproxy_url}/v1/models", headers={"x-api-key": cfg.cliproxy_key, "authorization": f"Bearer {cfg.cliproxy_key}"}, timeout=15)
+    except httpx.HTTPError as e:
+        return f"the gateway at {cfg.cliproxy_url} did not answer ({type(e).__name__})"
+    if r.status_code != 200:
+        return f"the gateway at {cfg.cliproxy_url} answered GET /v1/models with HTTP {r.status_code}"
+    return None
+
+
+def preflight(ctx: Ctx, kinds: list[str], probe=gateway_reachable) -> tuple[list[str], bool]:
+    """Why the claimable kinds cannot run here, one line per step (empty when
+    every step has a capability this machine can use), and whether the
+    gateway was asked."""
+    problems = []
+    reach: str | None = None
+    probed = False
+    for step in dict.fromkeys(st for k in kinds for st in STEPS[k]):
+        usable = [c for c in ctx.api.capabilities(step) if _configured(ctx.cfg, c)]
+        if not usable:
+            problems.append(f"step {step} has no capability this machine can use (gateway settings: {'set' if ctx.cfg.cliproxy else 'missing'})")
+            continue
+        if all(c["runs_on"] == "kworker" and c["provider"] == "cliproxy" for c in usable):
+            if not probed:
+                reach, probed = probe(ctx.cfg), True
+            if reach:
+                problems.append(f"step {step}: {reach}")
+    return problems, probed
+
+
 def run_one(cfg: Config, kinds: list[str]) -> dict | None:
     """Claims and runs one job. None when nothing is claimable."""
     check_disk()
@@ -157,8 +211,13 @@ def run_one(cfg: Config, kinds: list[str]) -> dict | None:
         beat.start()
         t0 = time.monotonic()
         state, result, error = "done", None, None
+        down: models.ModelsDown | None = None
         try:
             result = HANDLERS[job["kind"]](ctx, payload)
+        except models.ModelsDown as e:
+            # Not the job's fault: hand it back still queued, and stop the
+            # drain; the next scheduled run tries again.
+            state, error, down = "queued", f"handed back: {type(e).__name__}: {e}"[:2000], e
         except Exception as e:  # noqa: BLE001 - any failure is recorded on the job, then the loop goes on
             state, error = "failed", f"{type(e).__name__}: {e}"[:2000]
             traceback.print_exc()
@@ -171,11 +230,20 @@ def run_one(cfg: Config, kinds: list[str]) -> dict | None:
         except KError as e:
             print(f"[kworker] could not complete {job['kind']} {job['key']}: {e}")
         print(f"[kworker] {job['kind']} {job['key'][:24]} {state} in {wall}s fetches={envelope['stats']['fetches']} model_calls={envelope['stats']['model_calls']}" + (f" error={error}" if error else ""))
+        if down is not None:
+            raise Blocked(f"models unreachable, {job['kind']} {job['key'][:24]} handed back: {down}") from down
         return {"job": job, "state": state, **envelope}
 
 
 def drain(cfg: Config, kinds: list[str] = KINDS, forever: bool = False, idle_s: float = 15.0) -> list[dict]:
-    """Runs jobs until none is claimable, or, with forever, keeps polling."""
+    """Runs jobs until none is claimable, or, with forever, keeps polling.
+    Raises Blocked, before claiming anything, when a model step of `kinds`
+    cannot run on this machine, and when the models stop answering mid-job."""
+    with job_ctx(cfg) as ctx:
+        problems, probed = preflight(ctx, kinds)
+    if problems:
+        raise Blocked("blocked before claiming: " + "; ".join(problems))
+    print(f"[kworker] preflight ok for {','.join(kinds)}" + (f": gateway {cfg.cliproxy_url} answered GET /v1/models" if probed else ""))
     done = []
     while True:
         r = run_one(cfg, kinds)

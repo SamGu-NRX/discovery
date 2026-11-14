@@ -78,13 +78,13 @@ def load() -> Config:
         else None
     )
     local = Path(os.environ.get("LOCALAPPDATA") or Path.home() / ".local" / "share")
+    cliproxy_url, cliproxy_key = _cliproxy()
     return Config(
         base_url=_need("KNOWLEDGE_URL").rstrip("/"),
         token=_token(),
         owner=_get("KWORKER_OWNER") or f"kworker@{socket.gethostname()}",
-        # The gateway Claude Code itself uses on this machine, unless overridden.
-        cliproxy_url=(_get("CLIPROXY_URL") or _get("ANTHROPIC_BASE_URL") or "").rstrip("/") or None,
-        cliproxy_key=_get("CLIPROXY_KEY") or _get("ANTHROPIC_AUTH_TOKEN"),
+        cliproxy_url=cliproxy_url,
+        cliproxy_key=cliproxy_key,
         s3=s3,
         large_via_worker=_get("KWORKER_LARGE_VIA_WORKER") == "1",
         cf_account_id=_get("CF_ACCOUNT_ID"),
@@ -108,6 +108,23 @@ def load() -> Config:
 # "Credentials on the Zephyrus".
 TOKEN_CREDENTIAL = "discovery-knowledge-token"
 R2_CREDENTIAL = "discovery-r2-s3"
+# The CLIProxyAPI gateway: user name the URL, password the key.
+CLIPROXY_CREDENTIAL = "discovery-cliproxy"
+
+
+def _cliproxy() -> tuple[str | None, str | None]:
+    """The gateway Claude Code uses on this machine. Claude Code's session
+    environment carries it (T3 sets it per provider instance); the Task
+    Scheduler's does not, so the scheduled drain reads the credential.
+    URL and key come from one source, never one from each."""
+    url = _get("CLIPROXY_URL") or _get("ANTHROPIC_BASE_URL")
+    key = _get("CLIPROXY_KEY") or _get("ANTHROPIC_AUTH_TOKEN")
+    if url and key:
+        return url.rstrip("/"), key
+    cred = wincred.read(CLIPROXY_CREDENTIAL)
+    if cred and cred[0] and cred[1]:
+        return cred[0].strip().rstrip("/"), cred[1]
+    return (url.rstrip("/") if url else None), key
 
 
 def _token() -> str:

@@ -72,12 +72,45 @@ class ModelUnavailable(RuntimeError):
     pass
 
 
+class Unreachable(ModelUnavailable):
+    """This machine could not reach a model: no configuration, a gateway
+    that is down or refuses the key, a quota used up. Nothing about the
+    input; the same call can succeed later."""
+
+
+class ModelsDown(ModelUnavailable):
+    """Every capability of a step failed for a reason of this machine's own
+    (Unreachable), none because of the input. jobs.run_one hands the job
+    back instead of failing it: on 2026-11-14 the scheduled drain had no
+    gateway settings and failed three saves that were fine."""
+
+
+# HTTP answers that say the model or gateway is unavailable, not that the
+# request was wrong: auth, unknown model, timeout, rate limit, server errors.
+_UNREACHABLE_HTTP = {401, 403, 404, 408, 429}
+
+
+def _unreachable(e: Exception) -> bool:
+    if isinstance(e, Unreachable):
+        return True
+    if isinstance(e, httpx.TransportError):  # connection refused, timeouts
+        return True
+    if isinstance(e, KError):
+        return e.status in _UNREACHABLE_HTTP or e.status >= 500
+    return False
+
+
+def _http_error(status: int, text: str) -> ModelUnavailable:
+    cls = Unreachable if status in _UNREACHABLE_HTTP or status >= 500 else ModelUnavailable
+    return cls(f"HTTP {status}: {text[:200]}")
+
+
 def run(ctx: Ctx, step: str, build: Callable[[dict], Request | None]) -> Result:
     """`build(cap)` returns that capability's request, or None when the
     capability cannot do this input (say, a frames reader with no frames)."""
     caps = [c for c in ctx.api.capabilities(step) if c["enabled"]]
     if not caps:
-        raise ModelUnavailable(f"no enabled capability for step {step}")
+        raise ModelsDown(f"no enabled capability for step {step}")
     planned = []
     for cap in caps:
         req = build(cap)
@@ -93,27 +126,32 @@ def run(ctx: Ctx, step: str, build: Callable[[dict], Request | None]) -> Result:
             return Result(out, row["output_sha"], By(cap["provider"], cap["model"], cap["prompt_v"]), True)
 
     tried = []
+    unreachable = 0
     for cap, req, sha in planned:
         by = By(cap["provider"], cap["model"], cap["prompt_v"])
         quota = cap.get("quota_per_day")
         if quota is not None and cap.get("used_today", 0) >= quota:
             tried.append(f"{by.provider}/{by.model}: quota of {quota} a day used")
+            unreachable += 1
             continue
         try:
             if cap["runs_on"] == "worker":
                 if not cap.get("available"):
                     tried.append(f"{by.provider}/{by.model}: not configured on the Worker")
+                    unreachable += 1
                     continue
                 return _run_on_worker(ctx, step, cap, req, by)
             adapter = KWORKER_ADAPTERS.get(cap["provider"])
             if adapter is None:
                 tried.append(f"{by.provider}/{by.model}: no kworker adapter")
+                unreachable += 1
                 continue
             t0 = time.monotonic()
             out, usage = adapter(ctx, cap, req)
             ms = int((time.monotonic() - t0) * 1000)
         except (httpx.HTTPError, KError, ModelUnavailable, ValueError) as e:
             tried.append(f"{by.provider}/{by.model}: {e}")
+            unreachable += _unreachable(e)
             continue
         ctx.stats.model_calls[f"{by.provider}/{by.model}"] += 1
         ctx.stats.tokens[f"{step}.in"] += usage.get("input_tokens", 0)
@@ -133,7 +171,10 @@ def run(ctx: Ctx, step: str, build: Callable[[dict], Request | None]) -> Result:
             }
         )
         return Result(out, out_sha, by, False)
-    raise ModelUnavailable(f"step {step}: every capability failed: " + "; ".join(tried))
+    # One capability that rejected the input makes it the save's problem;
+    # only when none got that far is it this machine's.
+    cls = ModelsDown if tried and unreachable == len(tried) else ModelUnavailable
+    raise cls(f"step {step}: every capability failed: " + "; ".join(tried))
 
 
 def _is_json(s: str) -> bool:
@@ -172,7 +213,7 @@ def _run_on_worker(ctx: Ctx, step: str, cap: dict, req: Request, by: By) -> Resu
 def _cliproxy(ctx: Ctx, cap: dict, req: Request) -> tuple[str, dict]:
     cfg = ctx.cfg
     if not cfg.cliproxy:
-        raise ModelUnavailable("CLIPROXY_URL/CLIPROXY_KEY (or ANTHROPIC_BASE_URL/ANTHROPIC_AUTH_TOKEN) not set")
+        raise Unreachable("no gateway: CLIPROXY_URL/CLIPROXY_KEY (or ANTHROPIC_BASE_URL/ANTHROPIC_AUTH_TOKEN) not set, and no discovery-cliproxy credential")
     images = [(ctx.api.get_blob(sha), mime) for sha, mime in req.inputs]
     for _, mime in images:
         if not mime.startswith("image/"):
@@ -198,7 +239,7 @@ def _anthropic(base: str, key: str, model: str, req: Request, images) -> tuple[s
         timeout=300,
     )
     if r.status_code != 200:
-        raise ModelUnavailable(f"HTTP {r.status_code}: {r.text[:200]}")
+        raise _http_error(r.status_code, r.text)
     j = r.json()
     text = "".join(c.get("text", "") for c in j.get("content", []) if c.get("type") == "text")
     u = j.get("usage", {})
@@ -220,7 +261,7 @@ def _openai_chat(base: str, key: str, model: str, req: Request, images) -> tuple
         timeout=300,
     )
     if r.status_code != 200:
-        raise ModelUnavailable(f"HTTP {r.status_code}: {r.text[:200]}")
+        raise _http_error(r.status_code, r.text)
     j = r.json()
     text = j["choices"][0]["message"].get("content") or ""
     u = j.get("usage", {})
