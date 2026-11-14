@@ -322,7 +322,13 @@ async function toolPages(since, limit, opts) {
 }
 // The route's page with each card under the tool's field name; until is the
 // time of the call, so it is left out.
-const asTool = ({ until, saves, ...rest }) => ({ ...rest, saves: saves.map(({ card, ...s }) => ({ ...s, card_untrusted: card })) });
+// The route's page as the tool names its fields: card_untrusted, and each
+// failed save's error_untrusted.
+const asTool = ({ until, saves, failed_saves, ...rest }) => ({
+  ...rest,
+  failed_saves: { ...failed_saves, latest: failed_saves.latest.map(({ error, ...f }) => ({ ...f, error_untrusted: error })) },
+  saves: saves.map(({ card, ...s }) => ({ ...s, card_untrusted: card })),
+});
 const withoutUntil = ({ until, ...rest }) => rest;
 
 test("knowledge_digest returns the route's pages card for card, through every mail agent token", async () => {
@@ -383,4 +389,66 @@ test("knowledge_digest refusals are tool results that name the argument", async 
     assert.equal(r.structuredContent.status, 400, JSON.stringify(args));
     assert.match(r.structuredContent.error, new RegExp(word), JSON.stringify(args));
   }
+});
+
+// failed_saves (review of the 2026-11-14 brief, which read "Saves read: 0"
+// over three failed saves).
+async function failJob(kind, key, error) {
+  expect(await k("POST", "/k/jobs", { kind, key, payload: {} }), 201);
+  const j = await claimKey(kind, key);
+  expect(await k("POST", `/k/jobs/${j.id}/complete`, { owner: "t", lease_token: j.lease_token, state: "failed", error }), 200);
+  return j;
+}
+const failedNow = async () => expect(await k("GET", "/k/digest?since=0&limit=1"), 200);
+
+test("the digest counts failed saves by error class and lists the latest; a save that runs again leaves the count", async () => {
+  const before = await failedNow();
+  const was = (c) => before.failed_saves.by_class[c] ?? 0;
+  const down = "ModelUnavailable: step gate_band: every capability failed: cliproxy/claude-haiku-5-5: CLIPROXY_URL/CLIPROXY_KEY not set; " + "x".repeat(4000);
+  for (const id of ["1900000000000001501", "1900000000000001502", "1900000000000001503"]) await failJob("save", id, down.slice(0, 3990));
+  await failJob("bundle", "1900000000000001504", "KError: POST /k/bundles -> 422 card_too_large: the card is 5000 bytes");
+  await failJob("save", "1900000000000001505", "the handler said no");
+  const d = await failedNow();
+  assert.equal(d.failed_saves.count, before.failed_saves.count + 5);
+  assert.equal(d.failed_saves.by_class.ModelUnavailable, was("ModelUnavailable") + 3);
+  assert.equal(d.failed_saves.by_class.KError, was("KError") + 1);
+  assert.equal(d.failed_saves.by_class.other, was("other") + 1);
+  const latest = Object.fromEntries(d.failed_saves.latest.map((f) => [f.post_id, f]));
+  assert.deepEqual(
+    ["1900000000000001501", "1900000000000001504", "1900000000000001505"].map((id) => [latest[id]?.job, latest[id]?.error_class]),
+    [["save", "ModelUnavailable"], ["bundle", "KError"], ["save", "other"]],
+  );
+  assert.equal(latest["1900000000000001501"].error, down.slice(0, 200));
+  assert.ok(!Number.isNaN(Date.parse(latest["1900000000000001501"].failed_at)));
+
+  // Run one again: it moves from failed to pending.
+  expect(await k("POST", "/k/jobs", { kind: "save", key: "1900000000000001502", payload: {}, again: true }), 200);
+  const after = await failedNow();
+  assert.equal(after.failed_saves.count, d.failed_saves.count - 1);
+  assert.equal(after.failed_saves.by_class.ModelUnavailable, d.failed_saves.by_class.ModelUnavailable - 1);
+  assert.equal(after.pending_saves, d.pending_saves + 1);
+  assert.ok(!after.failed_saves.latest.some((f) => f.post_id === "1900000000000001502"));
+});
+
+test("knowledge_digest reports the same failed saves, each error as error_untrusted", async () => {
+  await failJob("save", "1900000000000001601", "KError: GET /k/blobs/x -> 404 blob_missing: no such blob");
+  const route = await failedNow();
+  const tool = await digestToolOk({ since: 0, limit: 1 });
+  assert.ok(route.failed_saves.latest.some((f) => f.post_id === "1900000000000001601"));
+  assert.deepEqual(tool.failed_saves, asTool(route).failed_saves);
+});
+
+test("a page with ten long failures listed still stays within 30 KiB", async () => {
+  // Each listed error is up to 200 two-byte characters; the page bound must
+  // count the failure list, not only the cards.
+  for (let i = 0; i < 10; i++) await failJob("save", `19000000000000017${String(i).padStart(2, "0")}`, "ModelUnavailable: " + "é".repeat(3000));
+  const ids = Array.from({ length: 12 }, (_, i) => `19000000000000018${String(i).padStart(2, "0")}`);
+  for (const id of ids) expect(await bundleWithCard(id, { post_id: id, excerpt: "é".repeat(1900) }), 201);
+  const t = 4106000000000;
+  pinTime(ids, t);
+  const route = await allPages(t, 100);
+  assert.equal(route[0].body.failed_saves.latest.length, 10);
+  for (const p of route) assert.ok(p.bytes <= 30 * 1024, `a route page was ${p.bytes} bytes`);
+  assert.deepEqual(route.flatMap((p) => p.ids), ids);
+  for (const p of await toolPages(t, 100)) assert.ok(Buffer.byteLength(JSON.stringify(p)) <= 30 * 1024, `a tool page was ${Buffer.byteLength(JSON.stringify(p))} bytes`);
 });

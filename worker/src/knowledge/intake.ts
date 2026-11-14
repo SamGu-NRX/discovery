@@ -179,16 +179,33 @@ export async function digest(env: Env, url: URL): Promise<Response> {
   return new Response(page, { headers: { "content-type": "application/json" } });
 }
 
+// Saves whose save or bundle job is failed now, whenever it failed: the
+// 2026-11-14 brief read "Saves read: 0" over three failed saves, because the
+// digest counted only queued and claimed jobs. A save leaves this count when
+// it runs again. FAILED_LIST bounds the listed ones so the page bound holds.
+const FAILED_LIST = 10;
+const FAILED_CLASSES = 20;
+const ERROR_CUT = 200;
+const FAILED = `WITH f AS (SELECT key, kind, error, max(updated_at) AS failed_at FROM knowledge_jobs
+  WHERE kind IN ('save', 'bundle') AND state = 'failed' GROUP BY key)`;
+// kworker records "<ExceptionName>: <message>"; the Worker's own lease
+// failure is "lease expired <n> times".
+const ERROR_CLASS = `CASE WHEN error LIKE 'lease expired%' THEN 'LeaseExpired'
+  WHEN instr(error, ':') BETWEEN 2 AND 65 THEN substr(error, 1, instr(error, ':') - 1) ELSE 'other' END`;
+const CLASS_NAME = /^[A-Za-z][A-Za-z0-9_.]*$/;
+const className = (c: unknown) => (typeof c === "string" && CLASS_NAME.test(c) ? c : "other");
+
 // One digest page as JSON text, at most DIGEST_MAX_BYTES of UTF-8. Cards are
 // stored as JSON text and spliced in unparsed. cardField names each save's
 // card: "card" for the route, "card_untrusted" for the MCP tool, whose
-// convention marks fields holding text from posts, pages or models.
+// convention marks fields holding text from posts, pages or models; a failed
+// save's error (which can quote a page or a gateway) follows the same rule.
 export async function digestPage(env: Env, a: DigestArgs, cardField: "card" | "card_untrusted" = "card"): Promise<string> {
   const since = sinceMs(a.since);
   const limit = limitOf(a.limit);
   const after = cursorOf(a.cursor);
   const db = env.DB;
-  const [rows, pending] = await db.batch<Record<string, unknown>>([
+  const [rows, pending, failedCount, failedClasses, failedLatest] = await db.batch<Record<string, unknown>>([
     db
       .prepare(
         `SELECT post_id, version, created_at, completeness, missing_json, card_json FROM bundles b
@@ -200,12 +217,30 @@ export async function digestPage(env: Env, a: DigestArgs, cardField: "card" | "c
     // A save still has outstanding work while its save job or its bundle job
     // is queued or running; the card appears only when the bundle is done.
     db.prepare("SELECT count(DISTINCT key) AS n FROM knowledge_jobs WHERE kind IN ('save', 'bundle') AND state IN ('queued', 'claimed')"),
+    db.prepare(`${FAILED} SELECT count(*) AS n FROM f`),
+    db.prepare(`${FAILED} SELECT ${ERROR_CLASS} AS class, count(*) AS n FROM f GROUP BY 1 ORDER BY n DESC, class LIMIT ${FAILED_CLASSES}`),
+    db.prepare(`${FAILED} SELECT key, kind, error, failed_at, ${ERROR_CLASS} AS class FROM f ORDER BY failed_at DESC, key LIMIT ${FAILED_LIST}`),
   ]);
+  const errorField = cardField === "card" ? "error" : "error_untrusted";
+  const byClass: Record<string, number> = {};
+  for (const r of failedClasses.results as { class: unknown; n: number }[]) byClass[className(r.class)] = (byClass[className(r.class)] ?? 0) + r.n;
+  const failedSaves = {
+    count: (failedCount.results[0] as { n: number }).n,
+    by_class: byClass,
+    latest: (failedLatest.results as { key: string; kind: string; error: string | null; failed_at: number; class: unknown }[]).map((r) => ({
+      post_id: r.key,
+      job: r.kind,
+      error_class: className(r.class),
+      failed_at: new Date(r.failed_at).toISOString(),
+      [errorField]: [...(r.error ?? "")].slice(0, ERROR_CUT).join(""),
+    })),
+  };
   const found = rows.results as unknown as CardRow[];
   const head = {
     since: new Date(since).toISOString(),
     until: new Date().toISOString(),
     pending_saves: (pending.results[0] as { n: number }).n,
+    failed_saves: failedSaves,
   };
   // The envelope's own bytes count: head fields, count, truncated, the cursor.
   const envelope = byteLength(JSON.stringify({ ...head, count: 100, truncated: true, next_cursor: "9".repeat(16) + "." + "9".repeat(19), saves: [] }));

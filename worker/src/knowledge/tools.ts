@@ -67,7 +67,9 @@ export const KNOWLEDGE_TOOLS = [
       "missing (up to 3 gaps), excerpt (the post's first 280 characters), verdict ({label: try|read|reference|skip, why, action} judged against Sam's interests), " +
       "context (up to 3 kept replies), links (up to 5; GitHub repos carry name, stars and last_commit) and media counts. Bundles from before cards existed show only post_id, status and missing. " +
       "Each page is at most 30 KiB. To read all of them: call with since, and while truncated is true call again with the same since and cursor set to next_cursor. " +
-      "pending_saves counts saves still being processed; their cards appear in a later call. knowledge_bundle reads a save's full bundle. " +
+      "pending_saves counts saves still being processed; their cards appear in a later call. " +
+      "failed_saves counts saves that failed and have not run again since, whenever they failed: by_class counts them by error_class (the exception name, e.g. ModelUnavailable, or LeaseExpired), and latest lists the 10 most recent with failed_at and error_untrusted. Report failures to Sam; they need someone to look. " +
+      "knowledge_bundle reads a save's full bundle. " +
       DATA_NOTE,
     inputSchema: {
       type: "object",
