@@ -162,6 +162,9 @@ const PAUSE_REASONS = {
   challenge: "X showed a challenge",
   error: "a request failed outright (not a signal from X)",
   worker: "the Worker asked for a pause",
+  probation: "a session made 50 requests without X showing a timeline, which a blocked account looks like",
+  session_interrupted: "a session was interrupted before it recorded how it ended",
+  session_error: "a session stopped on an error",
 };
 export async function pauseReason() {
   if (pausesInFlight > 0) return "pausing: a pause is being written";

@@ -38,11 +38,15 @@ test("a login wall recorded before the restart is reported as login_wall and pau
   assert.deepEqual(fake.removedWindows, [7]);
 });
 
-test("a session with no recorded ending is reported as interrupted with status error", async () => {
+test("a session with no recorded ending is reported as interrupted with status error, and its pause cannot be lifted as an error pause", async () => {
   const { status, paused } = await recover({ stop: null, completed: false });
   assert.equal(status.status, "error");
   assert.match(status.detail, /^interrupted/);
   assert.equal(paused, true);
+  const { errorPauseVerdict } = await import("../app/lib/unpause.js");
+  const { pauseUntil, pauseLog } = await chrome.storage.local.get(["pauseUntil", "pauseLog"]);
+  const verdict = errorPauseVerdict({ pauseUntil, pauseLog, now: Date.now() });
+  assert.equal(verdict.clearable, false, JSON.stringify({ verdict, pauseLog }));
 });
 
 test("a session whose teardown recorded a final outcome is reported with it", async () => {

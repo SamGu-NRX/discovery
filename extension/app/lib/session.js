@@ -31,6 +31,16 @@ const X_SIGNALS = new Set(["login_wall", "rate_limited", "challenge"]);
 // the window is closed and sessions pause. README explains the number; it
 // has no live measurement behind it.
 const PROBATION_REQUEST_CAP = 50;
+
+// The reason a session's pause records. Never "error": the fetch page's
+// "Clear error pause" lifts only those (lib/unpause.js), and a session that
+// stops without a timeline or mid-way is more often X refusing than the
+// machine. 7ea7d85 recorded statusFor's "error" here, which made an
+// interrupted session's pause clearable.
+function sessionPauseReason(status, outcome) {
+  if (status !== "error") return status;
+  return outcome.reason === "interrupted" ? "session_interrupted" : "session_error";
+}
 // Requests X's service worker makes for a page carry tab id -1. They are
 // counted too, from any x.com page, since the session tab's cannot be told
 // apart; that can only trip the cap early.
@@ -266,7 +276,7 @@ async function run(s) {
     // The stop first, so the window's closing is not taken for the reason.
     requestStop("error", `X took ${s.xRequests} requests without showing a timeline (limit ${PROBATION_REQUEST_CAP})`);
     chrome.windows.remove(s.windowId).catch(() => {});
-    extendPause(undefined, "error", `X took ${s.xRequests} requests without showing a timeline`).catch(() => {});
+    extendPause(undefined, "probation", `X took ${s.xRequests} requests without showing a timeline`).catch(() => {});
   };
   chrome.webRequest.onBeforeRequest.addListener(onRequest, { urls: ["https://x.com/*", "https://*.x.com/*"] });
 
@@ -348,7 +358,7 @@ async function finish(s, outcome) {
     ...s.notes,
   ].join("; ").slice(0, 1000);
 
-  if (status !== "ok") await extendPause(undefined, status, outcome.detail);
+  if (status !== "ok") await extendPause(undefined, sessionPauseReason(status, outcome), outcome.detail);
   let reported = false;
   try {
     const answer = await postStatus(s.config, { account, session_id: s.id, status, detail });
@@ -442,7 +452,7 @@ async function recoverRecord(record) {
   await chrome.storage.session.set({ activeSession: settled });
   const status = statusFor(outcome.reason);
   const detail = `${outcome.reason}: ${outcome.detail}; screens=${record.screens ?? 0} posts=${record.posts ?? 0}`.slice(0, 1000);
-  if (status !== "ok") await extendPause(undefined, status, outcome.detail);
+  if (status !== "ok") await extendPause(undefined, sessionPauseReason(status, outcome), outcome.detail);
   const config = await loadConfig();
   const account = record.reservedAccount ?? record.account ?? (await getLocal("lastAccount", null)) ?? config.account;
   const answer = await postStatus(config, { account, session_id: record.id, status, detail }).catch(() => null);

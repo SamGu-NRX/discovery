@@ -338,15 +338,17 @@ async function sendPendingBackOff() {
   // /ingest/x/status) can never send it: it waits without a problem line.
   // Recording the failure every minute overwrote the popup's Problem line
   // from Nov 13 to 14, hiding the daily run's own problems.
+  // The stamp is written with the report; a report without one (older
+  // builds) has no end, so it goes too.
   const until = await getLocal("backOffReportedUntil", null);
-  if (until && Date.parse(until) <= Date.now()) {
+  if (!until || Date.parse(until) <= Date.now()) {
     await setLocal({ pendingBackOff: null });
     return;
   }
   const config = await loadConfig();
   if (!config.workerUrl || !config.ingestToken) return;
   try {
-    const answer = await postStatus(await loadConfig(), report);
+    const answer = await postStatus(config, report);
     await setLocal({ pendingBackOff: null });
     if (pauseFrom(answer)) await extendPause(pauseFrom(answer), "worker");
   } catch (err) {

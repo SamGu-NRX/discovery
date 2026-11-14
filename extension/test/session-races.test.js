@@ -1149,6 +1149,10 @@ test("a session window that makes K requests without a timeline is closed and pa
   assert.match(report.detail, /50 requests without showing a timeline \(limit 50\); .*x_requests=50$/);
   assert.ok(Date.parse(fake.local.get("pauseUntil")) > Date.now());
   assert.ok(fake.removedWindows.length > 0);
+  // A blocked account looks like this, so "Clear error pause" must not lift it.
+  const { errorPauseVerdict } = await import("../app/lib/unpause.js");
+  const verdict = errorPauseVerdict({ pauseUntil: fake.local.get("pauseUntil"), pauseLog: fake.local.get("pauseLog"), now: Date.now() });
+  assert.equal(verdict.clearable, false, JSON.stringify({ verdict, pauseLog: fake.local.get("pauseLog") }));
 });
 
 // Found in a readiness review of 34aed35: a 429 whose sends the worker never
