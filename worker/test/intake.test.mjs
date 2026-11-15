@@ -452,3 +452,32 @@ test("a page with ten long failures listed still stays within 30 KiB", async () 
   assert.deepEqual(route.flatMap((p) => p.ids), ids);
   for (const p of await toolPages(t, 100)) assert.ok(Buffer.byteLength(JSON.stringify(p)) <= 30 * 1024, `a tool page was ${Buffer.byteLength(JSON.stringify(p))} bytes`);
 });
+
+test("failures with long keys and escaped errors stay within their budget, and the page keeps its card", async () => {
+  // Review of 62e3611, P2: ten failures with 512-character keys of control
+  // characters, each escaped to six bytes, made a 43,933-byte page.
+  const ctl = "";
+  for (let i = 0; i < 10; i++) await failJob("save", ctl.repeat(500) + String(i).padStart(12, "0"), "ModelUnavailable: " + ctl.repeat(3000));
+  const id = "1900000000000001901";
+  expect(await bundleWithCard(id, { post_id: id, excerpt: "é".repeat(1900) }), 201);
+  const t = 4107000000000;
+  pinTime([id], t);
+  const r = await k("GET", `/k/digest?since=${t}`);
+  expect(r, 200);
+  assert.deepEqual(r.body.saves.map((x) => x.card.post_id), [id]);
+  assert.ok(Buffer.byteLength(r.text) <= 30 * 1024, `the page was ${Buffer.byteLength(r.text)} bytes`);
+  assert.ok(Buffer.byteLength(JSON.stringify(r.body.failed_saves)) <= 8 * 1024, `failed_saves was ${Buffer.byteLength(JSON.stringify(r.body.failed_saves))} bytes`);
+  assert.ok(r.body.failed_saves.latest.length >= 1 && r.body.failed_saves.count >= 10);
+  const tool = await digestToolOk({ since: t });
+  assert.ok(Buffer.byteLength(JSON.stringify(tool)) <= 30 * 1024);
+});
+
+test("an error class named like an Object property is counted as a number", async () => {
+  // Review of 62e3611, P3: "constructor" read Object's own function.
+  const before = (await failedNow()).failed_saves.by_class;
+  await failJob("save", "1900000000000002001", "constructor: a class name that is also an Object property");
+  await failJob("save", "1900000000000002002", "toString: another");
+  const after = (await failedNow()).failed_saves.by_class;
+  assert.equal(after.constructor, (Object.hasOwn(before, "constructor") ? before.constructor : 0) + 1);
+  assert.equal(after.toString, (Object.hasOwn(before, "toString") ? before.toString : 0) + 1);
+});

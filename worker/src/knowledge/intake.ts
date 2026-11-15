@@ -182,10 +182,16 @@ export async function digest(env: Env, url: URL): Promise<Response> {
 // Saves whose save or bundle job is failed now, whenever it failed: the
 // 2026-11-14 brief read "Saves read: 0" over three failed saves, because the
 // digest counted only queued and claimed jobs. A save leaves this count when
-// it runs again. FAILED_LIST bounds the listed ones so the page bound holds.
+// it runs again. The list is bounded in bytes, not only in entries: a job
+// key can be 512 characters, and escaped control characters grow sixfold
+// in JSON (review of 62e3611: ten such failures made a 43,933-byte page).
+// FAILED_MAX_BYTES plus the largest card (4 KiB) keeps a page far under
+// DIGEST_MAX_BYTES.
 const FAILED_LIST = 10;
 const FAILED_CLASSES = 20;
+const FAILED_MAX_BYTES = 8 * 1024;
 const ERROR_CUT = 200;
+const KEY_CUT = 40;
 const FAILED = `WITH f AS (SELECT key, kind, error, max(updated_at) AS failed_at FROM knowledge_jobs
   WHERE kind IN ('save', 'bundle') AND state = 'failed' GROUP BY key)`;
 // kworker records "<ExceptionName>: <message>"; the Worker's own lease
@@ -222,19 +228,27 @@ export async function digestPage(env: Env, a: DigestArgs, cardField: "card" | "c
     db.prepare(`${FAILED} SELECT key, kind, error, failed_at, ${ERROR_CLASS} AS class FROM f ORDER BY failed_at DESC, key LIMIT ${FAILED_LIST}`),
   ]);
   const errorField = cardField === "card" ? "error" : "error_untrusted";
-  const byClass: Record<string, number> = {};
+  // No prototype: a class named "constructor" or "toString" is a count too.
+  const byClass: Record<string, number> = Object.create(null);
   for (const r of failedClasses.results as { class: unknown; n: number }[]) byClass[className(r.class)] = (byClass[className(r.class)] ?? 0) + r.n;
-  const failedSaves = {
-    count: (failedCount.results[0] as { n: number }).n,
-    by_class: byClass,
-    latest: (failedLatest.results as { key: string; kind: string; error: string | null; failed_at: number; class: unknown }[]).map((r) => ({
-      post_id: r.key,
+  const cut = (v: string | null, n: number) => [...(v ?? "")].slice(0, n).join("");
+  const failedSaves = { count: (failedCount.results[0] as { n: number }).n, by_class: byClass, latest: [] as Record<string, string>[] };
+  // by_class is at most 20 names of 64 [A-Za-z0-9_.] characters, so it and
+  // the count always fit; entries are added while the whole stays in budget.
+  let failedBytes = byteLength(JSON.stringify(failedSaves));
+  for (const r of failedLatest.results as { key: string; kind: string; error: string | null; failed_at: number; class: unknown }[]) {
+    const entry = {
+      post_id: cut(r.key, KEY_CUT),
       job: r.kind,
       error_class: className(r.class),
       failed_at: new Date(r.failed_at).toISOString(),
-      [errorField]: [...(r.error ?? "")].slice(0, ERROR_CUT).join(""),
-    })),
-  };
+      [errorField]: cut(r.error, ERROR_CUT),
+    };
+    const size = byteLength(JSON.stringify(entry)) + 1;
+    if (failedBytes + size > FAILED_MAX_BYTES) break;
+    failedSaves.latest.push(entry);
+    failedBytes += size;
+  }
   const found = rows.results as unknown as CardRow[];
   const head = {
     since: new Date(since).toISOString(),
