@@ -629,7 +629,15 @@ function searchesFor(run, job, record) {
   // url:<id> matches any link to the post: x.com or twitter.com, any handle.
   if (job.mentions) for (const p of ["Latest", "Top"]) add("mentions", `url:${id}`, `url:${id}`, p);
   if (job.links) {
-    for (const target of linkTargets(run.posts[id], run.limits.linksPerPost)) {
+    // A save with no link of its own often carries its substance in the post
+    // it quotes: on Nov 14, save 2114629511115604175 quoted poteto's post
+    // with a YouTube talk and got no link search. Its quoted post's links
+    // are searched then, under the same cap; a save with its own links
+    // searches only those.
+    const own = linkTargets(run.posts[id], run.limits.linksPerPost);
+    const quotedId = run.posts[id]?.quoted_id;
+    const targets = own.length || !quotedId ? own : linkTargets(run.posts[quotedId], run.limits.linksPerPost);
+    for (const target of targets) {
       for (const p of ["Latest", "Top"]) add("links", target, `url:"${target}"`, p);
     }
   }

@@ -537,6 +537,23 @@ test("link searches keep the query string, drop share tracking, and skip a link 
   assert.deepEqual(queries, ['url:"youtube.com/watch?v=AAA"', 'url:"youtube.com/watch?v=BBB"'], "each video its own search; the long link is not searched");
 });
 
+test("a save with no link of its own searches the links of the post it quotes; a save with its own link does not", async () => {
+  const quoted = post("2114626630429913383", "poteto", { urls: ["https://www.youtube.com/watch?v=rUYP4C29yCw"] });
+  const quoteOnly = post("2114629511115604175", "rahul", { quoted });
+  const ownLink = post("2114629511115604176", "rahul", { quoted, urls: ["https://example.com/own"] });
+  const byId = { [quoteOnly.rest_id]: quoteOnly, [ownLink.rest_id]: ownLink };
+  const answer = (operation, v) => (operation === "TweetDetail" ? detail([{ type: "TimelineAddEntries", entries: [itemEntry(byId[v.focalTweetId], "9000")] }]) : searchPage([], null));
+  const job = (ids) => ({ type: "context", ids, rankings: ["Relevance"], branches: false, quotes: false, mentions: false, conversation: false, upstream: false });
+  const queries = async (ids) => {
+    const g = harness(answer);
+    const result = await run({ jobs: [job(ids)] }, g);
+    assert.equal(result.stop, null, JSON.stringify(result.stop));
+    return [...new Set(g.sends.filter((x) => x.page).map((x) => x.variables.rawQuery))];
+  };
+  assert.deepEqual(await queries(["2114629511115604175"]), ['url:"youtube.com/watch?v=rUYP4C29yCw"']);
+  assert.deepEqual(await queries(["2114629511115604176"]), ['url:"example.com/own"']);
+});
+
 test("a search that matches nothing is zero results and the run goes on; a search page X never answers stops the run and pauses", async () => {
   // On Nov 14 the archive's 397 search page loads came back 134 times with no
   // posts (all 200, recorded as zero); the one that paused (13:35, Top) got
