@@ -5,6 +5,7 @@
 
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { rmSync, writeFileSync } from "node:fs";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { createServer } from "node:http";
 import { createServer as createHttpsServer } from "node:https";
@@ -39,7 +40,12 @@ const K = 50;
 
 let fakeX;
 
+// The stamp the reload procedure writes (app/lib/build.js); git-ignored.
+const BUILD_FILE = join(APP, "build.json");
+const BUILD = "e2e0000b1d";
+
 before(async () => {
+  writeFileSync(BUILD_FILE, JSON.stringify({ commit: BUILD }));
   mock = await startMockWorker();
   profile = await mkdtemp(join(tmpdir(), "x-capture-e2e-"));
   fakeX = await startFakeX(profile);
@@ -64,6 +70,7 @@ after(async () => {
   }
   await context?.close();
   mock?.server.close();
+  rmSync(BUILD_FILE, { force: true });
   fakeX?.server.close();
   if (profile) await rm(profile, { recursive: true, force: true });
 });
@@ -612,6 +619,8 @@ test("daily fetch: a manual run on daily.html takes the newest saves, files each
   assert.equal(state.last.taken, 2);
   assert.equal(state.last.stop, null);
   assert.deepEqual(state.last.delivery, { filed: 2, rejected: 0, stopped: null });
+  assert.equal(state.last.build, BUILD, "the record names the build the run ran on");
+  assert.equal(dailyBundles[0].bundle.build, BUILD);
   assert.equal(dailyBundles.length, 1);
   assert.equal(dailyBundles[0].delivered, true);
   assert.deepEqual(dailyBundles[0].bundle.newSaves.taken, ["402", "401"]);

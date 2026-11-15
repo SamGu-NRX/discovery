@@ -619,6 +619,34 @@ test("a login wall whose status report failed is still reported after the worker
   assert.equal(fake.session.get("activeSession"), undefined);
 });
 
+test("a session whose page leaves x.com writes no pause record that Clear error pause would lift", async () => {
+  // X sends a locked account to help.x.com. A browser restart after the
+  // page's check keeps only the pause records written so far, so none of
+  // them may be an "error" record (lib/unpause.js lifts only those).
+  await reset();
+  fake.local.delete("pauseLog");
+  const execute = chrome.scripting.executeScript;
+  chrome.scripting.executeScript = async (options) =>
+    options.args?.[0]?.name === "inspect"
+      ? [{ result: { ok: { account: "owner", blocker: "error", evidence: "left x.com for help.x.com", path: "/en/forms/account-access" } } }]
+      : execute(options);
+  try {
+    await session.startSession("manual");
+    await ended.promise;
+    await untilIdle();
+  } finally {
+    chrome.scripting.executeScript = execute;
+  }
+  const pauseLog = fake.local.get("pauseLog");
+  assert.ok(pauseLog.length > 0, "the session paused");
+  assert.deepEqual(pauseLog.filter((e) => e.reason === "error"), [], JSON.stringify(pauseLog));
+  const { errorPauseVerdict } = await import("../app/lib/unpause.js");
+  for (let n = 1; n <= pauseLog.length; n += 1) {
+    const verdict = errorPauseVerdict({ pauseUntil: fake.local.get("pauseUntil"), pauseLog: pauseLog.slice(0, n), now: Date.now() });
+    assert.equal(verdict.clearable, false, `with the first ${n} record(s): ${JSON.stringify(verdict)}`);
+  }
+});
+
 test("a 429 that arrived while recovery closed the old window is reported after the worker is killed mid-recovery", async () => {
   await reset();
   await chrome.storage.session.set({

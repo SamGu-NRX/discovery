@@ -3,6 +3,7 @@
 
 import { captureToBatch } from "./lib/capture.js";
 import { chicagoDay, DAILY_ALARM, dailyEnabled, dailyJobs, dailyWindow, nextDailyState, planAttempt, retriesInWindow, skippedDay } from "./lib/daily.js";
+import { loadedBuild } from "./lib/build.js";
 import { deliverKept, deliveryDue, keepBundle } from "./lib/knowledge.js";
 import { acquireFetchRun, beatFetchRun, fetchRunHeldAnywhere, releaseFetchRun } from "./lib/fetchlock.js";
 import { focalTweetIdFromUrl, operationFromUrl } from "./lib/ops.js";
@@ -512,7 +513,7 @@ function recordDaily({ manual, account, result, bundle }) {
     }
     if (bundle) await keepBundle(bundle, { account, manual: Boolean(manual), runId: manual ? `manual-${new Date(now).toISOString()}` : `daily-${chicagoDay(now)}` });
     const delivery = bundle ? await deliverKept(await loadConfig(), { now }) : null;
-    const { state, problem } = nextDailyState(prev, { ...result, delivery }, now, { manual: Boolean(manual) });
+    const { state, problem } = nextDailyState(prev, { ...result, delivery, build: await loadedBuild() }, now, { manual: Boolean(manual) });
     await setDailyState(account, state);
     if (problem) await recordProblem("daily", problem);
     // Stopped before reading a save, and not by X: tried again inside the

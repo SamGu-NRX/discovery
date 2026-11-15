@@ -165,6 +165,7 @@ const PAUSE_REASONS = {
   probation: "a session made 50 requests without X showing a timeline, which a blocked account looks like",
   session_interrupted: "a session was interrupted before it recorded how it ended",
   session_error: "a session stopped on an error",
+  session_left_x: "a session's page left x.com, where X sends a locked account",
 };
 export async function pauseReason() {
   if (pausesInFlight > 0) return "pausing: a pause is being written";

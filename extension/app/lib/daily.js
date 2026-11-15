@@ -143,6 +143,8 @@ export function nextDailyState(prev, result, now, { manual = false } = {}) {
     taken: saves?.taken.length ?? 0,
     waiting: saves ? saves.new.length - (saves.handled ? saves.taken.indexOf(saves.handled) + 1 : 0) : null,
     delivery: result.delivery ?? null,
+    // The commit the extension was loaded from (lib/build.js), or null.
+    build: result.build ?? null,
   };
   // A manual test run, or a scheduled one retried inside the window
   // (retriesInWindow), does not use up the day.

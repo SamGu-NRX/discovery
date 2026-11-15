@@ -7,6 +7,7 @@ import { FetchRefused, parseTemplate } from "../lib/fetchops.js";
 import { parseJobs, runJobs } from "../lib/fetchrun.js";
 import { getLocal, loadConfig, pauseReason } from "../lib/store.js";
 import { blankTabSettled } from "../lib/tabs.js";
+import { loadedBuild } from "../lib/build.js";
 import { doneRepolls, postStatus, reserveSession } from "../lib/worker-api.js";
 import { bookmarksUrl, historyBookmarksUrl, isMintedXUrl, loadedOnX, permalinkUrl, searchUrl, xPath } from "../lib/xurl.js";
 
@@ -293,6 +294,7 @@ async function run({ jobs, limits }, owner) {
       kind: "x-direct-fetch-bundle",
       version: 1,
       extension_version: chrome.runtime.getManifest().version,
+      build: await loadedBuild(),
       account,
       session_id: sessionId,
       sent_to_worker: toWorker,

@@ -613,8 +613,11 @@ async function inspect(s) {
     const blocker = { reason: seen.blocker, detail: `${seen.evidence} at ${seen.path}` };
     if (!BLOCKING.has(s.stop?.reason)) s.stop = blocker;
     await publish(s);
-    // Survives a browser restart, which clears the record above.
-    await extendPause(undefined, blocker.reason, blocker.detail);
+    // Survives a browser restart, which clears the record above, and so may
+    // be the pause's only record. detect.js answers "error" when the page
+    // left x.com, which is where X sends a locked account (help.x.com); it
+    // is recorded as session_left_x so "Clear error pause" refuses it.
+    await extendPause(undefined, blocker.reason === "error" ? "session_left_x" : blocker.reason, blocker.detail);
     throw new StopSession(s.stop.reason, s.stop.detail);
   }
   if (seen.account && !s.account) {
