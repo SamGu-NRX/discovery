@@ -85,9 +85,18 @@ class ModelsDown(ModelUnavailable):
     gateway settings and failed three saves that were fine."""
 
 
-# HTTP answers that say the model or gateway is unavailable, not that the
-# request was wrong: auth, unknown model, timeout, rate limit, server errors.
+# The gateway's HTTP answers that say the model or gateway is unavailable,
+# not that the request was wrong: auth, unknown model route, timeout, rate
+# limit, server errors.
 _UNREACHABLE_HTTP = {401, 403, 404, 408, 429}
+
+# The Worker's POST /k/model/run errors, by code (worker/src/knowledge/
+# models.ts). Its other codes (object_missing, blob_missing, ...) are about
+# the input. model_error wraps every other Gemini answer, so its message's
+# provider status decides: a 400 or a safety stop is the input's, a 5xx is
+# Gemini's.
+_UNREACHABLE_CODES = {"quota_exhausted", "capability_unavailable", "model_timeout", "internal_error", "http_error"}
+_PROVIDER_STATUS = re.compile(r"\banswered (\d{3})\b")
 
 
 def _unreachable(e: Exception) -> bool:
@@ -96,13 +105,21 @@ def _unreachable(e: Exception) -> bool:
     if isinstance(e, httpx.TransportError):  # connection refused, timeouts
         return True
     if isinstance(e, KError):
-        return e.status in _UNREACHABLE_HTTP or e.status >= 500
+        if e.status in (401, 403) or e.code in _UNREACHABLE_CODES:
+            return True
+        if e.code == "model_error":
+            m = _PROVIDER_STATUS.search(e.message or "")
+            return bool(m) and (int(m.group(1)) in _UNREACHABLE_HTTP or int(m.group(1)) >= 500)
+        return False
     return False
 
 
-def _http_error(status: int, text: str) -> ModelUnavailable:
+def _http_error(status: int, text: str, key: str | None = None) -> ModelUnavailable:
     cls = Unreachable if status in _UNREACHABLE_HTTP or status >= 500 else ModelUnavailable
-    return cls(f"HTTP {status}: {text[:200]}")
+    # The body ends up in the job's error and the digest; a gateway that
+    # echoed the request's key would put it there.
+    body = text[:200].replace(key, "<key>") if key else text[:200]
+    return cls(f"HTTP {status}: {body}")
 
 
 def run(ctx: Ctx, step: str, build: Callable[[dict], Request | None]) -> Result:
@@ -239,7 +256,7 @@ def _anthropic(base: str, key: str, model: str, req: Request, images) -> tuple[s
         timeout=300,
     )
     if r.status_code != 200:
-        raise _http_error(r.status_code, r.text)
+        raise _http_error(r.status_code, r.text, key)
     j = r.json()
     text = "".join(c.get("text", "") for c in j.get("content", []) if c.get("type") == "text")
     u = j.get("usage", {})
@@ -261,7 +278,7 @@ def _openai_chat(base: str, key: str, model: str, req: Request, images) -> tuple
         timeout=300,
     )
     if r.status_code != 200:
-        raise _http_error(r.status_code, r.text)
+        raise _http_error(r.status_code, r.text, key)
     j = r.json()
     text = j["choices"][0]["message"].get("content") or ""
     u = j.get("usage", {})
