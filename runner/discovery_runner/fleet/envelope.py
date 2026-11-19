@@ -2,7 +2,8 @@
 
 A launch missing its repo, origin, route model, base branch or round is refused, naming each field. The
 route's provider, model and effort must be one of the T3 targets `routes.json` lists for that route; the
-repo must carry `.agents/topology.json` and an `origin` remote that matches it. Runtime mode is Auto or lower.
+repo must carry `.agents/topology.json` and an `origin` remote that matches it, both naming a repo Sam owns
+alone (owners exactly ["SamGu-NRX"], origin on his GitHub account). Runtime mode is Auto or lower.
 
 A drafted launch carries text, so it also needs Sam's words: `ask_verbatim` is a list of excerpts, each
 naming the T3 messages it quotes, and each message must be one Sam typed (T3's `createdBy` is "user").
@@ -31,6 +32,7 @@ TEMPLATE_IDS = {"wrap": {"date": re.compile(r"\d{4}-\d{2}-\d{2}")},
                 "correct": {"class_id": re.compile(r"[a-z0-9][a-z0-9-]{0,39}")}}
 MODES_AT_OR_BELOW_AUTO = ("approval-required", "auto-accept-edits", "auto")
 MAX_ROUND = 3
+OWNER = "SamGu-NRX"  # the operator launches only into repos he owns alone
 CUT = "[...]"
 DIVIDER = "---"
 VERBATIM_HEADER = "Sam's words, verbatim:"
@@ -119,6 +121,9 @@ def check(env: Envelope, con=None, routes=None) -> None:
             p["origin"] = f"{env.origin} does not match the repo's origin {actual}"
         elif not topo.get("origin"):
             p["repo"] = f"{repo}/.agents/topology.json declares no origin"
+        elif topo.get("owners") != [OWNER] or not re.fullmatch(
+                rf"(git@github\.com:|https://github\.com/){OWNER}/[\w.-]+?(\.git)?/?", actual.strip(), re.I):
+            p["repo"] = f"{repo} is not a repo Sam owns alone (topology owners {topo.get('owners')}, origin {actual})"
         elif env.origin and not _same_remote(topo["origin"], env.origin):
             p["origin"] = f"{env.origin} does not match topology.json's {topo['origin']}"
         if env.base_branch and repo.is_dir() and "repo" not in p and \

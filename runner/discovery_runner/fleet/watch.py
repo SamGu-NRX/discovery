@@ -37,7 +37,10 @@ TERMINAL_KINDS = ("failed", "stopped_by_agent", "interrupted_unknown", "cancelle
 USER_STOP = {"Stopped by user", "Interrupt requested"}
 STEER_STOP = "Skipped compaction to send a queued message"
 FORCE_STOP = "Force stopped by user"
-STOP_COMMANDS = ("thread.stop", "run.interrupt", "queued-message.promote-to-steer")
+# A force stop dispatches run.interrupt, or thread.background-work.settle when a provider turn is running,
+# with a `server:force-stop:` id (ThreadManagementService.ts:1349-1369).
+STOP_COMMANDS = ("thread.stop", "run.interrupt", "queued-message.promote-to-steer", "thread.background-work.settle")
+SAMS = {"app", "force"}  # command origins that are Sam acting in the app
 UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 CONTINUE_AFTER = dt.timedelta(minutes=10)  # T3 restarts a killed run itself; wait before calling it dead
 
@@ -113,13 +116,11 @@ def interrupted_by(ev: dict) -> str:
     stops = {(o, t) for o, t, _ in cmds if t != "queued-message.promote-to-steer"}
     if (msg or "").startswith("Stopped by an agent"):
         return "agent"
-    if msg == FORCE_STOP and any(o in ("force", "app") for o, _ in stops):
-        return "sam"
-    if msg in USER_STOP and stops and all(o == "app" for o, _ in stops):
+    if msg in USER_STOP | {FORCE_STOP} and stops and all(o in SAMS for o, _ in stops):
         return "sam"
     if msg == STEER_STOP and any(o == "app" and t == "queued-message.promote-to-steer" for o, t, _ in cmds):
         return "sam"
-    if msg is None and ev["completed_at"] and stops and all(o == "app" for o, _ in stops):
+    if msg is None and ev["completed_at"] and stops and all(o in SAMS for o, _ in stops):
         # No interrupt item: count it only when Sam's stop landed in the last minute before the run ended.
         last = max(a for o, t, a in cmds if t != "queued-message.promote-to-steer")
         if parse(ev["completed_at"]) - parse(last) <= dt.timedelta(minutes=1):

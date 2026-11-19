@@ -148,6 +148,8 @@ def cycle(cfg, con, watcher, launcher, outbox):
         record_cards(cards)
         log(f"{len(cards)} new cards: {[c['key'] for c in cards]}")
     batches = outbox.load()
+    held = {c["key"] for b in batches for c in b}
+    cards = [c for c in cards if c["key"] not in held]  # re-found after a crash before the last commit
     if launcher is not None and cards:
         batches.append(cards)
         outbox.save(batches)  # before the watcher records them as seen, so a crash re-finds them

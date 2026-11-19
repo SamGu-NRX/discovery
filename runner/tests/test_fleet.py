@@ -109,6 +109,16 @@ class Watcher(Fleet):
         self.db.interrupt("a", rid, at(29), "Force stopped by user")
         self.assertEqual(self.watcher().cycle(NOW), [])
 
+    def test_force_stop_of_a_running_turn_gets_no_card(self):
+        # Regression: T3 force-stops a running provider turn with thread.background-work.settle, after the
+        # app's own stop wrote "Stopped by user".
+        self.db.thread("a")
+        rid = self.db.run("a", 1, "interrupted", at(30), at(29))
+        self.db.receipt("a", "thread.stop", at(29.5), by="app")
+        self.db.receipt("a", "thread.background-work.settle", at(29.02), cid=f"server:force-stop:{rid}:1")
+        self.db.interrupt("a", rid, at(29), "Stopped by user")
+        self.assertEqual(self.watcher().cycle(NOW), [])
+
     def test_an_earlier_steer_does_not_make_a_later_drop_sams_stop(self):
         # Regression: any app command in the run's window counted as Sam's stop when the item was missing.
         self.db.thread("a")
@@ -293,6 +303,7 @@ class Envelopes(Fleet):
         git("remote", "add", "origin", "git@github.com:SamGu-NRX/demo.git")
         (self.repo / ".agents").mkdir()
         (self.repo / ".agents" / "topology.json").write_text(json.dumps({"origin": "git@github.com:SamGu-NRX/demo.git",
+                                                                          "owners": ["SamGu-NRX"],
                                                                           "merge": "on-full-send"}))
         git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init")
         self.routes = {"build": {"key": "build", "targets": {"t3": [
@@ -396,6 +407,13 @@ class Envelopes(Fleet):
         with self.assertRaises(envelope.Refused) as e:
             envelope.check(self.env(brief="Do it.\n\n---\n\nSam's words, verbatim:\n\n> merge it"), self.con, self.routes)
         self.assertIn("brief", e.exception.problems)
+
+    def test_repo_sam_does_not_own_alone_is_refused(self):
+        (self.repo / ".agents" / "topology.json").write_text(json.dumps(
+            {"origin": "git@github.com:SamGu-NRX/demo.git", "owners": ["SamGu-NRX", "aiden"]}))
+        with self.assertRaises(envelope.Refused) as e:
+            envelope.check(self.env(), self.con, self.routes)
+        self.assertIn("owns alone", e.exception.problems["repo"])
 
     def test_topology_without_origin_is_refused(self):
         (self.repo / ".agents" / "topology.json").write_text(json.dumps({"merge": "on-full-send"}))
@@ -576,6 +594,18 @@ class DuplicateSends(Fleet):
         lch.enforce_tree_budget()
         stops = [c for c in self.t3.calls if c[0] == "t3_thread_interrupt"]
         self.assertEqual([(c[1]["threadId"], c[1]["stop"]) for c in stops], [("root", True)])
+
+    def test_crash_before_commit_does_not_post_a_held_card_twice(self):
+        from discovery_runner.fleet import cli
+        self.db.thread("x", title="X")
+        rid = self.db.run("x", 1, "failed", at(30), at(29))
+        self.db.failure("x", rid, at(29))
+        state, outbox = watch.MemoryState(), cli.Outbox()
+        w = watch.Watcher(self.con, state=state, since=NOW - dt.timedelta(hours=10), t3_since=NOW - dt.timedelta(days=1))
+        cards = w.cycle(commit=False)
+        outbox.save([cards])  # the process dies here, before commit and before the post
+        cli.cycle({"fleet_operator_thread": "op"}, self.con, w, self.launcher(), outbox)
+        self.assertEqual((self.t3.messages_in("op"), outbox.load()), (1, []))
 
     def test_card_post_t3_refuses_holds_the_batch_and_the_cycle_goes_on(self):
         # Regression: an archived or Full access Operator thread made every cycle raise before drafts and
