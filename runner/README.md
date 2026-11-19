@@ -88,6 +88,77 @@ launchctl print gui/$(id -u)/com.samgu.discovery-runner | grep -E 'state|pid'
 
 `KeepAlive` restarts the loop if it exits. A failing cycle is logged and retried next cycle, so it does not cause a restart loop.
 
+## Fleet
+
+The fleet watcher finds T3 runs that ended abnormally and posts one card for each to a pinned Operator thread. It runs as a second launchd job, `fleet loop`, every 2 minutes, because the main loop sleeps 10 minutes and can block on preps. It obeys `STOP`. It makes no model calls of its own, but each card message starts one turn in the Operator thread.
+
+**Where it reads.** It reads only T3's database, `~/.t3/userdata/statev2.sqlite`, opened read-only (`mode=ro`, `query_only`). Each cycle runs one scan query on `orchestration_v2_projection_runs`, joined to the thread table for mode, parent and archived state, then a few indexed lookups (failure, stop evidence, activity, lead) for each run that ended abnormally or is still open. The query is watermarked on `requested_at` and `completed_at`, with 2 minutes of overlap, plus the runs still open. T3 has no index on those two columns, so the query scans the run table. On 2026-11-19 that was 22,852 rows: a cycle took 9 ms warm and about 0.3 s cold, and a full 14-day poll took 38 ms. At startup, `probe.py` checks every table and column the fleet queries. If T3's schema changes, the watcher stops and logs each missing column as `WATCHER DISABLED`; it rechecks hourly.
+
+**What gets a card.**
+
+| Run ended | Card |
+| --- | --- |
+| `completed` | None. T3 already notifies Sam |
+| `failed` | Yes, with T3's failure class and message |
+| `interrupted`, stopped by Sam | None. The stop command must come from his app (a client UUID, a force stop, or a cascade from his stop of the lead), and the interrupt item must carry the text T3 writes for that kind of stop. With no interrupt item, his stop must have landed within a minute of the run's end |
+| `interrupted` by an agent (an MCP stop) | Yes, with the agent's reason |
+| `interrupted` with no clear evidence | Yes, marked unclear. Never acted on |
+| `cancelled` after it started | Yes, if no later run started and T3 has been up for 10 minutes without continuing it. T3 cancels runs a restart kills and usually continues them when it starts again |
+| open, nothing new for `fleet_stall_min` (30) minutes | Yes, if the watcher has been awake that whole time, so a Mac that slept does not stall every run |
+
+A dead child's card names its lead and says whether the lead is idle. Nothing is sent to either. The Operator thread and its children never get cards. A Full access thread can only be resumed by Sam, because T3 refuses the operator's Auto sign-in there (`threadAccess.ts`). Card text that comes from other threads, such as titles, T3's error text and agents' stop reasons, is quoted and labeled as data.
+
+**Writes.** Only `launcher.py` writes to T3, and only through `t3client.py`. A test fails if any other module imports it.
+
+- **Stable keys.** Each write has a stable key. The key goes to T3 as `clientRequestId`, and T3 replays a repeated key within one sign-in, across T3 restarts. The key also goes into the message as a last line, `fleet-key: <key>`.
+- **Journal.** `state/fleet-journal.json` records each write before the call and marks it accepted after.
+- **Retries.** Before any retry, the launcher reads T3's messages table for the key line. A new sign-in drops T3's replay, so this check stops a second message even then. It reads the table directly because T3's search index leaves out messages agents write.
+- **Lost answers.** A lost answer is written as an `uncertain` receipt. A refused connection is not, because that call never reached T3. Either one drops the cached client, so a T3 restart on another port is picked up at once. A post T3 refuses (an archived Operator thread, say) holds its cards and shows in the heartbeat as `post_refused`; the rest of the cycle still runs.
+- **Card order.** The watcher saves a run as seen only after its card is in `state/fleet-outbox.json`. Cards T3 has not accepted stay there.
+
+**Modes** (`fleet_mode`): `cards`, the default, only posts cards. `full` also shows each drafted launch (`fleet draft`) in the Operator thread and launches it once Sam types `go 2` there. Only text Sam typed in the app counts (`createdBy` "user" from web, mobile or his queued messages, never a scheduled task's), and only a "go" typed after the draft was shown. Drafts and notes in the Operator thread start with a line telling that thread's agent the text is data for Sam. A launch refused at that point stays queued, and the Operator thread says why. In `full` mode each cycle also counts every run in each tree the operator launched, children included. A tree still running past 20 runs is stopped the way its Stop button does, unless Sam has typed in it since, and no new launch goes out while one is over. Resuming the operator's own threads and the unattended `wrap` and `correct` launches are not built yet.
+
+**Launch checks.** Launches run at Auto or lower. `envelope.py` refuses each of these before T3 is called, naming the field:
+
+- a launch missing its repo, origin, route model, base branch or round;
+- a model that is not one of the route's T3 targets in `routes.json`;
+- a repo without `.agents/topology.json`, or one whose `origin` is missing from the file or differs from the repo's;
+- round 4;
+- quoted words that are not Sam's.
+
+A drafted brief quotes Sam below a divider. Each excerpt's pieces, split at `[...]`, must appear in a message he typed, byte for byte, in order and on word edges, at least two words each. The brief above the divider is the drafter's own text; Sam reads it before he types "go".
+
+**Limits.** They come from `~/.agent-config/operator/limits.json` when it exists, otherwise from the design's starting values: 12 launches a day, 3 open at once, and an 8 GB disk floor. A 24-a-day cap on card messages is not in the design; it stops a runaway loop.
+
+**Receipts** (`logs/receipts.jsonl`) record what the runner checked:
+
+- `claimed`: an agent's claim.
+- `observed`: T3's run status, the requested and executed models, and the worktree head.
+- `verified`: the runner ran the acceptance command and kept its exit code and last 20 lines.
+
+`mismatch` means an executed model differed from the requested one. A provider that reports no model shows "model unknown".
+
+**The charter** is the block a new session starts with, 40 lines at most. It holds confirmed decisions from SecondBrain's decision log, newest first, plus the repo's own decisions when the repo is Sam's (its `topology.json` lists him as owner and matches its origin).
+
+| Command | What it does |
+| --- | --- |
+| `fleet probe` | Day 0: prints every field the fleet reads for an archived thread, a child and an Auto thread, with poll times |
+| `fleet replay [--days 14]` | Day-1 check: replays the window through the watcher and scores it on real dead, Sam-stopped and healthy runs. Exits 1 on a fail |
+| `fleet cycle` | One cycle over the last 24 hours. Prints the cards and posts nothing |
+| `fleet find "<question>"`, `fleet find --eval cases.json` | Which thread was that? Searches titles, Sam's messages and answers, archived threads included |
+| `fleet charter [--hook claude] [--publish FILE]` | Prints the session-start block, as Claude Code SessionStart hook JSON, or writes it between markers in a CLAUDE.md or AGENTS.md (the route that was checked for Codex) |
+| `fleet observe <run_id> --ask "<Sam's words>"` | Writes an observed receipt |
+| `fleet draft <envelope.json>` | Checks a drafted launch and queues it for Sam's `go` |
+| `fleet login` | Signs the runner in to T3. Sam approves at Auto on T3's page. A token with scopes above Auto is refused and never saved; a good one goes to `~/.agent-secrets/discovery-t3-mcp` (mode 600) |
+| `fleet loop` | The launchd job |
+
+Install, after `fleet login` and setting `fleet_operator_thread` in the config:
+
+```sh
+cp runner/launchd/com.samgu.discovery-fleet.plist ~/Library/LaunchAgents/
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.samgu.discovery-fleet.plist
+```
+
 ## Tests
 
 ```sh

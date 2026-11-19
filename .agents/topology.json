@@ -1,0 +1,13 @@
+{
+  "repo": "SamGu-NRX/discovery",
+  "origin": "git@github.com:SamGu-NRX/discovery.git",
+  "owners": ["SamGu-NRX"],
+  "default_branch": "main",
+  "agent_branch_prefix": "agent/",
+  "pr": "open-on-agent-branch",
+  "merge": "on-full-send",
+  "notes": {
+    "pr": "Agents may open full, non-draft PRs from agent/ branches here: Sam is the only collaborator (checked 2026-11-19), so a PR reaches no one else. docs/CONTRACT.md invariant 2 counts this as reversible.",
+    "merge": "An agent merges only in a thread where Sam typed \"full send\". The operator itself never merges. A repo without this file is human-only."
+  }
+}
