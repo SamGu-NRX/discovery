@@ -1,4 +1,5 @@
-// The daily new-saves run. At 05:00 America/Chicago the service worker opens
+// The daily new-saves run. At 05:00 America/Chicago (05:30 for @_sgu_,
+// dailyWindow) the service worker opens
 // the daily page (daily.html?auto=daily), which reads Bookmarks down to the
 // newest save the last run handled, collects the context of the saves above
 // it (the new_saves job in lib/fetchrun.js) and hands the bundle to the
@@ -10,15 +11,30 @@
 
 export const DAILY_ALARM = "daily-fetch";
 export const ZONE = "America/Chicago";
-const START = [5, 0];
-const DEADLINE = [6, 30];
+// Each account's window, Chicago time: the run starts at `start` and is
+// retried while busy until `deadline`. Each account reads in its own Chrome
+// profile, and one profile's extension cannot see the other's run, so
+// @_sgu_ starts half an hour after @sdotgu (the discovery lead's design,
+// Nov 18). Any other account gets the default window.
+const WINDOWS = {
+  _sgu_: { start: [5, 30], deadline: [7, 0] },
+};
+const DEFAULT_WINDOW = { start: [5, 0], deadline: [6, 30] };
+const windowFor = (account) => WINDOWS[account?.toLowerCase()] ?? DEFAULT_WINDOW;
+const hm = ([h, m]) => `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+// The account's window as "05:00" and "06:30", for messages and the popup.
+export function dailyHours(account) {
+  const w = windowFor(account);
+  return { start: hm(w.start), deadline: hm(w.deadline) };
+}
 const RETRY_MS = 15 * 60_000;
-// An alarm can fire a little late; one due at 06:30 still counts.
+// An alarm can fire a little late; one due at the deadline still counts.
 const SLACK_MS = 2 * 60_000;
 
-// On by default for these accounts (Sam approved the loop for @sdotgu); the
-// popup's checkbox overrides it either way.
-const DEFAULT_ON = ["sdotgu"];
+// On by default for these accounts (Sam approved the loop for @sdotgu, and
+// on Nov 18 for @_sgu_, which he also saves on); the popup's checkbox
+// overrides it either way.
+const DEFAULT_ON = ["sdotgu", "_sgu_"];
 export function dailyEnabled(config, account) {
   if (typeof config.dailyFetch === "boolean") return config.dailyFetch;
   return Boolean(account && DEFAULT_ON.includes(account.toLowerCase()));
@@ -53,37 +69,39 @@ export function chicagoAt(day, hh, mm) {
 
 const nextDay = (day) => chicagoDay(chicagoAt(day, 12, 0) + 24 * 3600_000);
 
-export function dailyWindow(now) {
+export function dailyWindow(now, account = null) {
+  const { start, deadline } = windowFor(account);
   const day = chicagoDay(now);
-  return { day, start: chicagoAt(day, ...START), deadline: chicagoAt(day, ...DEADLINE), tomorrow: chicagoAt(nextDay(day), ...START) };
+  return { day, start: chicagoAt(day, ...start), deadline: chicagoAt(day, ...deadline), tomorrow: chicagoAt(nextDay(day), ...start) };
 }
 
 // ---- when to run ----------------------------------------------------------
 
 /**
  * What the service worker does when the alarm fires, Chrome starts, or a
- * retry comes due. `busy` is why a run cannot start now, or null: an
- * archive fetch run or fetch page, or a pause after an X signal.
- * Returns one of
+ * retry comes due, for `account`'s window. `busy` is why a run cannot start
+ * now, or null: an archive fetch run or fetch page, or a pause after an X
+ * signal. Returns one of
  *   { action: "run" }
- *   { action: "wait", at }               before 05:00, or today already done
+ *   { action: "wait", at }               before the window, or today already done
  *   { action: "retry", at, cause }       busy; again in 15 minutes
- *   { action: "give_up", cause, at }     today's window is over; `at` is tomorrow's 05:00
+ *   { action: "give_up", cause, at }     today's window is over; `at` is tomorrow's start
  */
-export function planAttempt(state, now, busy) {
-  const w = dailyWindow(now);
+export function planAttempt(state, now, busy, account = null) {
+  const w = dailyWindow(now, account);
+  const hours = dailyHours(account);
   if (state?.lastDay === w.day) return { action: "wait", at: w.tomorrow };
   if (now < w.start) return { action: "wait", at: w.start };
   // Before the account's first run there is nothing to have missed: an
   // install after the day's window waits for tomorrow's.
   if (!state && now > w.deadline + SLACK_MS) return { action: "wait", at: w.tomorrow };
   if (now > w.deadline + SLACK_MS) {
-    return { action: "give_up", at: w.tomorrow, cause: `the 05:00–06:30 window had passed when the extension could run it (${new Date(now).toISOString()}); Chrome was closed or asleep` };
+    return { action: "give_up", at: w.tomorrow, cause: `the ${hours.start}–${hours.deadline} window had passed when the extension could run it (${new Date(now).toISOString()}); Chrome was closed or asleep` };
   }
   if (!busy) return { action: "run" };
   const retry = now + RETRY_MS;
   if (retry <= w.deadline + SLACK_MS) return { action: "retry", at: retry, cause: busy };
-  return { action: "give_up", at: w.tomorrow, cause: `${busy}, still at 06:30` };
+  return { action: "give_up", at: w.tomorrow, cause: `${busy}, still at ${hours.deadline}` };
 }
 
 // ---- the job --------------------------------------------------------------
@@ -130,7 +148,7 @@ export function retriesInWindow(result, { manual = false } = {}) {
  * boundary X no longer lists (Sam removed that save) restarts from the
  * current top and says the saves in between were not fetched. A run uses
  * up the day unless retriesInWindow says otherwise: the next try is then
- * tomorrow's 05:00.
+ * tomorrow's start.
  */
 export function nextDailyState(prev, result, now, { manual = false } = {}) {
   const saves = result.newSaves;

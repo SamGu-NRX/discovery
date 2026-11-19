@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { chicagoAt, chicagoDay, dailyEnabled, dailyJobs, nextDailyState, planAttempt, retriesInWindow } from "../app/lib/daily.js";
+import { chicagoAt, chicagoDay, dailyEnabled, dailyHours, dailyJobs, dailyWindow, nextDailyState, planAttempt, retriesInWindow } from "../app/lib/daily.js";
 import { parseJobs } from "../app/lib/fetchrun.js";
 
 const iso = (ms) => new Date(ms).toISOString();
@@ -61,13 +61,40 @@ test("a scheduled run that stops before reading a save, not by X, is tried again
   assert.equal(nextDailyState({}, { ...early, stop: { reason: "rate_limited", detail: "429" } }, now).state.lastDay, "2026-11-13");
 });
 
-test("the daily run is on by default for @sdotgu only, and the popup's setting wins", () => {
+test("@_sgu_ runs from 05:30 to 07:00 Chicago, half an hour after @sdotgu, whose window is unchanged", () => {
+  const day = (hm) => at(`2026-11-13T${hm}:00Z`); // 11:30Z is 05:30 Chicago in winter
+  assert.deepEqual(dailyHours("_sgu_"), { start: "05:30", deadline: "07:00" });
+  assert.deepEqual(dailyHours("sdotgu"), { start: "05:00", deadline: "06:30" });
+  assert.deepEqual(dailyHours(null), { start: "05:00", deadline: "06:30" });
+  assert.deepEqual(planAttempt(null, day("11:00"), null, "_sgu_"), { action: "wait", at: day("11:30") });
+  assert.deepEqual(planAttempt(null, day("11:00"), null, "sdotgu"), { action: "run" });
+  assert.deepEqual(planAttempt(null, day("11:30"), null, "_SGU_"), { action: "run" });
+  const busy = "the archive's fetch run is going";
+  assert.deepEqual(planAttempt(null, day("12:40"), busy, "_sgu_"), { action: "retry", at: day("12:55"), cause: busy });
+  const late = planAttempt(null, day("13:00"), busy, "_sgu_");
+  assert.equal(late.action, "give_up");
+  assert.match(late.cause, /still at 07:00/);
+  assert.equal(iso(late.at), "2026-11-14T11:30:00.000Z");
+  const missed = planAttempt({ lastDay: "2026-11-12" }, day("13:10"), null, "_sgu_");
+  assert.match(missed.cause, /05:30–07:00 window had passed/);
+  // 12:40Z is past @sdotgu's deadline but inside @_sgu_'s.
+  assert.equal(planAttempt({ lastDay: "2026-11-12" }, day("12:40"), null, "sdotgu").action, "give_up");
+  assert.deepEqual(planAttempt({ lastDay: "2026-11-12" }, day("12:40"), null, "_sgu_"), { action: "run" });
+  // Summer and the day DST ends: 05:30 Chicago is 10:30Z, then 11:30Z.
+  assert.equal(iso(dailyWindow(at("2026-07-01T09:00:00Z"), "_sgu_").start), "2026-07-01T10:30:00.000Z");
+  assert.equal(iso(dailyWindow(at("2026-07-01T09:00:00Z"), "_sgu_").deadline), "2026-07-01T12:00:00.000Z");
+  assert.equal(iso(dailyWindow(at("2026-11-01T09:00:00Z"), "_sgu_").start), "2026-11-01T11:30:00.000Z");
+});
+
+test("the daily run is on by default for @sdotgu and @_sgu_, and the popup's setting wins", () => {
   assert.equal(dailyEnabled({ dailyFetch: null }, "sdotgu"), true);
   assert.equal(dailyEnabled({ dailyFetch: null }, "SDotGu"), true);
-  assert.equal(dailyEnabled({ dailyFetch: null }, "_sgu_"), false);
+  assert.equal(dailyEnabled({ dailyFetch: null }, "_sgu_"), true);
+  assert.equal(dailyEnabled({ dailyFetch: null }, "someoneelse"), false);
   assert.equal(dailyEnabled({ dailyFetch: null }, null), false);
   assert.equal(dailyEnabled({ dailyFetch: false }, "sdotgu"), false);
-  assert.equal(dailyEnabled({ dailyFetch: true }, "_sgu_"), true);
+  assert.equal(dailyEnabled({ dailyFetch: false }, "_sgu_"), false);
+  assert.equal(dailyEnabled({ dailyFetch: true }, "someoneelse"), true);
 });
 
 test("the daily job parses, with x-direct's reply-parent walk, cap 80 and 15 branches", () => {

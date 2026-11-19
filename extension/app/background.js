@@ -49,7 +49,7 @@ async function setUp() {
   await chrome.alarms.create(FLUSH_ALARM, { periodInMinutes: 1 });
   await chrome.alarms.create(REPOLL_ALARM, { periodInMinutes: 60 });
   if (!(await chrome.alarms.get(SESSION_ALARM))) await scheduleNext();
-  // Chrome may start inside the 05:00–06:30 window; startDaily runs it then,
+  // Chrome may start inside the account's daily window; startDaily runs it then,
   // or sets the alarm for the next start.
   await startDaily().catch((err) => recordProblem("daily", err.message));
 }
@@ -433,7 +433,7 @@ function startDaily() {
     const config = await loadConfig();
     const account = await getLocal("lastAccount", null);
     if (!dailyEnabled(config, account)) {
-      await chrome.alarms.create(DAILY_ALARM, { when: dailyWindow(now).tomorrow });
+      await chrome.alarms.create(DAILY_ALARM, { when: dailyWindow(now, account).tomorrow });
       return;
     }
     const states = await dailyStates();
@@ -442,12 +442,12 @@ function startDaily() {
     // A page opened under 10 minutes ago that has not claimed yet, or a run
     // already going from it, is today's run.
     if (dailyJob && now - dailyJob.at < 10 * 60_000) return;
-    const plan = planAttempt(state, now, await dailyBusy());
+    const plan = planAttempt(state, now, await dailyBusy(), account);
     if (plan.action === "run") {
       await chrome.storage.session.set({ dailyJob: { account, at: now, boundary: state?.boundary ?? null } });
       await setLocal({ dailyWaiting: null });
       await chrome.windows.create({ url: chrome.runtime.getURL("fetch/daily.html?auto=daily"), focused: false, type: "normal", width: 900, height: 700 });
-      await chrome.alarms.create(DAILY_ALARM, { when: dailyWindow(now).tomorrow });
+      await chrome.alarms.create(DAILY_ALARM, { when: dailyWindow(now, account).tomorrow });
     } else if (plan.action === "give_up") {
       await setDailyState(account, skippedDay(state, plan.cause, now));
       await setLocal({ dailyWaiting: null });
@@ -502,7 +502,7 @@ function recordDaily({ manual, account, result, bundle }) {
     const prev = states[account] ?? null;
     if (result?.refused) {
       if (!manual) {
-        const plan = planAttempt(prev, now, result.refused);
+        const plan = planAttempt(prev, now, result.refused, account);
         if (plan.action === "give_up") {
           await setDailyState(account, skippedDay(prev, plan.cause, now));
           await recordProblem("daily", `daily fetch skipped today: ${plan.cause}`);
@@ -517,9 +517,9 @@ function recordDaily({ manual, account, result, bundle }) {
     await setDailyState(account, state);
     if (problem) await recordProblem("daily", problem);
     // Stopped before reading a save, and not by X: tried again inside the
-    // window, or the day is given up at 06:30 (lib/daily.js, retriesInWindow).
+    // window, or the day is given up at its deadline (lib/daily.js, retriesInWindow).
     if (retriesInWindow(result, { manual: Boolean(manual) })) {
-      const plan = planAttempt(state, now, `the last try stopped before reading Bookmarks (${result.stop.reason}: ${result.stop.detail})`);
+      const plan = planAttempt(state, now, `the last try stopped before reading Bookmarks (${result.stop.reason}: ${result.stop.detail})`, account);
       if (plan.action === "give_up") {
         await setDailyState(account, skippedDay(state, plan.cause, now));
         await recordProblem("daily", `daily fetch skipped today: ${plan.cause}`);

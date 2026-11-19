@@ -1,4 +1,4 @@
-import { dailyEnabled } from "../lib/daily.js";
+import { dailyEnabled, dailyHours } from "../lib/daily.js";
 import { keptBundles } from "../lib/knowledge.js";
 import { loadConfig } from "../lib/store.js";
 
@@ -84,7 +84,7 @@ async function render() {
     const kept = (await keptBundles()).filter((b) => !b.delivered).length;
     const parts = [];
     if (local.dailyWaiting) parts.push(`waiting (${local.dailyWaiting.cause}); next try ${clock(local.dailyWaiting.next)}`);
-    else if (!last) parts.push("05:00 Chicago; no run yet");
+    else if (!last) parts.push(`${dailyHours(local.lastAccount).start} Chicago; no run yet`);
     else if (last.skipped) parts.push(`skipped ${ago(last.at)}: ${last.skipped}`);
     else parts.push(`${ago(last.at)} · ${last.taken} saves${last.stop ? ` · stopped: ${last.stop}` : ""}${last.waiting ? ` · ${last.waiting} waiting` : ""}`);
     if (kept) parts.push(`${kept} bundle${kept > 1 ? "s" : ""} kept, not yet delivered`);
@@ -114,6 +114,7 @@ async function render() {
   if (document.activeElement !== $("lens")) $("lens").value = config.lensId ?? "";
   $("lens-baseline").checked = config.lensBaseline;
   $("daily-fetch").checked = daily;
+  $("daily-start").textContent = dailyHours(local.lastAccount).start;
   $("token").placeholder = config.ingestToken ? `Saved, ends in ${config.ingestToken.slice(-4)}` : "Paste the INGEST token";
 }
 

@@ -74,8 +74,9 @@ async function init() {
 }
 
 // The daily new-saves run (lib/daily.js) on daily.html.
-// - auto=daily: the service worker opened the page at 05:00 Chicago and
-//   holds the job; the page closes itself when done.
+// - auto=daily: the service worker opened the page at the account's start
+//   (05:00 Chicago, 05:30 for @_sgu_) and holds the job; the page closes
+//   itself when done.
 // - auto=daily-now[&newest=N]: a manual test run, opened by hand. With
 //   newest, it takes the newest N saves and starts the boundary there;
 //   without, it runs from the stored boundary. It stays open with its status.
