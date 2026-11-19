@@ -1,4 +1,4 @@
-"""discovery-runner: score | work | loop | flush | calibrate | status | stop | resume."""
+"""discovery-runner: score | work | loop | flush | calibrate | status | stop | resume | fleet <command>."""
 import argparse
 import json
 import sys
@@ -64,6 +64,10 @@ def loop(cfg):
 
 
 def main(argv=None):
+    argv = sys.argv[1:] if argv is None else argv
+    if argv[:1] == ["fleet"]:
+        from .fleet.cli import main as fleet_main
+        return fleet_main(argv[1:])
     ap = argparse.ArgumentParser(prog="discovery-runner")
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("score")

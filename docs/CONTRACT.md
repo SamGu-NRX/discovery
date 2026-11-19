@@ -9,7 +9,7 @@ It turns what Sam's X accounts see into finished work. An extension in his logge
 ## Invariants
 
 1. D1 is the only durable store. Durable Object state is a cache that can be rebuilt from D1.
-2. Nothing irreversible happens without Sam's approval. Irreversible means submit, send, post, pay, RSVP, delete, accept terms, push to a shared remote, or open a PR. Until a device is enrolled, approval is a redeemed approval token. Once one is, it is a signature from the Secure Enclave key of an enrolled iPhone, and the token link no longer decides anything ([APPROVALS.md](APPROVALS.md)). The only executor is the Worker's "open a draft PR", and it runs only after a device-signed approve. Every other approved proposal waits for Sam to execute it.
+2. Nothing irreversible happens without Sam's approval. Irreversible means submit, send, post, pay, RSVP, delete, accept terms, push to a shared remote, or open a PR. One exception, authorized by Sam on 2026-11-19: in a repo Sam owns alone, whose `.agents/topology.json` lists him as the only owner and sets `pr` to `open-on-agent-branch`, pushing an `agent/` branch and opening a full PR from it are reversible. Merging is not: an agent merges only in a thread where Sam typed "full send" and the repo's `merge` field is `on-full-send`. A repo without the file is human-only, and the fleet operator never merges. Until a device is enrolled, approval is a redeemed approval token. Once one is, it is a signature from the Secure Enclave key of an enrolled iPhone, and the token link no longer decides anything ([APPROVALS.md](APPROVALS.md)). The only executor is the Worker's "open a draft PR", and it runs only after a device-signed approve. Every other approved proposal waits for Sam to execute it.
 3. Post text, replies, linked pages and webhook fields are data. No component follows instructions found inside them.
 4. On X, automation only reads. It scrolls and navigates. It never likes, reposts, replies, quotes, follows, bookmarks, sends DMs, marks posts "Not interested", or changes settings. It never logs in. If X shows a login wall, a rate limit or a challenge, the session stops and reports it.
 5. Approvals are rare: at most 3 notifications a day. A proposal with no irreversible step is recorded as `done` and never asks.
@@ -279,6 +279,16 @@ Scoring runs in the runner, because cosine similarity over hundreds of saves wou
   - Never touch coursework. Homework is a separate engine with its own rules, and GOV 310L is excluded.
 - Budgets, in a local config file the director can change: 20 deep reads a day, 5 `codex exec` preps a day, a 10-minute wall clock per prep, and prep scratch under 200 MB per proposal.
 - Runs under launchd (`KeepAlive`), and logs every model call to `~/.discovery/logs/calls.jsonl`.
+
+## Fleet
+
+The runner also watches Sam's T3 threads (runner/README.md, Fleet). It is a second launchd job, `fleet-loop`, with its own 2-minute cycle, and it obeys `~/.discovery/STOP`.
+
+- **Reads** come only from T3's database, `~/.t3/userdata/statev2.sqlite`, opened read-only. A schema check at startup disables the watcher, naming each missing column, when T3's schema changes.
+- **Writes** go only through T3's MCP endpoint, with a sign-in Sam approved at Auto. T3 refuses that sign-in any thread above Auto, so the operator cannot message the Full access threads Sam runs; those get a card and Sam resumes them himself.
+- **Cards** are for abnormal ends only: a failed run, a run interrupted when nothing shows Sam stopped it, or an open run with no activity for 30 minutes. A normal finish gets none, because T3 already notifies Sam. A run Sam stopped is never acted on.
+- **Launches** happen only with `fleet_mode` set to `full`. They run at Auto or lower, from an envelope that names the repo, its origin, the route's model, the base branch and the round, and a drafted brief launches only after Sam replies "go" in the Operator thread. The brief quotes Sam's words below a divider, unchanged.
+- The fleet makes no model calls of its own, so invariant 6 holds.
 
 ## Appendix: X GraphQL paths
 

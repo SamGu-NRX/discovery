@@ -88,6 +88,64 @@ launchctl print gui/$(id -u)/com.samgu.discovery-runner | grep -E 'state|pid'
 
 `KeepAlive` restarts the loop if it exits. A failing cycle is logged and retried next cycle, so it does not cause a restart loop.
 
+## Fleet
+
+The fleet watcher finds T3 runs that ended abnormally and posts one card for each to a pinned Operator thread. It runs as a second launchd job, `fleet loop`, every 2 minutes, because the main loop sleeps 10 minutes and can block on preps. It obeys `STOP`. It makes no model calls.
+
+**Where it reads.** It reads only T3's database, `~/.t3/userdata/statev2.sqlite`, opened read-only (`mode=ro`, `query_only`). Each cycle runs one query on `orchestration_v2_projection_runs`, joined to the thread table for mode, parent and archived state. The query is watermarked on `requested_at` and `completed_at`, with 2 minutes of overlap, plus the runs still open. On the live 17 GB database on 2026-11-19, a full 14-day poll of 3,346 runs took 38 ms and a normal cycle 9 ms. At startup, `probe.py` checks every table and column the fleet queries. If T3's schema changes, the watcher stops and logs each missing column as `WATCHER DISABLED`; it rechecks hourly.
+
+**What gets a card.**
+
+| Run ended | Card |
+| --- | --- |
+| `completed` | None. T3 already notifies Sam |
+| `failed` | Yes, with T3's failure class and message |
+| `interrupted`, stopped from Sam's app | None. That needs a client stop command in T3's receipts and one of the texts T3 writes for an app stop |
+| `interrupted` by an agent (an MCP stop) | Yes, with the agent's reason |
+| `interrupted` with no clear evidence | Yes, marked unclear. Never acted on |
+| open, nothing new for `fleet_stall_min` (30) minutes | Yes, if the watcher has been awake that whole time, so a Mac that slept does not stall every run |
+
+A dead child's card names its lead and says whether the lead is idle. Nothing is sent to either. A Full access thread can only be resumed by Sam, because T3 refuses the operator's Auto sign-in there (`threadAccess.ts`).
+
+**Writes.** Only `launcher.py` writes to T3, and only through `t3client.py`. A test fails if any other module imports it. Each write has a stable key. The key goes to T3 as `clientRequestId` and also into the message as a last line, `fleet-key: <key>`. A journal (`state/fleet-journal.json`) records each write before the call and marks it accepted after. Before any retry, the launcher searches T3's database for the key line. So a lost answer, a kill after T3 accepted, or a T3 restart never sends a second message. A lost answer is also written as an `uncertain` receipt. Cards T3 has not accepted stay in `state/fleet-outbox.json`.
+
+**Modes** (`fleet_mode`): `cards`, the default, only posts cards. `full` also:
+
+- launches a drafted brief after Sam types `go 2 4` in the Operator thread. Only text whose `createdBy` is "user" counts;
+- launches the unattended templates `wrap(date)` and `correct(class_id)`;
+- resumes threads the operator launched itself.
+
+Launches run at Auto or lower. `envelope.py` refuses a launch missing its repo, origin, route model, base branch or round, naming each field. It also refuses a model that is not one of the route's T3 targets in `routes.json`, a repo without `.agents/topology.json`, round 4, and a brief written from anything but Sam's words. A drafted brief quotes Sam below a divider, and each excerpt must appear byte for byte in a message he typed. Limits come from `~/.agent-config/operator/limits.json` when it exists, otherwise from the design's starting values: 12 launches a day, 3 open at once, an 8 GB disk floor and 24 card messages a day.
+
+**Receipts** (`logs/receipts.jsonl`) record what the runner checked:
+
+- `claimed`: an agent's claim.
+- `observed`: T3's run status, the requested and executed models, and the worktree head.
+- `verified`: the runner ran the acceptance command and kept its exit code and last 20 lines.
+
+`mismatch` means an executed model differed from the requested one. A provider that reports no model shows "model unknown".
+
+**The charter** is the block a new session starts with: confirmed decisions from the repo and from SecondBrain's decision log, newest first, 40 lines at most.
+
+| Command | What it does |
+| --- | --- |
+| `fleet probe` | Day 0: prints every field the fleet reads for an archived thread, a child and an Auto thread, with poll times |
+| `fleet replay [--days 14]` | Day-1 check: replays the window through the watcher and scores it on real dead, Sam-stopped and healthy runs. Exits 1 on a fail |
+| `fleet cycle` | One cycle over the last 24 hours. Prints the cards and posts nothing |
+| `fleet find "<question>"`, `fleet find --eval cases.json` | Which thread was that? Searches titles, Sam's messages and answers, archived threads included |
+| `fleet charter [--hook claude\|codex] [--publish FILE]` | Prints the session-start block, as SessionStart hook JSON, or writes it between markers in a CLAUDE.md or AGENTS.md |
+| `fleet observe <run_id> --ask "<Sam's words>"` | Writes an observed receipt |
+| `fleet draft <envelope.json>` | Checks a drafted launch and queues it for Sam's `go` |
+| `fleet login` | Signs the runner in to T3. Sam approves at Auto on T3's page. The token goes to `~/.agent-secrets/discovery-t3-mcp` (mode 600) |
+| `fleet loop` | The launchd job |
+
+Install, after `fleet login` and setting `fleet_operator_thread` in the config:
+
+```sh
+cp runner/launchd/com.samgu.discovery-fleet.plist ~/Library/LaunchAgents/
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.samgu.discovery-fleet.plist
+```
+
 ## Tests
 
 ```sh

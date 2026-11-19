@@ -64,6 +64,13 @@ DEFAULTS = {
     # Verified application facts (each with its source), used to fill non-essay form fields.
     "application_facts": "~/.claude/skills/application-letters/references/facts.md",
     "t3_state_db": "~/.t3/userdata/statev2.sqlite",
+    # The fleet watcher (runner/README.md, Fleet). "cards" posts cards to the Operator thread and nothing
+    # else; "full" also launches approved drafts and resumes threads the operator launched.
+    "fleet_mode": "cards",
+    "fleet_operator_thread": None,
+    "fleet_interval_s": 120,
+    # Starting value from the design (final-design.md 3.2), not measured: stalled against slow is unknown.
+    "fleet_stall_min": 30,
 }
 
 
