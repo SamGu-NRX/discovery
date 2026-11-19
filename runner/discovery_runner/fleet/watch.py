@@ -105,6 +105,9 @@ def stop_evidence(con, thread_id, run_id, started_at, completed_at) -> dict:
         f"SELECT command_id, command_type, accepted_at FROM {probe.RECEIPTS} WHERE aggregate_kind = 'thread'"
         f" AND aggregate_id = ? AND accepted_at >= ? AND accepted_at <= ? AND command_type IN ({marks})",
         (thread_id, started_at, end, *STOP_COMMANDS)).fetchall()
+    # Settle commands also follow ordinary stops as T3 effects ("effect:..."); only a force stop's own
+    # settle says who acted.
+    cmds = [c for c in cmds if c[1] != "thread.background-work.settle" or origin(c[0]) == "force"]
     return {"message": item[0] if item else None, "completed_at": completed_at,
             "commands": sorted({(origin(c[0]), c[1], c[2]) for c in cmds})}
 

@@ -117,7 +117,9 @@ class Watcher(Fleet):
         self.db.receipt("a", "thread.stop", at(29.5), by="app")
         self.db.receipt("a", "thread.background-work.settle", at(29.02), cid=f"server:force-stop:{rid}:1")
         self.db.interrupt("a", rid, at(29), "Stopped by user")
-        self.assertEqual(self.watcher().cycle(NOW), [])
+        self.db.receipt("a", "thread.background-work.settle", at(29.03),
+                        cid="effect:0b0e5c1a-1111-4222-8333-444455556666:provider-turn.interrupt:x")
+        self.assertEqual(self.watcher().cycle(NOW), [], "an ordinary stop's settle effect is not someone else's stop")
 
     def test_an_earlier_steer_does_not_make_a_later_drop_sams_stop(self):
         # Regression: any app command in the run's window counted as Sam's stop when the item was missing.
