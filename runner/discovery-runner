@@ -1,0 +1,9 @@
+#!/opt/homebrew/bin/python3
+"""Entry point: `runner/discovery-runner <command>`. See runner/README.md."""
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from discovery_runner.__main__ import main  # noqa: E402
+
+main()

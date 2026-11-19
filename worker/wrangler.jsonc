@@ -15,12 +15,38 @@
       "migrations_dir": "migrations"
     }
   ],
+  // Workers AI, used only by POST /embed (bge-base-en-v1.5). Local wrangler
+  // dev reaches the real service for this binding; the tests never call it.
+  "ai": { "binding": "AI" },
+  // One r2_buckets key: a second one would replace this list, not add to it.
+  // KNOWLEDGE holds the knowledge store's bytes (docs/KNOWLEDGE.md); VOICE
+  // holds voice notes from the iPhone app (src/voice.ts), and
+  // scripts/deploy-production.sh creates its bucket. Local wrangler dev
+  // keeps its own copies under the state directory.
+  "r2_buckets": [
+    { "binding": "KNOWLEDGE", "bucket_name": "x-knowledge" },
+    { "binding": "VOICE", "bucket_name": "discovery-voice" }
+  ],
   "durable_objects": {
-    "bindings": [{ "name": "WATCHER", "class_name": "WatcherDO" }]
+    "bindings": [
+      { "name": "WATCHER", "class_name": "WatcherDO" },
+      // One per bridge task (src/bridge.ts): mailbox_complete wakes the
+      // request waiting on it, so nothing polls D1.
+      { "name": "BRIDGE_WAIT", "class_name": "BridgeWaitDO" },
+      // One, keyed "lens" (src/lens-cron.ts): the cron's lens background
+      // refresh runs as a request to it, in an invocation of its own.
+      { "name": "LENS_CRON", "class_name": "LensCronDO" }
+    ]
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["WatcherDO"] }],
-  // The single dispatcher cron (Workers Free allows 5 per account). Each
-  // watcher's Durable Object alarm drives its checks; this sweep catches lost
-  // alarms, retries failed T3 notifications and records itself for /health.
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["WatcherDO"] },
+    { "tag": "v2", "new_sqlite_classes": ["BridgeWaitDO"] },
+    { "tag": "v3", "new_sqlite_classes": ["LensCronDO"] }
+  ],
+  // The single dispatcher cron. The Cloudflare account is at the 5 triggers
+  // Workers Free allows, so there is no second one. Each watcher's Durable
+  // Object alarm drives its checks; this sweep catches lost alarms, runs the
+  // approval, mailbox and voice work, has LensCronDO retake lens backgrounds,
+  // and records itself for /health.
   "triggers": { "crons": ["*/15 * * * *"] }
 }

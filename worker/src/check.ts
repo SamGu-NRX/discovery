@@ -1,13 +1,73 @@
 import { fingerprint, parse, type Item, type Kind, type Parsed } from "./adapters";
-import { notifyMatches } from "./notify";
 import type { WatcherDO } from "./watcher";
 
 export interface Env {
   DB: D1Database;
   WATCHER: DurableObjectNamespace<WatcherDO>;
+  AI: Ai;
   ADMIN_TOKEN: string;
+  INGEST_TOKEN?: string;
+  RUNNER_TOKEN?: string;
+  // GrokBot's token: POST /inbox/x only.
+  INBOX_TOKEN?: string;
   WEBSUB_SECRET: string;
-  T3_WEBHOOK_URL?: string;
+  // Approval notifications for proposals. Unset means proposals wait
+  // unnotified; watcher matches never POST anywhere.
+  T3_APPROVALS_WEBHOOK_URL?: string;
+  // Mailbox (src/mailbox.ts). Each agent's own token; the dot sends its in
+  // the MCP URL path. Unset means that agent can't reach the mailbox.
+  MAIL_DOT_TOKEN?: string;
+  MAIL_T3_TOKEN?: string;
+  MAIL_GROK_TOKEN?: string;
+  // The read-only transcript at /room/:token. Unset means /room is 404.
+  MAIL_ROOM_TOKEN?: string;
+  // Wake targets. Unset means wakes to that agent fail and are retried.
+  MAIL_T3_WAKE_URL?: string;
+  MAIL_T3_WAKE_SECRET?: string;
+  MAIL_GROK_WAKE_URL?: string;
+  MAIL_GROK_WAKE_KEY?: string;
+  // Comma-separated origins MCP Events callbacks may use. Unset: none.
+  MAIL_CALLBACK_ORIGINS?: string;
+  // Device-signed approvals (docs/APPROVALS.md). APNs token auth: the .p8
+  // key's PEM text, its key id, the team id and the app's bundle id. Any
+  // unset means approval pushes are recorded as no_apns.
+  APNS_KEY_P8?: string;
+  APNS_KEY_ID?: string;
+  APNS_TEAM_ID?: string;
+  APNS_TOPIC?: string;
+  // The first executor (src/executor.ts): a fine-grained token for
+  // SamGu-NRX with contents and pull requests write.
+  GITHUB_PR_TOKEN?: string;
+  // Voice notes: the audio bucket and the transcription key.
+  VOICE: R2Bucket;
+  GEMINI_API_KEY?: string;
+  // The OpenAI-compatible bridge's bearer, and the Durable Object it waits on.
+  BRIDGE_TOKEN?: string;
+  BRIDGE_WAIT: DurableObjectNamespace<import("./bridge").BridgeWaitDO>;
+  // The lens background refresh's own invocation (src/lens-cron.ts).
+  LENS_CRON: DurableObjectNamespace<import("./lens-cron").LensCronDO>;
+  // Local tests only: send APNs, GitHub and Gemini requests to the fixture
+  // server instead of Apple's, GitHub's and Google's hosts. Unset in
+  // production.
+  APNS_ORIGIN?: string;
+  GITHUB_API_ORIGIN?: string;
+  GEMINI_API_ORIGIN?: string;
+  // Knowledge store (src/knowledge/, docs/KNOWLEDGE.md). R2 bucket
+  // x-knowledge; kworker's token; the optional Gemini key, and a base URL
+  // the tests point at the fixture's stand-in.
+  KNOWLEDGE: R2Bucket;
+  KNOWLEDGE_TOKEN?: string;
+  // The extension's daily job: POST /k/intake only.
+  KNOWLEDGE_INTAKE_TOKEN?: string;
+  GEMINI_BASE_URL?: string;
+  // Lens labeling (src/lens.ts). LENS_EMBED_URL replaces Workers AI for
+  // embeddings with an OpenAI-compatible /embeddings endpoint; the label
+  // model is an OpenAI-compatible chat endpoint. Unset label settings mean
+  // labels come from the centroid.
+  LENS_EMBED_URL?: string;
+  LENS_LABEL_URL?: string;
+  LENS_LABEL_MODEL?: string;
+  LENS_LABEL_KEY?: string;
 }
 
 export interface WatcherRow {
@@ -48,7 +108,7 @@ export interface CheckResult {
   outcome: Outcome;
   items_seen: number;
   events_created: number;
-  notified: boolean;
+  candidates_created: number;
   subrequests: number;
   model_calls: number;
   mode: "normal" | "hot";
@@ -75,7 +135,7 @@ const USER_AGENT = "discovery-watcher/0.2 (personal feed watcher; polls each sou
 const MAX_BACKOFF_S = 6 * 3600;
 
 // The only fetch a check uses for its source, so the counts in fetch_log
-// cover every source request. The T3 webhook POST is counted in notifications.
+// cover every source request.
 class Outbound {
   subrequests = 0;
   modelCalls = 0;
@@ -93,9 +153,9 @@ export function matches(rule: string | null, text: string): boolean {
 
 type RuleWatcher = Pick<WatcherRow, "id" | "url" | "hot_rule" | "notify_rule" | "notify_all_new">;
 
-// A hot_rule match shortens the interval and notifies; a notify_rule match
-// only notifies. notify_all_new makes every new item notify, but seeded
-// items only notify through a rule match.
+// A hot_rule match shortens the interval and becomes a candidate; a
+// notify_rule match only becomes a candidate. notify_all_new makes every new
+// item a candidate, but seeded items only through a rule match.
 function classify(w: RuleWatcher, text: string, isNew: boolean) {
   const hot = matches(w.hot_rule, text);
   return { hot, notify: hot || matches(w.notify_rule, text) || (isNew && w.notify_all_new === 1) };
@@ -107,20 +167,41 @@ function describeRule(w: RuleWatcher): string {
   return rules.join(" or ");
 }
 
+interface CandidateRow {
+  ref: string;
+  title: string;
+  url: string | null;
+}
+
+// Rule matches become watcher_event candidates for the runner. UNIQUE (kind,
+// ref) makes a repeat of the same match insert nothing.
+function candidateStatement(db: D1Database, rows: CandidateRow[], now: number): D1PreparedStatement {
+  return db
+    .prepare(
+      `INSERT OR IGNORE INTO candidates (id, kind, ref, title, url, state, created_at, updated_at, origin)
+       SELECT lower(hex(randomblob(16))), 'watcher_event', json_extract(value, '$.ref'), json_extract(value, '$.title'),
+              json_extract(value, '$.url'), 'new', ?1, ?1, 'watcher'
+       FROM json_each(?2)
+       RETURNING id`,
+    )
+    .bind(now, JSON.stringify(rows));
+}
+
+const itemTitle = (i: Item) => i.title || i.url || i.id;
+
 // Inserts events for items this watcher has not seen, then marks every item
 // seen, in one transaction. The events_enqueue trigger adds one triage job per
-// inserted event. Rule-matched events among those inserted become one
-// notification. An item already in seen_items, or a dedupe_key already in
-// events, inserts nothing and so notifies nothing.
+// inserted event. Each rule-matched new item becomes a candidate in the same
+// transaction. An item already in seen_items inserts nothing.
 export async function recordItems(
   env: Env,
   w: RuleWatcher,
   items: Item[],
   now: number,
-): Promise<{ created: number; hot: boolean; notified: boolean }> {
+): Promise<{ created: number; hot: boolean; candidates: number }> {
   const db = env.DB;
   const payload = JSON.stringify(items.map((i) => ({ ...i, ...classify(w, i.title, true) })));
-  const [inserted] = await db.batch<{ dedupe_key: string; payload: string }>([
+  const [inserted, candidates] = await db.batch<{ dedupe_key: string; payload: string }>([
     db
       .prepare(
         `INSERT OR IGNORE INTO events (watcher_id, ts, kind, dedupe_key, payload)
@@ -130,12 +211,22 @@ export async function recordItems(
          RETURNING dedupe_key, payload`,
       )
       .bind(w.id, now, payload),
+    db
+      .prepare(
+        `INSERT OR IGNORE INTO candidates (id, kind, ref, title, url, state, created_at, updated_at, origin)
+         SELECT lower(hex(randomblob(16))), 'watcher_event', ?1 || ':' || json_extract(value, '$.id'),
+                coalesce(nullif(json_extract(value, '$.title'), ''), json_extract(value, '$.url'), json_extract(value, '$.id')),
+                json_extract(value, '$.url'), 'new', ?2, ?2, 'watcher'
+         FROM json_each(?3)
+         WHERE json_extract(value, '$.notify') = 1
+           AND json_extract(value, '$.id') NOT IN (SELECT item_id FROM seen_items WHERE watcher_id = ?1)
+         RETURNING id`,
+      )
+      .bind(w.id, now, payload),
     seedStatement(db, w.id, items, now),
   ]);
-  const rows = inserted.results.map((r) => ({ key: r.dedupe_key, ...(JSON.parse(r.payload) as Item & { hot: boolean; notify: boolean }) }));
-  const matched = rows.filter((r) => r.notify);
-  const n = await notifyMatches(env, w, "item.new", matched.map((m) => m.key), matched, `new item: ${describeRule(w)}`, now);
-  return { created: rows.length, hot: rows.some((r) => r.hot), notified: n !== null };
+  const rows = inserted.results.map((r) => JSON.parse(r.payload) as Item & { hot: boolean });
+  return { created: rows.length, hot: rows.some((r) => r.hot), candidates: candidates.results.length };
 }
 
 function seedStatement(db: D1Database, watcherId: string, items: Item[], now: number): D1PreparedStatement {
@@ -150,31 +241,35 @@ function seedStatement(db: D1Database, watcherId: string, items: Item[], now: nu
 // The first successful fetch records current state and emits no item events.
 // Rules still run over it: openings that already exist when a watcher starts
 // are the ones most worth knowing about. They produce one seed.match event,
-// whose fixed dedupe_key means it can happen once per watcher, ever. It never
-// sets hot, because nothing changed.
-async function seed(env: Env, w: WatcherRow, parsed: Parsed, now: number): Promise<{ created: number; notified: boolean }> {
-  let matched: { title: string; url: string | null; id?: string }[];
-  let total: number;
-  if (parsed.shape === "items") {
-    await seedStatement(env.DB, w.id, parsed.items, now).run();
-    matched = parsed.items.filter((i) => classify(w, i.title, false).notify);
-    total = parsed.items.length;
-  } else {
-    matched = classify(w, parsed.text, false).notify ? [{ title: `Page matches: ${w.url}`, url: w.url }] : [];
-    total = 1;
-  }
-  if (matched.length === 0) return { created: 0, notified: false };
-
+// whose fixed dedupe_key means it can happen once per watcher, ever, and one
+// candidate per matched item. It never sets hot, because nothing changed.
+async function seed(env: Env, w: WatcherRow, parsed: Parsed, now: number): Promise<{ created: number; candidates: number }> {
+  const db = env.DB;
   const key = `${w.id}:seed.match`;
-  const inserted = await env.DB.prepare(
-    `INSERT OR IGNORE INTO events (watcher_id, ts, kind, dedupe_key, payload)
-     VALUES (?1, ?2, 'seed.match', ?3, ?4) RETURNING id`,
-  )
-    .bind(w.id, now, key, JSON.stringify({ count: matched.length, of: total, rule: describeRule(w), items: matched.slice(0, 25) }))
-    .all();
-  if (inserted.results.length === 0) return { created: 0, notified: false };
-  const n = await notifyMatches(env, w, "seed.match", [key], matched, `already open at first check: ${matched.length} of ${total} match ${describeRule(w)}`, now);
-  return { created: 1, notified: n !== null };
+  let matched: Item[] = [];
+  let rows: CandidateRow[] = [];
+  let total = 1;
+  if (parsed.shape === "items") {
+    matched = parsed.items.filter((i) => classify(w, i.title, false).notify);
+    rows = matched.map((i) => ({ ref: `${w.id}:${i.id}`, title: itemTitle(i), url: i.url }));
+    total = parsed.items.length;
+  } else if (classify(w, parsed.text, false).notify) {
+    rows = [{ ref: key, title: `Page matches: ${w.url}`, url: w.url }];
+  }
+  const statements = parsed.shape === "items" ? [seedStatement(db, w.id, parsed.items, now)] : [];
+  if (rows.length > 0) {
+    const payload = { count: rows.length, of: total, rule: describeRule(w), items: parsed.shape === "items" ? matched.slice(0, 25) : rows };
+    statements.push(
+      db
+        .prepare(`INSERT OR IGNORE INTO events (watcher_id, ts, kind, dedupe_key, payload) VALUES (?1, ?2, 'seed.match', ?3, ?4) RETURNING id`)
+        .bind(w.id, now, key, JSON.stringify(payload)),
+      candidateStatement(db, rows, now),
+    );
+  }
+  if (statements.length === 0) return { created: 0, candidates: 0 };
+  const results = await db.batch(statements);
+  const offset = parsed.shape === "items" ? 1 : 0;
+  return { created: results[offset]?.results.length ?? 0, candidates: results[offset + 1]?.results.length ?? 0 };
 }
 
 export function schedule(w: WatcherRow, now: number, hotTriggered: boolean, failed: boolean) {
@@ -206,7 +301,7 @@ export async function runCheck(env: Env, watcherId: string, trigger: Trigger): P
   let outcome: Outcome = "error";
   let itemsSeen = 0;
   let eventsCreated = 0;
-  let notified = false;
+  let candidatesCreated = 0;
   let hotTriggered = false;
   let error: string | null = null;
   let etag = w.etag;
@@ -260,28 +355,27 @@ export async function runCheck(env: Env, watcherId: string, trigger: Trigger): P
       } else if (w.fingerprint === null) {
         const r = await seed(env, w, parsed, now);
         eventsCreated = r.created;
-        notified = r.notified;
+        candidatesCreated = r.candidates;
         outcome = "seeded";
       } else if (parsed.shape === "items") {
         const r = await recordItems(env, w, parsed.items, now);
         eventsCreated = r.created;
         hotTriggered = r.hot;
-        notified = r.notified;
+        candidatesCreated = r.candidates;
         outcome = "changed";
       } else {
         const c = classify(w, parsed.text, true);
         hotTriggered = c.hot;
         const key = `${w.id}:page:${w.fingerprint}:${newFp}`;
-        const inserted = await env.DB.prepare(
-          `INSERT OR IGNORE INTO events (watcher_id, ts, kind, dedupe_key, payload)
-           VALUES (?1, ?2, 'page.changed', ?3, ?4) RETURNING id`,
-        )
-          .bind(w.id, now, key, JSON.stringify({ url: w.url, from: w.fingerprint, to: newFp, ...c, excerpt: parsed.text.slice(0, 280) }))
-          .all();
+        const [inserted, candidates] = await env.DB.batch([
+          env.DB.prepare(
+            `INSERT OR IGNORE INTO events (watcher_id, ts, kind, dedupe_key, payload)
+             VALUES (?1, ?2, 'page.changed', ?3, ?4) RETURNING id`,
+          ).bind(w.id, now, key, JSON.stringify({ url: w.url, from: w.fingerprint, to: newFp, ...c, excerpt: parsed.text.slice(0, 280) })),
+          candidateStatement(env.DB, c.notify ? [{ ref: key, title: `Page changed: ${w.url}`, url: w.url }] : [], now),
+        ]);
         eventsCreated = inserted.results.length;
-        if (eventsCreated > 0 && c.notify) {
-          notified = (await notifyMatches(env, w, "page.changed", [key], [{ title: `Page changed: ${w.url}`, url: w.url }], `page text matches ${describeRule(w)}`, now)) !== null;
-        }
+        candidatesCreated = candidates.results.length;
         outcome = "changed";
       }
       fp = newFp;
@@ -348,7 +442,7 @@ export async function runCheck(env: Env, watcherId: string, trigger: Trigger): P
     outcome,
     items_seen: itemsSeen,
     events_created: eventsCreated,
-    notified,
+    candidates_created: candidatesCreated,
     subrequests: out.subrequests,
     model_calls: out.modelCalls,
     mode: s.mode,
@@ -358,7 +452,7 @@ export async function runCheck(env: Env, watcherId: string, trigger: Trigger): P
   };
   console.log(
     `[${w.id}] check trigger=${trigger} source=${source} status=${status} bytes=${bytes} latency=${latency}ms conditional=${conditional} ` +
-      `outcome=${outcome} items=${itemsSeen} events=${eventsCreated} notified=${notified} model_calls=${out.modelCalls} ` +
+      `outcome=${outcome} items=${itemsSeen} events=${eventsCreated} candidates=${candidatesCreated} model_calls=${out.modelCalls} ` +
       `next=+${s.interval}s mode=${s.mode}${error ? ` error=${error}` : ""}`,
   );
   return result;

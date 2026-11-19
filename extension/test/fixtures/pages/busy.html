@@ -1,0 +1,12 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Home / X</title><script src="/__fixture/shared.js"></script></head>
+<body style="margin:0">
+  <nav><a data-testid="AppTabBar_Profile_Link" href="/fixtureuser">Profile</a></nav>
+  <main data-testid="primaryColumn"><div style="height:6000px"></div></main>
+  <script>
+    // A page that keeps calling X and never loads a timeline.
+    setInterval(() => fetch("/i/api/1.1/ping"), 40);
+  </script>
+</body>
+</html>

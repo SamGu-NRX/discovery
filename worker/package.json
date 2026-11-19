@@ -8,7 +8,7 @@
     "fixture": "node fixtures/server.mjs",
     "evidence": "node scripts/evidence.mjs",
     "typecheck": "tsc --noEmit",
-    "test": "node --test test/"
+    "test": "node --test --test-concurrency=1 test/"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250601.0",

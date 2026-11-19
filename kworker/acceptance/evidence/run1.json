@@ -1,0 +1,3919 @@
+{
+ "positives": 59,
+ "wall_s": 719.6,
+ "jobs": [
+  {
+   "id": "a7457b9c22ff8625248bf943d8728d3d",
+   "kind": "save",
+   "key": "2112632133357346889",
+   "state": "done",
+   "owner": "kworker@Sam_ZephyrusG14",
+   "lease_until": null,
+   "attempts": 1,
+   "expired_leases": 0,
+   "runs": 1,
+   "error": null,
+   "created_at": 1794506468404,
+   "updated_at": 1794506551570,
+   "payload": {
+    "post_id": "2112632133357346889",
+    "expansion_sha": "b9b7accfc9d0dce087d42cacfa7e0067d3dc69c8876d1b0ec5aba6860a4c3995"
+   },
+   "deps": [],
+   "result": {
+    "result": {
+     "gate_sha": "c15e0f57ce06a8307fe5c3b26e9bb89627a644d1ebc5ea7cb74a7ea68737cd7a",
+     "kept": 1,
+     "dropped": 2,
+     "children": 3,
+     "bundle_job": "7b0d5ddd0bc520e75d1f907f7916c9a0"
+    },
+    "stats": {
+     "fetches": 0,
+     "fetches_by_host": {},
+     "model_calls": 2,
+     "model_calls_by_model": {
+      "fastembed/BAAI/bge-base-en-v1.5": 1,
+      "cliproxy/claude-haiku-5-5": 1
+     },
+     "tokens": {
+      "gate_band.in": 2178,
+      "gate_band.out": 191
+     },
+     "cache_hits": {
+      "derive:embed": 1
+     },
+     "uploaded_bytes": 12527,
+     "uploaded_blobs": 4,
+     "large_via_worker": 0
+    },
+    "wall_s": 3.47
+   }
+  },
+  {
+   "id": "9ffd85bde8e258e9c03b42f358ffce25",
+   "kind": "save",
+   "key": "2112247046082363821",
+   "state": "done",
+   "owner": "kworker@Sam_ZephyrusG14",
+   "lease_until": null,
+   "attempts": 1,
+   "expired_leases": 0,
+   "runs": 1,
+   "error": null,
+   "created_at": 1794506468347,
+   "updated_at": 1794506545231,
+   "payload": {
+    "post_id": "2112247046082363821",
+    "expansion_sha": "2da4857c33841bc78186f6e4e117d2157e3562c0fcfc3fc1cd121ec1c3cb0330"
+   },
+   "deps": [],
+   "result": {
+    "result": {
+     "gate_sha": "dfb22c14db5c4723271c8004d98c052db037f071dae84c6b7fe8e2ef98ade740",
+     "kept": 3,
+     "dropped": 2,
+     "children": 3,
+     "bundle_job": "db76088a8e0dd041eae1370f89af9365"
+    },
+    "stats": {
+     "fetches": 0,
+     "fetches_by_host": {},
+     "model_calls": 2,
+     "model_calls_by_model": {
+      "fastembed/BAAI/bge-base-en-v1.5": 1,
+      "cliproxy/claude-haiku-5-5": 1
+     },
+     "tokens": {
+      "gate_band.in": 1936,
+      "gate_band.out": 157
+     },
+     "cache_hits": {
+      "derive:embed": 1
+     },
+     "uploaded_bytes": 13084,
+     "uploaded_blobs": 4,
+     "large_via_worker": 0
+    },
+    "wall_s": 3.7
+   }
+  },
+  {
+   "id": "a00cabe6581e4e9c98f52b15a6b8219a",
+   "kind": "save",
+   "key": "2111478858478465421",
+   "state": "done",
+   "owner": "kworker@Sam_ZephyrusG14",
+   "lease_until": null,
+   "attempts": 1,
+   "expired_leases": 0,
+   "runs": 1,
+   "error": null,
+   "created_at": 1794506468290,
+   "updated_at": 1794506538640,
+   "payload": {
+    "post_id": "2111478858478465421",
+    "expansion_sha": "8979ce149f1fab3217b1343bdf379e2f5f9a519bb897f3efe8a075d2e7afff1d"
+   },
+   "deps": [],
+   "result": {
+    "result": {
+     "gate_sha": "578a89d1e2c2dd9290d6ce4082586a675a8260aa631b3a84cbc4f665ccb5d64f",
+     "kept": 2,
+     "dropped": 10,
+     "children": 2,
+     "bundle_job": "34c03a8a8046ad4f7a1129ccc067cf14"
+    },
+    "stats": {
+     "fetches": 0,
+     "fetches_by_host": {},
+     "model_calls": 2,
+     "model_calls_by_model": {
+      "fastembed/BAAI/bge-base-en-v1.5": 1,
+      "cliproxy/claude-haiku-5-5": 1
+     },
+     "tokens": {
+      "gate_band.in": 1994,
+      "gate_band.out": 421
+     },
+     "cache_hits": {
+      "derive:embed": 1
+     },
+     "uploaded_bytes": 41991,
+     "uploaded_blobs": 4,
+     "large_via_worker": 0
+    },
+    "wall_s": 4.17
+   }
+  },
+  {
+   "id": "2d2da8f3158877572eccfc440a5cc1c6",
+   "kind": "save",
+   "key": "2111883168190275752",
+   "state": "done",
+   "owner": "kworker@Sam_ZephyrusG14",
+   "lease_until": null,
+   "attempts": 1,
+   "expired_leases": 0,
+   "runs": 1,
+   "error": null,
+   "created_at": 1794506468239,
+   "updated_at": 1794506532092,
+   "payload": {
+    "post_id": "2111883168190275752",
+    "expansion_sha": "e30ce1d3dda6e7a23b916c3000171f3e0071bd26c49c3647cd22aca9cb6c84aa"
+   },
+   "deps": [],
+   "result": {
+    "result": {
+     "gate_sha": "7262f05431691a6b96ffe2d1090a567f2e791f8ac4848de72a1a4a0a475f412e",
+     "kept": 0,
+     "dropped": 1,
+     "children": 5,
+     "bundle_job": "7bd6fe34c1e5cd6b8db66a4b5c08631d"
+    },
+    "stats": {
+     "fetches": 0,
+     "fetches_by_host": {},
+     "model_calls": 2,
+     "model_calls_by_model": {
+      "fastembed/BAAI/bge-base-en-v1.5": 1,
+      "cliproxy/claude-haiku-5-5": 1
+     },
+     "tokens": {
+      "gate_band.in": 1799,
+      "gate_band.out": 73
+     },
+     "cache_hits": {
+      "derive:embed": 1
+     },
+     "uploaded_bytes": 4592,
+     "uploaded_blobs": 4,
+     "large_via_worker": 0
+    },
+    "wall_s": 3.22
+   }
+  },
+  {
+   "id": "631e7c834f0c158f5e0b79a2e8b7036e",
+   "kind": "save",
+   "key": "2114435444587065486",
+   "state": "done",
+   "owner": "kworker@Sam_ZephyrusG14",
+   "lease_until": null,
+   "attempts": 1,
+   "expired_leases": 0,
+   "runs": 1,
+   "error": null,
+   "created_at": 1794506468189,
+   "updated_at": 1794506526406,
+   "payload": {
+    "post_id": "2114435444587065486",
+    "expansion_sha": "0a98e0fff1618ea672fdf474bdd9b9fe2aece531db1e0da029fbdf3081812b5c"
+   },
+   "deps": [],
+   "result": {
+    "result": {
+     "gate_sha": "0af140a48c8a8a243c599df506f9dafbab1da344bd4d5662908c60f08e025856",
+     "kept": 7,
+     "dropped": 7,
+     "children": 10,
+     "bundle_job": "639672a7178088f512cc0e0930e4ecbd"
+    },
+    "stats": {
+     "fetches": 0,
+     "fetches_by_host": {},
+     "model_calls": 2,
+     "model_calls_by_model": {
+      "fastembed/BAAI/bge-base-en-v1.5": 1,
+      "cliproxy/claude-haiku-5-5": 1
+     },
+     "tokens": {
+      "gate_band.in": 1956,
+      "gate_band.out": 269
+     },
+     "cache_hits": {
+      "derive:embed": 1
+     },
+     "uploaded_bytes": 31389,
+     "uploaded_blobs": 4,
+     "large_via_worker": 0
+    },
+    "wall_s": 3.58
+   }
+  },
+  {
+   "id": "cbcf3ef20077d92d4262532ebd657778",
+   "kind": "save",
+   "key": "2109412046244913643",
+   "state": "done",
+   "owner": "kworker@Sam_ZephyrusG14",
+   "lease_until": null,
+   "attempts": 1,
+   "expired_leases": 0,
+   "runs": 1,
+   "error": null,
+   "created_at": 1794506468134,
+   "updated_at": 1794506520294,
+   "payload": {
+    "post_id": "2109412046244913643",
+    "expansion_sha": "705539013a087d9866d139744832006a7cbfc289dbd9c9de9d83a48f1b65c434"
+   },
+   "deps": [],
+   "result": {
+    "result": {
+     "gate_sha": "41bd5dc7224b9484d584959636d43990faaa37edeccbc857bd6691e18897e267",
+     "kept": 3,
+     "dropped": 5,
+     "children": 4,
+     "bundle_job": "f19d2d3a1ff8be68823296c7a40d3275"
+    },
+    "stats": {
+     "fetches": 0,
+     "fetches_by_host": {},
+     "model_calls": 2,
+     "model_calls_by_model": {
+      "fastembed/BAAI/bge-base-en-v1.5": 1,
+      "cliproxy/claude-haiku-5-5": 1
+     },
+     "tokens": {
+      "gate_band.in": 2447,
+      "gate_band.out": 434
+     },
+     "cache_hits": {
+      "derive:embed": 1
+     },
+     "uploaded_bytes": 29826,
+     "uploaded_blobs": 4,
+     "large_via_worker": 0
+    },
+    "wall_s": 5.08
+   }
+  },
+  {
+   "id": "43312286b7ae397a63856d6a3990e592",
+   "kind": "save",
+   "key": "2112712092163957157",
+   "state": "done",
+   "owner": "kworker@Sam_ZephyrusG14",
+   "lease_until": null,
+   "attempts": 1,
+   "expired_leases": 0,
+   "runs": 1,
+   "error": null,
+   "created_at": 1794506468080,
+   "updated_at": 1794506512716,
+   "payload": {
+    "post_id": "2112712092163957157",
+    "expansion_sha": "050b4c3651565a6e979a721be3f3438c89bc9c96ccd80eda2fcf021bb4240a4a"
+   },
+   "deps": [],
+   "result": {
+    "result": {
+     "gate_sha": "bce4c9bc75540cab7fc3b4a994755612e859bf0b85e33f6d722a8440a5529727",
+     "kept": 0,
+     "dropped": 0,
+     "children": 4,
+     "bundle_job": "e6826148373a1e98010611f76ce1aa7c"
+    },
+    "stats": {
+     "fetches": 0,
+     "fetches_by_host": {},
+     "model_calls": 0,
+     "model_calls_by_model": {},
+     "tokens": {},
+     "cache_hits": {},
+     "uploaded_bytes": 122,
+     "uploaded_blobs": 1,
+     "large_via_worker": 0
+    },
+    "wall_s": 0.12
+   }
+  },
+  {
+   "id": "bcbef51e15387a05859d1bbc08fdbdd1",
+   "kind": "save",
+   "key": "2112288527837024667",
+   "state": "done",
+   "owner": "kworker@Sam_ZephyrusG14",
+   "lease_until": null,
+   "attempts": 1,
+   "expired_leases": 0,
+   "runs": 1,
+   "error": null,
+   "created_at": 1794506468021,
+   "updated_at": 1794506510085,
+   "payload": {
+    "post_id": "2112288527837024667",
+    "expansion_sha": "4c122d2ef9239ae09e70858989de65c4bdd182d21576940bcb2e2d170c14647a"
+   },
+   "deps": [],
+   "result": {
+    "result": {
+     "gate_sha": "55637b6fdb48ab11fa9e6c36873daaa150c0b956b8de548ad6da7be5b658966a",
+     "kept": 3,
+     "dropped": 2,
+     "children": 1,
+     "bundle_job": "c654d7dc15c4fff0d2a1e0e0e189ccbc"
+    },
+    "stats": {
+     "fetches": 0,
+     "fetches_by_host": {},
+     "model_calls": 2,
+     "model_calls_by_model": {
+      "fastembed/BAAI/bge-base-en-v1.5": 1,
+      "cliproxy/claude-haiku-5-5": 1
+     },
+     "tokens": {
+      "gate_band.in": 1772,
+      "gate_band.out": 115
+     },
+     "cache_hits": {
+      "derive:embed": 1
+     },
+     "uploaded_bytes": 9732,
+     "uploaded_blobs": 4,
+     "large_via_worker": 0
+    },
+    "wall_s": 2.99
+   }
+  },
+  {
+   "id": "3027ea5b09845dd282e283dad616b095",
+   "kind": "save",
+   "key": "2112875577388712123",
+   "state": "done",
+   "owner": "kworker@Sam_ZephyrusG14",
+   "lease_until": null,
+   "attempts": 1,
+   "expired_leases": 0,
+   "runs": 1,
+   "error": null,
+   "created_at": 1794506467972,
+   "updated_at": 1794506504597,
+   "payload": {
+    "post_id": "2112875577388712123",
+    "expansion_sha": "5b58412cfe13ee084d2618c38284ea0357f81ba4d4a24e2f6993ff24e66a6501"
+   },
+   "deps": [],
+   "result": {
+    "result": {
+     "gate_sha": "2ff7b99fcec4a95b0595d3c7619c5d05b3c6637720488a5f7e493b730ec41937",
+     "kept": 1,
+     "dropped": 6,
+     "children": 1,
+     "bundle_job": "7e4704d2792a290ed331ff9e1a87b61f"
+    },
+    "stats": {
+     "fetches": 0,
+     "fetches_by_host": {},
+     "model_calls": 2,
+     "model_calls_by_model": {
+      "fastembed/BAAI/bge-base-en-v1.5": 1,
+      "cliproxy/claude-haiku-5-5": 1
+     },
+     "tokens": {
+      "gate_band.in": 1896,
+      "gate_band.out": 302
+     },
+     "cache_hits": {
+      "derive:embed": 1
+     },
+     "uploaded_bytes": 28716,
+     "uploaded_blobs": 4,
+     "large_via_worker": 0
+    },
+    "wall_s": 3.84
+   }
+  },
+  {
+   "id": "eb955972847f3b34adaa239bca864d68",
+   "kind": "save",
+   "key": "2113101611669307727",
+   "state": "done",
+   "owner": "kworker@Sam_ZephyrusG14",
+   "lease_until": null,
+   "attempts": 1,
+   "expired_leases": 0,
+   "runs": 1,
+   "error": null,
+   "created_at": 1794506467917,
+   "updated_at": 1794506498116,
+   "payload": {
+    "post_id": "2113101611669307727",
+    "expansion_sha": "74aca2cb5c9e598cb4f153ef8da590af12e5e0b2f5d1bafaa40759d82e9c7b47"
+   },
+   "deps": [],
+   "result": {
+    "result": {
+     "gate_sha": "88935878ebc5737df1030fca1daa3f9c87dd3efd95b5682e254ae3656802eb63",
+     "kept": 7,
+     "dropped": 1,
+     "children": 2,
+     "bundle_job": "fc0a48eaa9939865c0fd338589ab58f1"
+    },
+    "stats": {
+     "fetches": 0,
+     "fetches_by_host": {},
+     "model_calls": 3,
+     "model_calls_by_model": {
+      "fastembed/BAAI/bge-base-en-v1.5": 2,
+      "cliproxy/claude-haiku-5-5": 1
+     },
+     "tokens": {
+      "gate_band.in": 1700,
+      "gate_band.out": 58
+     },
+     "cache_hits": {},
+     "uploaded_bytes": 188184,
+     "uploaded_blobs": 5,
+     "large_via_worker": 0
+    },
+    "wall_s": 26.3
+   }
+  },
+  {
+   "id": "12d7da37b712fae5c71285091fc1b10f",
+   "kind": "link",
+   "key": "3e84be91c0a64bb534c5e2e13ac086d86c6ec4e3866f2022cf6536cc3f104268",
+   "state": "done",
+   "owner": "kworker@Sam_ZephyrusG14",
+   "lease_until": null,
+   "attempts": 1,
+   "expired_leases": 0,
+   "runs": 1,
+   "error": null,
+   "created_at": 1794506551537,
+   "updated_at": 1794507182376,
+   "payload": {
+    "url": "https://arxiv.org/abs/2609.26550",
+    "from": "post"
+   },
+   "deps": [],
+   "result": {
+    "result": {
+     "url": "https://arxiv.org/abs/2609.26550",
+     "from": "post",
+     "canonical_url": "https://arxiv.org/abs/2609.26550",
+     "final_url": "https://arxiv.org/abs/2609.26550",
+     "status": "ok",
+     "rung": 0,
+     "http_status": 200,
+     "note": "arXiv API",
+     "content_sha": "c1af1cd08cd0eeaadba520358145d76e458f8eed02f1f24df2a40f28b04241f6",
+     "cached": false,
+     "attempts": [
+      {
+       "rung": 0,
+       "status": "ok",
+       "http_status": 200,
+       "note": "arXiv API",
+       "ms": 78,
+       "text_chars": 1362
+      }
+     ],
+     "meta": {
+      "arxiv": {
+       "authors": [
+        "Yubo Li",
+        "Yidi Miao",
+        "Ramayya Krishnan",
+        "Rema Padman"
+       ],
+       "id": "2609.26550",
+       "title": "JEV-as-a-Judge: Accept When Confident, Escalate When Unsure"
+      }
+     },
+     "text_sha": "5b09a4463f1ae23053e9d494a0496c6e8951495de778318a78ebe8f0c8e3d65b",
+     "title": "JEV-as-a-Judge: Accept When Confident, Escalate When Unsure"
+    },
+    "stats": {
+     "fetches": 1,
+     "fetches_by_host": {
+      "export.arxiv.org": 1
+     },
+     "model_calls": 0,
+     "model_calls_by_model": {},
+     "tokens": {},
+     "cache_hits": {},
+     "uploaded_bytes": 2518,
+     "uploaded_blobs": 2,
+     "large_via_worker": 0
+    },
+    "wall_s": 0.23
+   }
+  },
+  {
+   "id": "aec1eed2c9925a944b5e044b8a17d63b",
+   "kind": "link",
+   "key": "8b5582f2bcddc8059401f584f925ec84821b83881e11578cd4bf0bb1ed4e531a",
+   "state": "done",
+   "owner": "kworker@Sam_ZephyrusG14",
+   "lease_until": null,
+   "attempts": 1,
+   "expired_leases": 0,
+   "runs": 1,
+   "error": null,
+   "created_at": 1794506551526,
+   "updated_at": 1794507179895,
+   "payload": {
+    "url": "https://academy.dair.ai/labs/jev-as-a-judge-for-agent-evals",
+    "from": "post"
+   },
+   "deps": [],
+   "result": {
+    "result": {
+     "url": "https://academy.dair.ai/labs/jev-as-a-judge-for-agent-evals",
+     "from": "post",
+     "canonical_url": "https://academy.dair.ai/labs/jev-as-a-judge-for-agent-evals",
+     "final_url": "https://academy.dair.ai/labs/jev-as-a-judge-for-agent-evals",
+     "status": "ok",
+     "rung": 1,
+     "http_status": 200,
+     "note": "",
+     "content_sha": "f96de006bb7b2475b31ad89ed25571c1024287b307ceed882ce2ffa59d100eab",
+     "cached": false,
+     "attempts": [
+      {
+       "rung": 0,
+       "skipped": "no site adapter for this host"
+      },
+      {
+       "rung": 1,
+       "status": "ok",
+       "http_status": 200,
+       "note": "",
+       "ms": 297,
+       "text_chars": 2033
+      }
+     ],
+     "meta": {},
+     "text_sha": "10bc080ef24d68aad979ef874c04d14ab93b3d71adad020cc98f5dd1a04efaec",
+     "title": "Jev-as-a-Judge: Evaluating Agents with a Decision Model",
+     "site_repos": []
+    },
+    "stats": {
+     "fetches": 1,
+     "fetches_by_host": {
+      "academy.dair.ai": 1
+     },
+     "model_calls": 0,
+     "model_calls_by_model": {},
+     "tokens": {},
+     "cache_hits": {},
+     "uploaded_bytes": 97700,
+     "uploaded_blobs": 2,
+     "large_via_worker": 0
+    },
+    "wall_s": 0.59
+   }
+  },
+  {
+   "id": "4130227b95989ae863838799f2dbb9ff",
+   "kind": "link",
+   "key": "f85b8be5d6e53375b17ff3cbb8fd677fe2b063e9a29ee1241be5082726169044",
+   "state": "done",
+   "owner": "kworker@Sam_ZephyrusG14",
+   "lease_until": null,
+   "attempts": 1,
+   "expired_leases": 0,
+   "runs": 1,
+   "error": null,
+   "created_at": 1794506551515,
+   "updated_at": 1794507177048,
+   "payload": {
+    "url": "https://academy.dair.ai/dashboard/resources/jev-as-a-judge",
+    "from": "post"
+   },
+   "deps": [],
+   "result": {
+    "result": {
+     "url": "https://academy.dair.ai/dashboard/resources/jev-as-a-judge",
+     "from": "post",
+     "canonical_url": "https://academy.dair.ai/dashboard/resources/jev-as-a-judge",
+     "final_url": "https://academy.dair.ai/dashboard/resources/jev-as-a-judge",
+     "status": "blocked",
+     "rung": 7,
+     "http_status": null,
+     "note": "every rung failed: no site adapter for this host; HTTP 404; r.jina.ai: target refused; ConnectTimeout: _ssl.c:983: The handshake operation timed out; login wall in the browser",
+     "content_sha": null,
+     "cached": false,
+     "attempts": [
+      {
+       "rung": 0,
+       "skipped": "no site adapter for this host"
+      },
+      {
+       "rung": 1,
+       "status": "not_found",
+       "http_status": 404,
+       "note": "HTTP 404",
+       "ms": 235
+      },
+      {
+       "rung": 2,
+       "status": "blocked",
+       "http_status": null,
+       "note": "r.jina.ai: target refused",
+       "ms": 2375
+      },
+      {
+       "rung": 3,
+       "status": "error",
+       "note": "ConnectTimeout: _ssl.c:983: The handshake operation timed out"
+      },
+      {
+       "rung": 4,
+       "status": "blocked",
+       "http_status": 200,
+       "note": "login wall in the browser",
+       "ms": 3468
+      }
+     ],
+     "meta": {}
+    },
+    "stats": {
+     "fetches": 5,
+     "fetches_by_host": {
+      "academy.dair.ai": 1,
+      "r.jina.ai": 1,
+      "archive.org": 1,
+      "archive.ph": 1,
+      "browser:academy.dair.ai": 1
+     },
+     "model_calls": 0,
+     "model_calls_by_model": {},
+     "tokens": {},
+     "cache_hits": {},
+     "uploaded_bytes": 0,
+     "uploaded_blobs": 0,
+     "large_via_worker": 0
+    },
+    "wall_s": 37.08
+   }
+  },
+  {
+   "id": "0240b6917ed8a1be81b49195e35f8943",
+   "kind": "link",
+   "key": "a36ff6680b43be6f00dd746110255cdcbcf5a889ba33ae518c58c93216bd55ad",
+   "state": "done",
+   "owner": "kworker@Sam_ZephyrusG14",
+   "lease_until": null,
+   "attempts": 1,
+   "expired_leases": 0,
+   "runs": 1,
+   "error": null,
+   "created_at": 1794506545201,
+   "updated_at": 1794507135918,
+   "payload": {
+    "url": "https://github.com/stevysmith/fx0",
+    "from": "reply:2112917698858643659"
+   },
+   "deps": [],
+   "result": {
+    "result": {
+     "url": "https://github.com/stevysmith/fx0",
+     "from": "reply:2112917698858643659",
+     "canonical_url": "https://github.com/stevysmith/fx0",
+     "final_url": "https://github.com/stevysmith/fx0",
+     "status": "ok",
+     "rung": 0,
+     "http_status": 200,
+     "note": "GitHub API",
+     "content_sha": "cb53bb40f3aaa64c0d8cd74fd79713d0e338d0129b08231c844e76434b1c26a3",
+     "cached": false,
+     "attempts": [
+      {
+       "rung": 0,
+       "status": "ok",
+       "http_status": 200,
+       "note": "GitHub API",
+       "ms": 905,
+       "text_chars": 18385
+      }
+     ],
+     "meta": {
+      "repo": {
+       "archived": false,
+       "default_branch": "main",
+       "description": "A lightweight design agent built with libfx. Describe a page and an agent writes it as one HTML file.",
+       "full_name": "stevysmith/fx0",
+       "last_commit": {
+        "date": "2026-10-21T15:03:15Z",
+        "sha": "20a465d39022d2f287fae217a3b30d1d47965672"
+       },
+       "license": "Apache-2.0",
+       "pushed_at": "2026-10-21T15:03:17Z",
+       "stars": 0,
+       "url": "https://github.com/stevysmith/fx0"
+      }
+     },
+     "text_sha": "3b9c5ec8885cef3ffbdbc4ed65a90c19386f0fd4aa0cb016a40005633bf08c0e",
+     "title": "stevysmith/fx0"
+    },
+    "stats": {
+     "fetches": 3,
+     "fetches_by_host": {
+      "api.github.com": 3
+     },
+     "model_calls": 0,
+     "model_calls_by_model": {},
+     "tokens": {},
+     "cache_hits": {},
+     "uploaded_bytes": 36093,
+     "uploaded_blobs": 2,
+     "large_via_worker": 0
+    },
+    "wall_s": 1.05
+   }
+  },
+  {
+   "id": "3c2b615fc7b61e277edbd457ab08b52a",
+   "kind": "link",
+   "key": "ddf75ed8cfcf978872a1a3844c7b5a069f4f94bf6eef08c3670f63ddf82f7f68",
+   "state": "done",
+   "owner": "kworker@Sam_ZephyrusG14",
+   "lease_until": null,
+   "attempts": 1,
+   "expired_leases": 0,
+   "runs": 1,
+   "error": null,
+   "created_at": 1794506545185,
+   "updated_at": 1794507132888,
+   "payload": {
+    "url": "http://fx0.vercel.dev",
+    "from": "post"
+   },
+   "deps": [],
+   "result": {
+    "result": {
+     "url": "http://fx0.vercel.dev",
+     "from": "post",
+     "canonical_url": "http://fx0.vercel.dev/",
+     "final_url": "https://fx0.vercel.dev/",
+     "status": "ok",
+     "rung": 1,
+     "http_status": 200,
+     "note": "",
+     "content_sha": "03676fce6fe27cd2786e8db37c0abfcb3392249218d7277bd6eefd9bacee069c",
+     "cached": false,
+     "attempts": [
+      {
+       "rung": 0,
+       "skipped": "no site adapter for this host"
+      },
+      {
+       "rung": 1,
+       "status": "ok",
+       "http_status": 200,
+       "note": "",
+       "ms": 687,
+       "text_chars": 1536
+      }
+     ],
+     "meta": {},
+     "text_sha": "dae85a7c4506c6907fc1bd3f5cbf9b6d648691647f93012d2dd99fce5e6b9783",
+     "title": "fx0",
+     "site_repos": [
+      "https://github.com/vercel-labs/fx0"
+     ],
+     "site_repo": {
+      "url": "https://github.com/vercel-labs/fx0",
+      "status": "ok",
+      "meta": {
+       "repo": {
+        "archived": false,
+        "default_branch": "main",
+        "description": "A lightweight design agent built with libfx. Describe a page and an agent writes it as one HTML file.",
+        "full_name": "vercel-labs/fx0",
+        "last_commit": {
+         "date": "2026-11-04T02:49:15Z",
+         "sha": "eb3394545ca78ada3979d9929f9d2a639ee8579a"
+        },
+        "license": "Apache-2.0",
+        "pushed_at": "2026-11-06T17:41:51Z",
+        "stars": 431,
+        "url": "https://github.com/vercel-labs/fx0"
+       }
+      },
+      "text_sha": "0c5f6de8b41e4385e612d26a8dfe892922571e27e9b374d51af3e34b3b8a1516"
+     }
+    },
+    "stats": {
+     "fetches": 4,
+     "fetches_by_host": {
+      "fx0.vercel.dev": 1,
+      "api.github.com": 3
+     },
+     "model_calls": 0,
+     "model_calls_by_model": {},
+     "tokens": {},
+     "cache_hits": {},
+     "uploaded_bytes": 113688,
+     "uploaded_blobs": 4,
+     "large_via_worker": 0
+    },
+    "wall_s": 2.03
+   }
+  },
+  {
+   "id": "d2a4de095d14062af896867f4f2ed526",
+   "kind": "link",
+   "key": "bfd3d4ae70439c67dd6b68ab63ced9e70b3bfd71a8aa9e92cbdef1a2fbd8b369",
+   "state": "done",
+   "owner": "kworker@Sam_ZephyrusG14",
+   "lease_until": null,
+   "attempts": 1,
+   "expired_leases": 0,
+   "runs": 1,
+   "error": null,
+   "created_at": 1794506538605,
+   "updated_at": 1794507106594,
+   "payload": {
+    "url": "https://bencho.dev",
+    "from": "post"
+   },
+   "deps": [],
+   "result": {
+    "result": {
+     "url": "https://bencho.dev",
+     "from": "post",
+     "canonical_url": "https://bencho.dev/",
+     "final_url": "https://bencho.dev/",
+     "status": "ok",
+     "rung": 1,
+     "http_status": 200,
+     "note": "",
+     "content_sha": "59db299306e570451b2094d983c10e92d1215000c93b43b70266a409a9885531",
+     "cached": false,
+     "attempts": [
+      {
+       "rung": 0,
+       "skipped": "no site adapter for this host"
+      },
+      {
+       "rung": 1,
+       "status": "ok",
+       "http_status": 200,
+       "note": "",
+       "ms": 187,
+       "text_chars": 3610
+      }
+     ],
+     "meta": {},
+     "text_sha": "c35c5d1671b2197a2e4636f0c6e8b3f9d62d3e991174a4eada638dc883d9764c",
+     "title": "Bencho \u2014 Interactive React UI Components & Micro-interactions",
+     "site_repos": [
+      "https://github.com/cabralorenzo/bencho"
+     ],
+     "site_repo": {
+      "url": "https://github.com/cabralorenzo/bencho",
+      "status": "ok",
+      "meta": {
+       "repo": {
+        "archived": false,
+        "default_branch": "main",
+        "description": "41 free interactive React blocks and 24 synthesised interface sounds from bencho.dev. Copy a folder, ship it.",
+        "full_name": "cabralorenzo/bencho",
+        "last_commit": {
+         "date": "2026-11-07T12:21:01Z",
+         "sha": "c65992417427bb09e661674ffa800bef29adef49"
+        },
+        "license": "NOASSERTION",
+        "pushed_at": "2026-11-07T12:21:03Z",
+        "stars": 105,
+        "url": "https://github.com/cabralorenzo/bencho"
+       }
+      },
+      "text_sha": "33d267b0d718079c04038733141ec6318576fdf940146d42583f0656797d4312"
+     }
+    },
+    "stats": {
+     "fetches": 4,
+     "fetches_by_host": {
+      "bencho.dev": 1,
+      "api.github.com": 3
+     },
+     "model_calls": 0,
+     "model_calls_by_model": {},
+     "tokens": {},
+     "cache_hits": {},
+     "uploaded_bytes": 43034,
+     "uploaded_blobs": 4,
+     "large_via_worker": 0
+    },
+    "wall_s": 1.59
+   }
+  },
+  {
+   "id": "916c52fe3723d14c87da6fa95994986b",
+   "kind": "link",
+   "key": "7b18180db34775ce103338a1af3be62f07dc83c84ccefe7f5496804292f35dbb",
+   "state": "done",
+   "owner": "kworker@Sam_ZephyrusG14",
+   "lease_until": null,
+   "attempts": 1,
+   "expired_leases": 0,
+   "runs": 1,
+   "error": null,
+   "created_at": 1794506532054,
+   "updated_at": 1794507091451,
+   "payload": {
+    "url": "https://x.com/trq212/status/2105333496768319969?s=46",
+    "from": "thread:2111883082953547881"
+   },
+   "deps": [],
+   "result": {
+    "result": {
+     "url": "https://x.com/trq212/status/2105333496768319969?s=46",
+     "from": "thread:2111883082953547881",
+     "canonical_url": "https://x.com/trq212/status/2105333496768319969",
+     "final_url": "https://x.com/trq212/status/2105333496768319969",
+     "status": "ok",
+     "rung": 0,
+     "http_status": 200,
+     "note": "X syndication JSON",
+     "content_sha": "df219bb622933379d53bca9162835a06490000538de064e386aeb7d8f064aa7f",
+     "cached": false,
+     "attempts": [
+      {
+       "rung": 0,
+       "status": "ok",
+       "http_status": 200,
+       "note": "X syndication JSON",
+       "ms": 125,
+       "text_chars": 789
+      }
+     ],
+     "meta": {
+      "x_post": {
+       "author_handle": "trq212",
+       "created_at": "2026-09-30T16:26:35.000Z",
+       "id": "2105333496768319969",
+       "text": "As a personal side project, I've been prototyping a video game.\n\nAs a former games founder, the process of making a game is deeply satisfying and creative, don't outsource that to AI. Use AI to work with you to bring your vision to life.\n\nHere's how I'm trying it: https://t.co/9biKl3ZeTz"
+      }
+     },
+     "text_sha": "c5a03f922728947f93125ede13a90500d929cdad539e8e370a05c4986b510389",
+     "title": null
+    },
+    "stats": {
+     "fetches": 1,
+     "fetches_by_host": {
+      "cdn.syndication.twimg.com": 1
+     },
+     "model_calls": 0,
+     "model_calls_by_model": {},
+     "tokens": {},
+     "cache_hits": {},
+     "uploaded_bytes": 1122,
+     "uploaded_blobs": 2,
+     "large_via_worker": 0
+    },
+    "wall_s": 0.28
+   }
+  },
+  {
+   "id": "c24a6e64b19864919f504b561d7bd19b",
+   "kind": "link",
+   "key": "c1cfc2873b6750f87fafd6ae2f9fd11720e3b096272f98ec6d524317af41f238",
+   "state": "done",
+   "owner": "kworker@Sam_ZephyrusG14",
+   "lease_until": null,
+   "attempts": 1,
+   "expired_leases": 0,
+   "runs": 1,
+   "error": null,
+   "created_at": 1794506526375,
+   "updated_at": 1794507019067,
+   "payload": {
+    "url": "https://github.com/Pomerado/pomerado",
+    "from": "thread:2114436006778925376"
+   },
+   "deps": [],
+   "result": {
+    "result": {
+     "url": "https://github.com/Pomerado/pomerado",
+     "from": "thread:2114436006778925376",
+     "canonical_url": "https://github.com/pomerado/pomerado",
+     "final_url": "https://github.com/Pomerado/pomerado",
+     "status": "ok",
+     "rung": 0,
+     "http_status": 200,
+     "note": "GitHub API",
+     "content_sha": "2a6382ad8396946c3fc38d0662641217a3f590aa6cf33c1ad55e08e2ed1359c5",
+     "cached": true,
+     "attempts": [],
+     "meta": {
+      "repo": {
+       "archived": false,
+       "default_branch": "main",
+       "description": "YC F26. Turn any website into an API / MCP in minutes. Open source core integration minting harness. MIT.",
+       "full_name": "Pomerado/pomerado",
+       "last_commit": {
+        "date": "2026-11-12T07:59:52Z",
+        "sha": "e5a6362a674a28c708e1eca5da68cb90ec38a65f"
+       },
+       "license": "MIT",
+       "pushed_at": "2026-11-12T08:13:57Z",
+       "stars": 1666,
+       "url": "https://github.com/Pomerado/pomerado"
+      }
+     },
+     "text_sha": "46ec7a04d4c0c2b2bd2e9c3dbd7dbfa7d9cb5805eca86daa7933757bfe3ee2e0",
+     "title": "Pomerado/pomerado"
+    },
+    "stats": {
+     "fetches": 0,
+     "fetches_by_host": {},
+     "model_calls": 0,
+     "model_calls_by_model": {},
+     "tokens": {},
+     "cache_hits": {
+      "fetch": 1,
+      "derive:extract": 1
+     },
+     "uploaded_bytes": 0,
+     "uploaded_blobs": 0,
+     "large_via_worker": 0
+    },
+    "wall_s": 0.17
+   }
+  },
+  {
+   "id": "a155bc51d12a90dfd327f8cc5e06bb88",
+   "kind": "link",
+   "key": "6b9d220c749b233b33403021899ee40633ba49056a4512b4dc227c39ce2a1f86",
+   "state": "done",
+   "owner": "kworker@Sam_ZephyrusG14",
+   "lease_until": null,
+   "attempts": 1,
+   "expired_leases": 0,
+   "runs": 1,
+   "error": null,
+   "created_at": 1794506526362,
+   "updated_at": 1794507016614,
+   "payload": {
+    "url": "https://pomerado.ai",
+    "from": "thread:2114435945474998716"
+   },
+   "deps": [],
+   "result": {
+    "result": {
+     "url": "https://pomerado.ai",
+     "from": "thread:2114435945474998716",
+     "canonical_url": "https://pomerado.ai/",
+     "final_url": "https://pomerado.ai/",
+     "status": "ok",
+     "rung": 1,
+     "http_status": 200,
+     "note": "",
+     "content_sha": "071df8de411849f1f91b957fbff045a70c4021ca61f35b8ce6267237837b85c4",
+     "cached": false,
+     "attempts": [
+      {
+       "rung": 0,
+       "skipped": "no site adapter for this host"
+      },
+      {
+       "rung": 1,
+       "status": "ok",
+       "http_status": 200,
+       "note": "",
+       "ms": 250,
+       "text_chars": 13113
+      }
+     ],
+     "meta": {},
+     "text_sha": "82a6c5e4ab004bbc0774d4730ea8c70ef1f032ef42d2d637d6214dc7813e58c6",
+     "title": "Connect agents to any website. No API needed.",
+     "site_repos": [
+      "https://github.com/pomerado/pomerado"
+     ],
+     "site_repo": {
+      "url": "https://github.com/pomerado/pomerado",
+      "status": "ok",
+      "meta": {
+       "repo": {
+        "archived": false,
+        "default_branch": "main",
+        "description": "YC F26. Turn any website into an API / MCP in minutes. Open source core integration minting harness. MIT.",
+        "full_name": "Pomerado/pomerado",
+        "last_commit": {
+         "date": "2026-11-12T07:59:52Z",
+         "sha": "e5a6362a674a28c708e1eca5da68cb90ec38a65f"
+        },
+        "license": "MIT",
+        "pushed_at": "2026-11-12T08:13:57Z",
+        "stars": 1666,
+        "url": "https://github.com/Pomerado/pomerado"
+       }
+      },
+      "text_sha": "46ec7a04d4c0c2b2bd2e9c3dbd7dbfa7d9cb5805eca86daa7933757bfe3ee2e0"
+     }
+    },
+    "stats": {
+     "fetches": 4,
+     "fetches_by_host": {
+      "pomerado.ai": 1,
+      "api.github.com": 3
+     },
+     "model_calls": 0,
+     "model_calls_by_model": {},
+     "tokens": {},
+     "cache_hits": {},
+     "uploaded_bytes": 230933,
+     "uploaded_blobs": 4,
+     "large_via_worker": 0
+    },
+    "wall_s": 1.55
+   }
+  },
+  {
+   "id": "4ee018b2a08d398e90844fcb280f177e",
+   "kind": "link",
+   "key": "657be5e8371146ca79c3caf50fe2e00bd1e73e9de7362dc008c3400cee0d0f86",
+   "state": "done",
+   "owner": "kworker@Sam_ZephyrusG14",
+   "lease_until": null,
+   "attempts": 1,
+   "expired_leases": 0,
+   "runs": 1,
+   "error": null,
+   "created_at": 1794506520262,
+   "updated_at": 1794506838584,
+   "payload": {
+    "url": "https://coinbase.com/careers",
+    "from": "thread:2109412049562611793"
+   },
+   "deps": [],
+   "result": {
+    "result": {
+     "url": "https://coinbase.com/careers",
+     "from": "thread:2109412049562611793",
+     "canonical_url": "https://coinbase.com/careers",
+     "final_url": "https://coinbase.com/careers",
+     "status": "ok",
+     "rung": 2,
+     "http_status": 200,
+     "note": "r.jina.ai",
+     "content_sha": "a7bdf402352e568f747891f0bbe15579ffa3e9bad29524a4d8b089f418068711",
+     "cached": false,
+     "attempts": [
+      {
+       "rung": 0,
+       "skipped": "no site adapter for this host"
+      },
+      {
+       "rung": 1,
+       "status": "blocked",
+       "http_status": 403,
+       "note": "HTTP 403 with a challenge page",
+       "ms": 172
+      },
+      {
+       "rung": 2,
+       "status": "ok",
+       "http_status": 200,
+       "note": "r.jina.ai",
+       "ms": 406,
+       "text_chars": 27004
+      }
+     ],
+     "meta": {},
+     "text_sha": "a7bdf402352e568f747891f0bbe15579ffa3e9bad29524a4d8b089f418068711",
+     "title": null
+    },
+    "stats": {
+     "fetches": 2,
+     "fetches_by_host": {
+      "coinbase.com": 1,
+      "r.jina.ai": 1
+     },
+     "model_calls": 0,
+     "model_calls_by_model": {},
+     "tokens": {},
+     "cache_hits": {
+      "blob": 1
+     },
+     "uploaded_bytes": 27200,
+     "uploaded_blobs": 1,
+     "large_via_worker": 0
+    },
+    "wall_s": 0.7
+   }
+  },
+  {
+   "id": "a4215c04d47d4fd71f92c66cc709c799",
+   "kind": "link",
+   "key": "1a750e8506fbf6e395fbb2af1054cd26261ea669752bae36df30e631716d7bcc",
+   "state": "done",
+   "owner": "kworker@Sam_ZephyrusG14",
+   "lease_until": null,
+   "attempts": 1,
+   "expired_leases": 0,
+   "runs": 1,
+   "error": null,
+   "created_at": 1794506520250,
+   "updated_at": 1794506835706,
+   "payload": {
+    "url": "https://www.coinbase.com/blog/part-one-how-coinbase-built-evaluated-and-post-trained-a-fraud-agent",
+    "from": "thread:2109412049562611793"
+   },
+   "deps": [],
+   "result": {
+    "result": {
+     "url": "https://www.coinbase.com/blog/part-one-how-coinbase-built-evaluated-and-post-trained-a-fraud-agent",
+     "from": "thread:2109412049562611793",
+     "canonical_url": "https://www.coinbase.com/blog/part-one-how-coinbase-built-evaluated-and-post-trained-a-fraud-agent",
+     "final_url": "http://web.archive.org/web/20261014201918id_/https://www.coinbase.com/blog/part-one-how-coinbase-built-evaluated-and-post-trained-a-fraud-agent",
+     "status": "ok",
+     "rung": 3,
+     "http_status": 200,
+     "note": "Wayback snapshot 20261014201918",
+     "content_sha": "15833c7606206ec906725e8e022b0e46de7f56b7e419460968035189bc9496c7",
+     "cached": false,
+     "attempts": [
+      {
+       "rung": 0,
+       "skipped": "no site adapter for this host"
+      },
+      {
+       "rung": 1,
+       "status": "blocked",
+       "http_status": 403,
+       "note": "HTTP 403 with a challenge page",
+       "ms": 62
+      },
+      {
+       "rung": 2,
+       "status": "blocked",
+       "http_status": null,
+       "note": "r.jina.ai: target refused",
+       "ms": 2937
+      },
+      {
+       "rung": 3,
+       "status": "ok",
+       "http_status": 200,
+       "note": "Wayback snapshot 20261014201918",
+       "ms": 1312,
+       "text_chars": 16802
+      }
+     ],
+     "meta": {},
+     "text_sha": "3ab72689b92a46d3d4d6e6d070d8cd99a1c4cc41b4c04d45f40d568d3426e877",
+     "title": "Part 1/3 Owning Intelligence Series: How Coinbase Built, Evaluated, and Post-Trained a Fraud Agent",
+     "site_repos": []
+    },
+    "stats": {
+     "fetches": 4,
+     "fetches_by_host": {
+      "www.coinbase.com": 1,
+      "r.jina.ai": 1,
+      "archive.org": 1,
+      "web.archive.org": 1
+     },
+     "model_calls": 0,
+     "model_calls_by_model": {},
+     "tokens": {},
+     "cache_hits": {},
+     "uploaded_bytes": 435619,
+     "uploaded_blobs": 2,
+     "large_via_worker": 0
+    },
+    "wall_s": 4.66
+   }
+  },
+  {
+   "id": "905ccde10f2165cd8bab2d85055156d6",
+   "kind": "link",
+   "key": "c9bdc2a4d68d157267ebe576d9e0f3ce5cb224462429e2422747e245fcdd35a1",
+   "state": "done",
+   "owner": "kworker@Sam_ZephyrusG14",
+   "lease_until": null,
+   "attempts": 1,
+   "expired_leases": 0,
+   "runs": 1,
+   "error": null,
+   "created_at": 1794506512686,
+   "updated_at": 1794506767776,
+   "payload": {
+    "url": "https://rkufoapn89co.postplan.dev/",
+    "from": "thread:2112712462772658479"
+   },
+   "deps": [],
+   "result": {
+    "result": {
+     "url": "https://rkufoapn89co.postplan.dev/",
+     "from": "thread:2112712462772658479",
+     "canonical_url": "https://rkufoapn89co.postplan.dev/",
+     "final_url": "https://rkufoapn89co.postplan.dev/",
+     "status": "ok",
+     "rung": 1,
+     "http_status": 200,
+     "note": "",
+     "content_sha": "1455a37f8e37a95b78c45da3627c6cc1eae716bb462381deab2a586bb2ccc40d",
+     "cached": false,
+     "attempts": [
+      {
+       "rung": 0,
+       "skipped": "no site adapter for this host"
+      },
+      {
+       "rung": 1,
+       "status": "ok",
+       "http_status": 200,
+       "note": "",
+       "ms": 577,
+       "text_chars": 5594
+      }
+     ],
+     "meta": {},
+     "text_sha": "efb1bc82c74fc77acee01200bf516fdf9dc996a1d4a9ce0f8d0e1fc9bb1f14e2",
+     "title": "T3 Code: real tasks, tokens, and cost",
+     "site_repos": [
+      "https://github.com/pingdotgg/t3code"
+     ],
+     "site_repo": {
+      "url": "https://github.com/pingdotgg/t3code",
+      "status": "ok",
+      "meta": {
+       "repo": {
+        "archived": false,
+        "default_branch": "main",
+        "description": "The best way to control Claude Code, Codex and more from any computer or phone",
+        "full_name": "pingdotgg/t3code",
+        "last_commit": {
+         "date": "2026-11-12T18:03:48Z",
+         "sha": "315b06c5ecf6587acf53baa0a5691579e04c3f8c"
+        },
+        "license": "MIT",
+        "pushed_at": "2026-11-12T18:05:21Z",
+        "stars": 58075,
+        "url": "https://github.com/pingdotgg/t3code"
+       }
+      },
+      "text_sha": "b0f9aa822ea6fb64549482a1b270858d190f6310c9bad9d3c454e5ff042ef2c1"
+     }
+    },
+    "stats": {
+     "fetches": 4,
+     "fetches_by_host": {
+      "rkufoapn89co.postplan.dev": 1,
+      "api.github.com": 3
+     },
+     "model_calls": 0,
+     "model_calls_by_model": {},
+     "tokens": {},
+     "cache_hits": {},
+     "uploaded_bytes": 357173,
+     "uploaded_blobs": 4,
+     "large_via_worker": 0
+    },
+    "wall_s": 2.08
+   }
+  },
+  {
+   "id": "c2848cd18987851b7c4a4e84dd7cbdfe",
+   "kind": "link",
+   "key": "f5220dab8f55b741ff6e0de2d1db5732f5e5083a350a027b427995d7b8fbc2a4",
+   "state": "done",
+   "owner": "kworker@Sam_ZephyrusG14",
+   "lease_until": null,
+   "attempts": 1,
+   "expired_leases": 0,
+   "runs": 1,
+   "error": null,
+   "created_at": 1794506498088,
+   "updated_at": 1794506602712,
+   "payload": {
+    "url": "https://claude.com/resources/articles/claude-duet",
+    "from": "reply:2113279721488412973"
+   },
+   "deps": [],
+   "result": {
+    "result": {
+     "url": "https://claude.com/resources/articles/claude-duet",
+     "from": "reply:2113279721488412973",
+     "canonical_url": "https://claude.com/resources/articles/claude-duet",
+     "final_url": "https://claude.com/resources/articles/claude-duet",
+     "status": "ok",
+     "rung": 1,
+     "http_status": 200,
+     "note": "",
+     "content_sha": "7c6639d69781ac8f38cf9203c69405e23bd5a120dbc7c7ef73f55c9ccc5e3b0a",
+     "cached": false,
+     "attempts": [
+      {
+       "rung": 0,
+       "skipped": "no site adapter for this host"
+      },
+      {
+       "rung": 1,
+       "status": "ok",
+       "http_status": 200,
+       "note": "",
+       "ms": 344,
+       "text_chars": 15072
+      }
+     ],
+     "meta": {},
+     "text_sha": "09bdbe1477aa5ec17dfab8a2ee62b64bf2c5d1b47b5194d452cda22a4212cd81",
+     "title": "Introducing Claude Duet",
+     "site_repos": []
+    },
+    "stats": {
+     "fetches": 1,
+     "fetches_by_host": {
+      "claude.com": 1
+     },
+     "model_calls": 0,
+     "model_calls_by_model": {},
+     "tokens": {},
+     "cache_hits": {},
+     "uploaded_bytes": 551321,
+     "uploaded_blobs": 2,
+     "large_via_worker": 0
+    },
+    "wall_s": 0.94
+   }
+  },
+  {
+   "id": "5036c0baf90a82db9b1ddcbf09c5d174",
+   "kind": "image",
+   "key": "5c1e2ba71894f07d10c34b40ca43d72f8b99f160d11c4e72fb44cbdd48aa7621",
+   "state": "done",
+   "owner": "kworker@Sam_ZephyrusG14",
+   "lease_until": null,
+   "attempts": 1,
+   "expired_leases": 0,
+   "runs": 1,
+   "error": null,
+   "created_at": 1794506538594,
+   "updated_at": 1794507102834,
+   "payload": {
+    "source_url": "https://pbs.twimg.com/media/HU16x7NWoAAatvp.jpg?name=orig",
+    "media_kind": "photo",
+    "post_id": "2111478858478465421"
+   },
+   "deps": [],
+   "result": {
+    "result": {
+     "sha256": "cab681af06e7f88cc84ea3ae3d66643af26806bfebb69ac3e14f23a8ed6f5e12",
+     "mime": "image/jpeg",
+     "source_url": "https://pbs.twimg.com/media/HU16x7NWoAAatvp.jpg?name=orig",
+     "post_id": "2111478858478465421",
+     "read_sha": "1f1882aca688b8116b75cc52fb44b660f902f21bbb32398bff23751edfb60e12",
+     "read_by": {
+      "provider": "cliproxy",
+      "model": "claude-haiku-5-5",
+      "prompt_v": "image-read-v1"
+     },
+     "second_sha": null,
+     "second_by": null,
+     "agreement": null,
+     "ocr_uncertain": false
+    },
+    "stats": {
+     "fetches": 1,
+     "fetches_by_host": {
+      "pbs.twimg.com": 1
+     },
+     "model_calls": 1,
+     "model_calls_by_model": {
+      "cliproxy/claude-haiku-5-5": 1
+     },
+     "tokens": {
+      "image_read.in": 4313,
+      "image_read.out": 936
+     },
+     "cache_hits": {},
+     "uploaded_bytes": 154844,
+     "uploaded_blobs": 2,
+     "large_via_worker": 0
+    },
+    "wall_s": 6.41
+   }
+  },
+  {
+   "id": "3eb81f3a3f378c0df5f6f24a16a30802",
+   "kind": "image",
+   "key": "d35bbbfbe49de29cf890c60915d44fbae3da610d26d15ba5f5df2582339d5ac7",
+   "state": "done",
+   "owner": "kworker@Sam_ZephyrusG14",
+   "lease_until": null,
+   "attempts": 1,
+   "expired_leases": 0,
+   "runs": 1,
+   "error": null,
+   "created_at": 1794506526347,
+   "updated_at": 1794507013020,
+   "payload": {
+    "source_url": "https://pbs.twimg.com/media/HVf7wi6agAEvSM5.jpg?name=orig",
+    "media_kind": "photo",
+    "post_id": "2114435458197582269"
+   },
+   "deps": [],
+   "result": {
+    "result": {
+     "sha256": "6bd4d1b2b04012cc9389bbe0d5ef8c06ef8ce861333f09beb464d4b667a017e7",
+     "mime": "image/jpeg",
+     "source_url": "https://pbs.twimg.com/media/HVf7wi6agAEvSM5.jpg?name=orig",
+     "post_id": "2114435458197582269",
+     "read_sha": "1dd611825eb3addd4f1b0f2703fcefda72d770fb328c8a61ca568687bb35c015",
+     "read_by": {
+      "provider": "cliproxy",
+      "model": "claude-haiku-5-5",
+      "prompt_v": "image-read-v1"
+     },
+     "second_sha": "adf58b479311e6bc362d34cb4bc0fc44e82358a6b99c9f0fe00b0c1a8bb5a6f3",
+     "second_by": {
+      "provider": "cliproxy",
+      "model": "gpt-6-luna",
+      "prompt_v": "image-read-v1"
+     },
+     "agreement": 0.7421,
+     "ocr_uncertain": true
+    },
+    "stats": {
+     "fetches": 1,
+     "fetches_by_host": {
+      "pbs.twimg.com": 1
+     },
+     "model_calls": 2,
+     "model_calls_by_model": {
+      "cliproxy/claude-haiku-5-5": 1,
+      "cliproxy/gpt-6-luna": 1
+     },
+     "tokens": {
+      "image_read.in": 1184,
+      "image_read.out": 1748,
+      "image_second_read.in": 939,
+      "image_second_read.out": 863
+     },
+     "cache_hits": {},
+     "uploaded_bytes": 100784,
+     "uploaded_blobs": 3,
+     "large_via_worker": 0
+    },
+    "wall_s": 40.92
+   }
+  },
+  {
+   "id": "248f2238e1ee6eba3a70e33c3e21d148",
+   "kind": "image",
+   "key": "db49802ece12facb6106a2d1f29d1d1587464069e272ce8725c25f23cf26a264",
+   "state": "done",
+   "owner": "kworker@Sam_ZephyrusG14",
+   "lease_until": null,
+   "attempts": 1,
+   "expired_leases": 0,
+   "runs": 1,
+   "error": null,
+   "created_at": 1794506526287,
+   "updated_at": 1794506917740,
+   "payload": {
+    "source_url": "https://pbs.twimg.com/media/HVf6hiabsAATZ0f.jpg?name=orig",
+    "media_kind": "photo",
+    "post_id": "2114435447992771013"
+   },
+   "deps": [],
+   "result": {
+    "result": {
+     "sha256": "b690b06bf3bc9bfff7c116a318c62ff7fcf294a6430abd4a22e3eabedb673140",
+     "mime": "image/jpeg",
+     "source_url": "https://pbs.twimg.com/media/HVf6hiabsAATZ0f.jpg?name=orig",
+     "post_id": "2114435447992771013",
+     "read_sha": "4d0e72de232c6f3ea5c716dfaa63e5d1c2c84f223d8a2d0649b2ea1b7ed30fc2",
+     "read_by": {
+      "provider": "cliproxy",
+      "model": "claude-haiku-5-5",
+      "prompt_v": "image-read-v1"
+     },
+     "second_sha": "d276dee3430efc208991cde281b56a496ebc9efc47323a43be83bb7af9eadb32",
+     "second_by": {
+      "provider": "cliproxy",
+      "model": "gpt-6-luna",
+      "prompt_v": "image-read-v1"
+     },
+     "agreement": 1,
+     "ocr_uncertain": false
+    },
+    "stats": {
+     "fetches": 1,
+     "fetches_by_host": {
+      "pbs.twimg.com": 1
+     },
+     "model_calls": 2,
+     "model_calls_by_model": {
+      "cliproxy/claude-haiku-5-5": 1,
+      "cliproxy/gpt-6-luna": 1
+     },
+     "tokens": {
+      "image_read.in": 4657,
+      "image_read.out": 1362,
+      "image_second_read.in": 4095,
+      "image_second_read.out": 1100
+     },
+     "cache_hits": {},
+     "uploaded_bytes": 149537,
+     "uploaded_blobs": 3,
+     "large_via_worker": 0
+    },
+    "wall_s": 38.06
+   }
+  },
+  {
+   "id": "964b52889511e1197fbf5c1825526ac4",
+   "kind": "image",
+   "key": "3b4d49b270643e09161ca10726e9ae351a9fe0d22e6c6eff576f2679e80a1a37",
+   "state": "done",
+   "owner": "kworker@Sam_ZephyrusG14",
+   "lease_until": null,
+   "attempts": 1,
+   "expired_leases": 0,
+   "runs": 1,
+   "error": null,
+   "created_at": 1794506520237,
+   "updated_at": 1794506829034,
+   "payload": {
+    "source_url": "https://pbs.twimg.com/media/HUYhnxrXoAA8WCz.jpg?name=orig",
+    "media_kind": "photo",
+    "post_id": "2109412046244913643"
+   },
+   "deps": [],
+   "result": {
+    "result": {
+     "sha256": "e5fe99870b51f8502eebb5321e7afb913feb3fa2edeeec1b712f26e9f11cf12d",
+     "mime": "image/jpeg",
+     "source_url": "https://pbs.twimg.com/media/HUYhnxrXoAA8WCz.jpg?name=orig",
+     "post_id": "2109412046244913643",
+     "read_sha": "d76842a215caaf0ccef92481480180b408040863e80b365889482ff628af38e0",
+     "read_by": {
+      "provider": "cliproxy",
+      "model": "claude-haiku-5-5",
+      "prompt_v": "image-read-v1"
+     },
+     "second_sha": "3f123d2340a935c3c6a38bb73f57bdd7d5c1f90894376612041553f8d91dcdcf",
+     "second_by": {
+      "provider": "cliproxy",
+      "model": "gpt-6-luna",
+      "prompt_v": "image-read-v1"
+     },
+     "agreement": 0.9249,
+     "ocr_uncertain": false
+    },
+    "stats": {
+     "fetches": 1,
+     "fetches_by_host": {
+      "pbs.twimg.com": 1
+     },
+     "model_calls": 2,
+     "model_calls_by_model": {
+      "cliproxy/claude-haiku-5-5": 1,
+      "cliproxy/gpt-6-luna": 1
+     },
+     "tokens": {
+      "image_read.in": 1279,
+      "image_read.out": 1280,
+      "image_second_read.in": 1020,
+      "image_second_read.out": 415
+     },
+     "cache_hits": {},
+     "uploaded_bytes": 45618,
+     "uploaded_blobs": 3,
+     "large_via_worker": 0
+    },
+    "wall_s": 24.81
+   }
+  },
+  {
+   "id": "0694862c44df5f0007e60071b9a99901",
+   "kind": "image",
+   "key": "276f1f9133b58d25b8ccc6c1d970b088a89acabbdfd0bb4619b399caadace6d4",
+   "state": "done",
+   "owner": "kworker@Sam_ZephyrusG14",
+   "lease_until": null,
+   "attempts": 1,
+   "expired_leases": 0,
+   "runs": 1,
+   "error": null,
+   "created_at": 1794506520223,
+   "updated_at": 1794506801789,
+   "payload": {
+    "source_url": "https://pbs.twimg.com/media/HUYhjMnW8AAM-ty.jpg?name=orig",
+    "media_kind": "photo",
+    "post_id": "2109412046244913643"
+   },
+   "deps": [],
+   "result": {
+    "result": {
+     "sha256": "af68a5498b5da49bff77c243e536dba1efecaba4b72fce4214aa13b8dc008f12",
+     "mime": "image/jpeg",
+     "source_url": "https://pbs.twimg.com/media/HUYhjMnW8AAM-ty.jpg?name=orig",
+     "post_id": "2109412046244913643",
+     "read_sha": "6b66a91e44e924cdfe64f013f15b2aed5c7e6b054c2647ee638ddf570b40fb36",
+     "read_by": {
+      "provider": "cliproxy",
+      "model": "claude-haiku-5-5",
+      "prompt_v": "image-read-v1"
+     },
+     "second_sha": "de6147fff7b8eed133372d921f6e37ffba620387c814c7c431ac6da6a32d98b1",
+     "second_by": {
+      "provider": "cliproxy",
+      "model": "gpt-6-luna",
+      "prompt_v": "image-read-v1"
+     },
+     "agreement": 1,
+     "ocr_uncertain": false
+    },
+    "stats": {
+     "fetches": 1,
+     "fetches_by_host": {
+      "pbs.twimg.com": 1
+     },
+     "model_calls": 2,
+     "model_calls_by_model": {
+      "cliproxy/claude-haiku-5-5": 1,
+      "cliproxy/gpt-6-luna": 1
+     },
+     "tokens": {
+      "image_read.in": 4187,
+      "image_read.out": 978,
+      "image_second_read.in": 3652,
+      "image_second_read.out": 523
+     },
+     "cache_hits": {},
+     "uploaded_bytes": 134686,
+     "uploaded_blobs": 3,
+     "large_via_worker": 0
+    },
+    "wall_s": 28.78
+   }
+  },
+  {
+   "id": "1e73d7b9d65bec5037fe07e852e03a05",
+   "kind": "image",
+   "key": "151a0190efde136d23db1e19a006666ec94661ffa9626d073df664b87b4f9674",
+   "state": "done",
+   "owner": "kworker@Sam_ZephyrusG14",
+   "lease_until": null,
+   "attempts": 1,
+   "expired_leases": 0,
+   "runs": 1,
+   "error": null,
+   "created_at": 1794506512674,
+   "updated_at": 1794506763421,
+   "payload": {
+    "source_url": "https://pbs.twimg.com/media/HVHcwmga0AA7R0T.jpg?name=orig",
+    "media_kind": "photo",
+    "post_id": "2112712462772658479"
+   },
+   "deps": [],
+   "result": {
+    "result": {
+     "sha256": "cf04e44bdd612ebe32134c22c7d81d43c923e69e26445a2b30ec4f7bc4d0c212",
+     "mime": "image/jpeg",
+     "source_url": "https://pbs.twimg.com/media/HVHcwmga0AA7R0T.jpg?name=orig",
+     "post_id": "2112712462772658479",
+     "read_sha": "de6cf3a5c12894bb304cad032dbd8d08fe2ddc7d7e6f6227ad8813deed35404f",
+     "read_by": {
+      "provider": "cliproxy",
+      "model": "claude-haiku-5-5",
+      "prompt_v": "image-read-v1"
+     },
+     "second_sha": "b6e68f3a1849868b5eb726531f675a065ef0c745275b5e6a885a8dd2d9ca7463",
+     "second_by": {
+      "provider": "cliproxy",
+      "model": "gpt-6-luna",
+      "prompt_v": "image-read-v1"
+     },
+     "agreement": 1,
+     "ocr_uncertain": false
+    },
+    "stats": {
+     "fetches": 1,
+     "fetches_by_host": {
+      "pbs.twimg.com": 1
+     },
+     "model_calls": 2,
+     "model_calls_by_model": {
+      "cliproxy/claude-haiku-5-5": 1,
+      "cliproxy/gpt-6-luna": 1
+     },
+     "tokens": {
+      "image_read.in": 5160,
+      "image_read.out": 1500,
+      "image_second_read.in": 6906,
+      "image_second_read.out": 1444
+     },
+     "cache_hits": {},
+     "uploaded_bytes": 274903,
+     "uploaded_blobs": 3,
+     "large_via_worker": 0
+    },
+    "wall_s": 57.98
+   }
+  },
+  {
+   "id": "384d8c4d5e64d1602f9a1ddb4525f1be",
+   "kind": "image",
+   "key": "81d83a153ee063fc696fb56ca570ac33eb1ae5eb06f57967e6336f2bb88f5cb7",
+   "state": "done",
+   "owner": "kworker@Sam_ZephyrusG14",
+   "lease_until": null,
+   "attempts": 1,
+   "expired_leases": 0,
+   "runs": 1,
+   "error": null,
+   "created_at": 1794506512657,
+   "updated_at": 1794506703037,
+   "payload": {
+    "source_url": "https://pbs.twimg.com/media/HVHchv_bkAAFO-J.jpg?name=orig",
+    "media_kind": "photo",
+    "post_id": "2112712462772658479"
+   },
+   "deps": [],
+   "result": {
+    "result": {
+     "sha256": "bdab8c6e20d6fef6df3c6abce5eed20c0b8230f1a1a78d2005b59d3c659a8173",
+     "mime": "image/jpeg",
+     "source_url": "https://pbs.twimg.com/media/HVHchv_bkAAFO-J.jpg?name=orig",
+     "post_id": "2112712462772658479",
+     "read_sha": "72b44124b6c602f6fe8affedf1318bd5060bbe130376c2a0458f9a2e004785d1",
+     "read_by": {
+      "provider": "cliproxy",
+      "model": "claude-haiku-5-5",
+      "prompt_v": "image-read-v1"
+     },
+     "second_sha": "f7ec4cd221a807bb64ca3f4362f7d46fad30e9564bdcd2917e313d0c9aebeba3",
+     "second_by": {
+      "provider": "cliproxy",
+      "model": "gpt-6-luna",
+      "prompt_v": "image-read-v1"
+     },
+     "agreement": 1,
+     "ocr_uncertain": false
+    },
+    "stats": {
+     "fetches": 1,
+     "fetches_by_host": {
+      "pbs.twimg.com": 1
+     },
+     "model_calls": 2,
+     "model_calls_by_model": {
+      "cliproxy/claude-haiku-5-5": 1,
+      "cliproxy/gpt-6-luna": 1
+     },
+     "tokens": {
+      "image_read.in": 5227,
+      "image_read.out": 1498,
+      "image_second_read.in": 6316,
+      "image_second_read.out": 1327
+     },
+     "cache_hits": {},
+     "uploaded_bytes": 265694,
+     "uploaded_blobs": 3,
+     "large_via_worker": 0
+    },
+    "wall_s": 41.19
+   }
+  },
+  {
+   "id": "5572d741c78e0f20c8828ba5a4005c7a",
+   "kind": "image",
+   "key": "bc72840b95b45108df872e8c36c0528d31ff40185e1ee404b6a7c927363f3090",
+   "state": "done",
+   "owner": "kworker@Sam_ZephyrusG14",
+   "lease_until": null,
+   "attempts": 1,
+   "expired_leases": 0,
+   "runs": 1,
+   "error": null,
+   "created_at": 1794506512644,
+   "updated_at": 1794506659352,
+   "payload": {
+    "source_url": "https://pbs.twimg.com/media/HVHcZjlbMAAfNQ3.jpg?name=orig",
+    "media_kind": "photo",
+    "post_id": "2112712092163957157"
+   },
+   "deps": [],
+   "result": {
+    "result": {
+     "sha256": "91fe3c1cffe5f3776bb63736a9fdba44741703c11600977c3d52f4f33773649f",
+     "mime": "image/jpeg",
+     "source_url": "https://pbs.twimg.com/media/HVHcZjlbMAAfNQ3.jpg?name=orig",
+     "post_id": "2112712092163957157",
+     "read_sha": "0eaf457dfeaabb687d8bd00567344434dd2cd3f988b6389eca0ea207cf9d68f4",
+     "read_by": {
+      "provider": "cliproxy",
+      "model": "claude-haiku-5-5",
+      "prompt_v": "image-read-v1"
+     },
+     "second_sha": "56b4c52b2e4fd13b98de4c9e2e177a93c8d3e1a47ed274e8e9c791f4299e7451",
+     "second_by": {
+      "provider": "cliproxy",
+      "model": "gpt-6-luna",
+      "prompt_v": "image-read-v1"
+     },
+     "agreement": 1,
+     "ocr_uncertain": false
+    },
+    "stats": {
+     "fetches": 1,
+     "fetches_by_host": {
+      "pbs.twimg.com": 1
+     },
+     "model_calls": 2,
+     "model_calls_by_model": {
+      "cliproxy/claude-haiku-5-5": 1,
+      "cliproxy/gpt-6-luna": 1
+     },
+     "tokens": {
+      "image_read.in": 3173,
+      "image_read.out": 960,
+      "image_second_read.in": 2755,
+      "image_second_read.out": 395
+     },
+     "cache_hits": {},
+     "uploaded_bytes": 109836,
+     "uploaded_blobs": 3,
+     "large_via_worker": 0
+    },
+    "wall_s": 25.49
+   }
+  },
+  {
+   "id": "8e0383b4bc8351e0d4d9f96bbc6a58c9",
+   "kind": "image",
+   "key": "99ac5c255e3573af9554166c607535ac57f1d571edccc2d5e8215d27a85f8fe3",
+   "state": "done",
+   "owner": "kworker@Sam_ZephyrusG14",
+   "lease_until": null,
+   "attempts": 1,
+   "expired_leases": 0,
+   "runs": 1,
+   "error": null,
+   "created_at": 1794506510051,
+   "updated_at": 1794506628738,
+   "payload": {
+    "source_url": "https://pbs.twimg.com/media/HVBbK6LWoAAUQpF.png?name=orig",
+    "media_kind": "photo",
+    "post_id": "2112288527837024667"
+   },
+   "deps": [],
+   "result": {
+    "result": {
+     "sha256": "0beee12a2172060a1036827dee7dadbed07b7cc19e32747daef679fb2706eab1",
+     "mime": "image/png",
+     "source_url": "https://pbs.twimg.com/media/HVBbK6LWoAAUQpF.png?name=orig",
+     "post_id": "2112288527837024667",
+     "read_sha": "f715ded908412ea268bd200c53f49493f2e5e2f4d748dbeeb42aee6e64a0d596",
+     "read_by": {
+      "provider": "cliproxy",
+      "model": "claude-haiku-5-5",
+      "prompt_v": "image-read-v1"
+     },
+     "second_sha": null,
+     "second_by": null,
+     "agreement": null,
+     "ocr_uncertain": false
+    },
+    "stats": {
+     "fetches": 1,
+     "fetches_by_host": {
+      "pbs.twimg.com": 1
+     },
+     "model_calls": 1,
+     "model_calls_by_model": {
+      "cliproxy/claude-haiku-5-5": 1
+     },
+     "tokens": {
+      "image_read.in": 630,
+      "image_read.out": 874
+     },
+     "cache_hits": {},
+     "uploaded_bytes": 44483,
+     "uploaded_blobs": 2,
+     "large_via_worker": 0
+    },
+    "wall_s": 5.84
+   }
+  },
+  {
+   "id": "69c213a056cb2d214d4dbf4b406895ab",
+   "kind": "video",
+   "key": "f7288ca3c5fcad1194dca1590424de18e40303bff632570958b41fa4ee09b4f6",
+   "state": "done",
+   "owner": "kworker@Sam_ZephyrusG14",
+   "lease_until": null,
+   "attempts": 1,
+   "expired_leases": 0,
+   "runs": 1,
+   "error": null,
+   "created_at": 1794506545168,
+   "updated_at": 1794507128780,
+   "payload": {
+    "source_url": "https://video.twimg.com/amplify_video/2112245358327959552/vid/avc1/2690x1814/9aoWkbwawOloLD3z.mp4?tag=29",
+    "media_kind": "video",
+    "post_id": "2112247046082363821"
+   },
+   "deps": [],
+   "result": {
+    "result": {
+     "sha256": "56549ba3b03817dba5e49f60fa16ea5452b59d17c95bcf4ad39999779fc52d26",
+     "mime": "video/mp4",
+     "source_url": "https://video.twimg.com/amplify_video/2112245358327959552/vid/avc1/2690x1814/9aoWkbwawOloLD3z.mp4?tag=29",
+     "post_id": "2112247046082363821",
+     "probe": {
+      "duration_s": 12.629333,
+      "width": 2690,
+      "height": 1814,
+      "has_audio": true,
+      "probe_sha": "a9de696d7b26bea2276311b43d3279a39f9b175c213da2f2d0afe9fe67ad695b"
+     },
+     "transcript_sha": "3c457250ee1fdf8892035bd3eb411230905674fb9d00c1907fcde6ecca3a90cd",
+     "transcript_by": {
+      "provider": "faster-whisper",
+      "model": "large-v3-turbo",
+      "prompt_v": "whisper-v1"
+     },
+     "transcript_note": null,
+     "key_frames": [
+      {
+       "sha256": "0da0948bbbc5057d31b5209fb95b6cf6655e87676d06d88d609fd75bc38f0cc6",
+       "t": 0
+      },
+      {
+       "sha256": "50faa1a64593bdceff5c91d0e733b55711ee6774b302eb0a55c14d76027e61f8",
+       "t": 4.21
+      },
+      {
+       "sha256": "c22719c62027d7f51e159113e9630f97777c0e14fb3301a4757a11cda8c705f0",
+       "t": 8.42
+      }
+     ],
+     "read_sha": "49aac6de521f9f687d9ab2d5c5a08d31b864518605194981330f1d87aa09b697",
+     "read_by": {
+      "provider": "cliproxy",
+      "model": "claude-haiku-5-5",
+      "prompt_v": "video-frames-v1"
+     }
+    },
+    "stats": {
+     "fetches": 1,
+     "fetches_by_host": {
+      "video.twimg.com": 1
+     },
+     "model_calls": 2,
+     "model_calls_by_model": {
+      "faster-whisper/large-v3-turbo": 1,
+      "cliproxy/claude-haiku-5-5": 1
+     },
+     "tokens": {
+      "video_read.in": 4710,
+      "video_read.out": 1472
+     },
+     "cache_hits": {
+      "blob": 1
+     },
+     "uploaded_bytes": 7026467,
+     "uploaded_blobs": 7,
+     "large_via_worker": 0
+    },
+    "wall_s": 17.66
+   }
+  },
+  {
+   "id": "ed1ba6e0b9b30d5cab0ab752a32f71e4",
+   "kind": "video",
+   "key": "5294e14dd0f52413a1fd06072400a157befe950e27f0a38ef526c8e4cd5965dd",
+   "state": "done",
+   "owner": "kworker@Sam_ZephyrusG14",
+   "lease_until": null,
+   "attempts": 1,
+   "expired_leases": 0,
+   "runs": 1,
+   "error": null,
+   "created_at": 1794506532044,
+   "updated_at": 1794507089060,
+   "payload": {
+    "source_url": "https://video.twimg.com/amplify_video/2111884147589619712/vid/avc1/1920x1080/h8V6sDgPpU2tqquG.mp4?tag=29",
+    "media_kind": "video",
+    "post_id": "2111884199359897953"
+   },
+   "deps": [],
+   "result": {
+    "result": {
+     "sha256": "3e42d8e72150995b937904a3ad6dafa3f018dbb7ff8aed6b02dae03623030a4c",
+     "mime": "video/mp4",
+     "source_url": "https://video.twimg.com/amplify_video/2111884147589619712/vid/avc1/1920x1080/h8V6sDgPpU2tqquG.mp4?tag=29",
+     "post_id": "2111884199359897953",
+     "probe": {
+      "duration_s": 17.554286,
+      "width": 1920,
+      "height": 1080,
+      "has_audio": true,
+      "probe_sha": "ac3dd82eeac1564b67fe73aa1f6ff01a6d70b0f3cb312d78e081ee66d99a8951"
+     },
+     "transcript_sha": "3c457250ee1fdf8892035bd3eb411230905674fb9d00c1907fcde6ecca3a90cd",
+     "transcript_by": {
+      "provider": "faster-whisper",
+      "model": "large-v3-turbo",
+      "prompt_v": "whisper-v1"
+     },
+     "transcript_note": null,
+     "key_frames": [
+      {
+       "sha256": "1fc090ed72a4abaab2051198579ce0074132a1e7dfb7367eb55a0b1e41146945",
+       "t": 0
+      },
+      {
+       "sha256": "2ebcaf0d6923897ced85130a3e6698ece4262d977c8b3aae9a37e2fbd70c1a2a",
+       "t": 4.39
+      },
+      {
+       "sha256": "087d0beca2f4c53197384bf7d07b3dca91b6fa240f8f12af383902ec57a90cff",
+       "t": 7.4
+      },
+      {
+       "sha256": "91a3dd852875d5dd0e3f8aa7d0b93f1339da1f8968f8a75181178e4482af39c7",
+       "t": 11.6
+      }
+     ],
+     "read_sha": "823c3a0dfee4b1119af671956f341dade03489d8d9913fd9f71292e505073a70",
+     "read_by": {
+      "provider": "cliproxy",
+      "model": "claude-haiku-5-5",
+      "prompt_v": "video-frames-v1"
+     }
+    },
+    "stats": {
+     "fetches": 1,
+     "fetches_by_host": {
+      "video.twimg.com": 1
+     },
+     "model_calls": 2,
+     "model_calls_by_model": {
+      "faster-whisper/large-v3-turbo": 1,
+      "cliproxy/claude-haiku-5-5": 1
+     },
+     "tokens": {
+      "video_read.in": 5232,
+      "video_read.out": 1333
+     },
+     "cache_hits": {
+      "blob": 1
+     },
+     "uploaded_bytes": 5917588,
+     "uploaded_blobs": 8,
+     "large_via_worker": 0
+    },
+    "wall_s": 15.06
+   }
+  },
+  {
+   "id": "1d7f8c01d2b304199199c34e39722198",
+   "kind": "video",
+   "key": "112abec1bcb3dc4217f3eec3cd99171c8e080b651dde01d8b4dcf65daa531234",
+   "state": "done",
+   "owner": "kworker@Sam_ZephyrusG14",
+   "lease_until": null,
+   "attempts": 1,
+   "expired_leases": 0,
+   "runs": 1,
+   "error": null,
+   "created_at": 1794506532027,
+   "updated_at": 1794507071925,
+   "payload": {
+    "source_url": "https://video.twimg.com/amplify_video/2111883801819484160/vid/avc1/1920x1080/nkNlhBv4szwoldW2.mp4?tag=29",
+    "media_kind": "video",
+    "post_id": "2111883843846451632"
+   },
+   "deps": [],
+   "result": {
+    "result": {
+     "sha256": "e2bd173fcfc93fd01e688a644e24946a2c0123fa29aaaf43eb77f1f7c72869d8",
+     "mime": "video/mp4",
+     "source_url": "https://video.twimg.com/amplify_video/2111883801819484160/vid/avc1/1920x1080/nkNlhBv4szwoldW2.mp4?tag=29",
+     "post_id": "2111883843846451632",
+     "probe": {
+      "duration_s": 18.831383,
+      "width": 1920,
+      "height": 1080,
+      "has_audio": true,
+      "probe_sha": "1af8a60feaa4433630114878fe2524c646bbe6250e0b265a88181200815b0a06"
+     },
+     "transcript_sha": "3c457250ee1fdf8892035bd3eb411230905674fb9d00c1907fcde6ecca3a90cd",
+     "transcript_by": {
+      "provider": "faster-whisper",
+      "model": "large-v3-turbo",
+      "prompt_v": "whisper-v1"
+     },
+     "transcript_note": null,
+     "key_frames": [
+      {
+       "sha256": "9a9035dc80c31ba26281e00611983f00c6304872a023704b0ea2bf83e0930bbf",
+       "t": 0
+      },
+      {
+       "sha256": "b9307d81cdcff3ccffec2d93772f2fa74b07df6f8c15ec058c45167cf728ab29",
+       "t": 4.87
+      },
+      {
+       "sha256": "0d679b75b96ba4218e95a36e1f115d9311e7e03f39fb698d47cdb0c5a1f744c4",
+       "t": 6.1
+      },
+      {
+       "sha256": "e939b181094eca15e4d432936554f062f0261aa4b2b9a3c24ebdab19ad98b780",
+       "t": 9.9
+      },
+      {
+       "sha256": "e73c9c11e2a85b93c95307c64b314bffa580456849ec89a4bb5c1cfe8186a18a",
+       "t": 13
+      },
+      {
+       "sha256": "d5f5add24bfe0339367eb3101581dec4fd5a8d6cc0fbda739c6002a0f1d221d2",
+       "t": 13.63
+      },
+      {
+       "sha256": "e78d58256296c5aedc841fbdd2abdb169f35298cc8d8970c93fe1c87c55502d9",
+       "t": 14.3
+      },
+      {
+       "sha256": "bbff82dfe7d731e5dd3c939d2cc83531c2502878e84d4838a3100c30f5958efd",
+       "t": 14.93
+      }
+     ],
+     "read_sha": "574855941c1832e6107b3342877aaa62da4c0b910428514d40d6116747753e0b",
+     "read_by": {
+      "provider": "cliproxy",
+      "model": "claude-haiku-5-5",
+      "prompt_v": "video-frames-v1"
+     }
+    },
+    "stats": {
+     "fetches": 1,
+     "fetches_by_host": {
+      "video.twimg.com": 1
+     },
+     "model_calls": 2,
+     "model_calls_by_model": {
+      "faster-whisper/large-v3-turbo": 1,
+      "cliproxy/claude-haiku-5-5": 1
+     },
+     "tokens": {
+      "video_read.in": 10080,
+      "video_read.out": 1739
+     },
+     "cache_hits": {
+      "blob": 1
+     },
+     "uploaded_bytes": 14159886,
+     "uploaded_blobs": 12,
+     "large_via_worker": 1
+    },
+    "wall_s": 16.92
+   }
+  },
+  {
+   "id": "2e671a1e52d7d7c49059b40f90f891c0",
+   "kind": "video",
+   "key": "272385a6908fbf773ebc7dd4df247ba1e3136615c6da0854104bfd7c936f7680",
+   "state": "done",
+   "owner": "kworker@Sam_ZephyrusG14",
+   "lease_until": null,
+   "attempts": 1,
+   "expired_leases": 0,
+   "runs": 1,
+   "error": null,
+   "created_at": 1794506532011,
+   "updated_at": 1794507053053,
+   "payload": {
+    "source_url": "https://video.twimg.com/amplify_video/2111883106118709248/vid/avc1/1920x1080/RvEiFj0XeRAeKWZp.mp4?tag=29",
+    "media_kind": "video",
+    "post_id": "2111883168190275752"
+   },
+   "deps": [],
+   "result": {
+    "result": {
+     "sha256": "ffc229fb7250f5106d0645470eb7209f11557f81bd78384299c069921eac72de",
+     "mime": "video/mp4",
+     "source_url": "https://video.twimg.com/amplify_video/2111883106118709248/vid/avc1/1920x1080/RvEiFj0XeRAeKWZp.mp4?tag=29",
+     "post_id": "2111883168190275752",
+     "probe": {
+      "duration_s": 11.157333,
+      "width": 1920,
+      "height": 1080,
+      "has_audio": true,
+      "probe_sha": "596bc1b964899dc2323b934041af6b523897d6359079aa63c2cd6748bd9c7beb"
+     },
+     "transcript_sha": "3c457250ee1fdf8892035bd3eb411230905674fb9d00c1907fcde6ecca3a90cd",
+     "transcript_by": {
+      "provider": "faster-whisper",
+      "model": "large-v3-turbo",
+      "prompt_v": "whisper-v1"
+     },
+     "transcript_note": null,
+     "key_frames": [
+      {
+       "sha256": "c603d5ca72acbeb508f69d331a516673c769a143c3bbbe42fc75c63397a6a6e5",
+       "t": 0
+      },
+      {
+       "sha256": "c816f06b5169b2c1f1abf5be104ff0b38420e2fd741f49943aaf2438e9f9d3de",
+       "t": 0.03
+      },
+      {
+       "sha256": "de08729a1dbbcea453adbccbdec160f75fb52094bd7cb7ea099053c5e06242f1",
+       "t": 3.72
+      }
+     ],
+     "read_sha": "a663892bd37a77b19e44f94545620ef5665dbbeedad09280de82bcdb0f2070ea",
+     "read_by": {
+      "provider": "cliproxy",
+      "model": "claude-haiku-5-5",
+      "prompt_v": "video-frames-v1"
+     }
+    },
+    "stats": {
+     "fetches": 1,
+     "fetches_by_host": {
+      "video.twimg.com": 1
+     },
+     "model_calls": 2,
+     "model_calls_by_model": {
+      "faster-whisper/large-v3-turbo": 1,
+      "cliproxy/claude-haiku-5-5": 1
+     },
+     "tokens": {
+      "video_read.in": 4020,
+      "video_read.out": 685
+     },
+     "cache_hits": {
+      "blob": 1
+     },
+     "uploaded_bytes": 8150592,
+     "uploaded_blobs": 7,
+     "large_via_worker": 0
+    },
+    "wall_s": 12.06
+   }
+  },
+  {
+   "id": "e17b3ffaf37e5b866f89301d6de12804",
+   "kind": "video",
+   "key": "0fff8b9f5dc48bf8b6d682ca2bac895e3b8dde255c90bfbf97c176ab5fe481a2",
+   "state": "done",
+   "owner": "kworker@Sam_ZephyrusG14",
+   "lease_until": null,
+   "attempts": 1,
+   "expired_leases": 0,
+   "runs": 1,
+   "error": null,
+   "created_at": 1794506531996,
+   "updated_at": 1794507039000,
+   "payload": {
+    "source_url": "https://video.twimg.com/amplify_video/2111883041320964096/vid/avc1/1920x1080/GpBN8jgArEivlZFv.mp4?tag=29",
+    "media_kind": "video",
+    "post_id": "2111883082953547881"
+   },
+   "deps": [],
+   "result": {
+    "result": {
+     "sha256": "74f10a38cfe5deda02f26792162d8dad6a3d3a718a1d2298db73981eab5ce6cb",
+     "mime": "video/mp4",
+     "source_url": "https://video.twimg.com/amplify_video/2111883041320964096/vid/avc1/1920x1080/GpBN8jgArEivlZFv.mp4?tag=29",
+     "post_id": "2111883082953547881",
+     "probe": {
+      "duration_s": 11.447438,
+      "width": 1920,
+      "height": 1080,
+      "has_audio": true,
+      "probe_sha": "e2361792f3c0a55e6eeedd011fae70f5466a66a8ba7daf8d7befbf0a1938a5a1"
+     },
+     "transcript_sha": "3c457250ee1fdf8892035bd3eb411230905674fb9d00c1907fcde6ecca3a90cd",
+     "transcript_by": {
+      "provider": "faster-whisper",
+      "model": "large-v3-turbo",
+      "prompt_v": "whisper-v1"
+     },
+     "transcript_note": null,
+     "key_frames": [
+      {
+       "sha256": "4d975f1163a37b3dc27643d310df47e64d45138f72dcf89c8263bd5f9076b65b",
+       "t": 0
+      },
+      {
+       "sha256": "c5b90074a333ec36b941cde8e7fafa733ddf5577abde73b31dc2ca4bbd9cb1b8",
+       "t": 2
+      },
+      {
+       "sha256": "94751a30c1cf3b8aeabf9b5a1655be060e2a48403c088189959fb15f5b350be8",
+       "t": 4.1
+      },
+      {
+       "sha256": "cc82d0964c3e1dbf7daf5d16f92bcafcdbd04dc4a13ddfc55251f0e1d7a98988",
+       "t": 6.5
+      },
+      {
+       "sha256": "89799a8ba30a7010145170e9bc9221ec51174cc860ad9f086d3dd4cb3bbd03f9",
+       "t": 8.7
+      }
+     ],
+     "read_sha": "c89d625be50394d85f7ec0755b3df93af256545e6dafed084189f648c8e85825",
+     "read_by": {
+      "provider": "cliproxy",
+      "model": "claude-haiku-5-5",
+      "prompt_v": "video-frames-v1"
+     }
+    },
+    "stats": {
+     "fetches": 1,
+     "fetches_by_host": {
+      "video.twimg.com": 1
+     },
+     "model_calls": 2,
+     "model_calls_by_model": {
+      "faster-whisper/large-v3-turbo": 1,
+      "cliproxy/claude-haiku-5-5": 1
+     },
+     "tokens": {
+      "video_read.in": 6444,
+      "video_read.out": 1155
+     },
+     "cache_hits": {
+      "blob": 1
+     },
+     "uploaded_bytes": 9057422,
+     "uploaded_blobs": 9,
+     "large_via_worker": 1
+    },
+    "wall_s": 13.8
+   }
+  },
+  {
+   "id": "13cdfbc4660f37e1735bc7257110f61d",
+   "kind": "video",
+   "key": "72a1c1a2432677f135a69199898f9a78b6225fca906d70fe83a90fbc3387ab4b",
+   "state": "done",
+   "owner": "kworker@Sam_ZephyrusG14",
+   "lease_until": null,
+   "attempts": 1,
+   "expired_leases": 0,
+   "runs": 1,
+   "error": null,
+   "created_at": 1794506526335,
+   "updated_at": 1794506969994,
+   "payload": {
+    "source_url": "https://video.twimg.com/tweet_video/HVf6_I_bQAAp1lU.mp4",
+    "media_kind": "video",
+    "post_id": "2114435455995572325"
+   },
+   "deps": [],
+   "result": {
+    "result": {
+     "sha256": "764341b5b2841e48a27e2ce1b63a2ae7fb3f74b161273688c1dc905c6806a58c",
+     "mime": "video/mp4",
+     "source_url": "https://video.twimg.com/tweet_video/HVf6_I_bQAAp1lU.mp4",
+     "post_id": "2114435455995572325",
+     "probe": {
+      "duration_s": 9.25,
+      "width": 1280,
+      "height": 720,
+      "has_audio": false,
+      "probe_sha": "4dade48b19e48b965ba494b81fd7c1232609dc33308af98fbf53dd83d6531cc1"
+     },
+     "transcript_sha": null,
+     "transcript_by": null,
+     "transcript_note": "no audio stream",
+     "key_frames": [
+      {
+       "sha256": "a2b2f7d2276cd0d1fb1674d0f19d00595426cb68e97770d27427331d1cc4a87f",
+       "t": 0
+      },
+      {
+       "sha256": "1da9d34be4e3e7317bdbbadae34747e2fdf4270398086ee03856b097728a9f15",
+       "t": 4.62
+      }
+     ],
+     "read_sha": "ff3269c83341bbb225975735e00975bfb3d42dcaa223d89bffadcf25167afea8",
+     "read_by": {
+      "provider": "cliproxy",
+      "model": "claude-haiku-5-5",
+      "prompt_v": "video-frames-v1"
+     }
+    },
+    "stats": {
+     "fetches": 1,
+     "fetches_by_host": {
+      "video.twimg.com": 1
+     },
+     "model_calls": 1,
+     "model_calls_by_model": {
+      "cliproxy/claude-haiku-5-5": 1
+     },
+     "tokens": {
+      "video_read.in": 2808,
+      "video_read.out": 1101
+     },
+     "cache_hits": {},
+     "uploaded_bytes": 269929,
+     "uploaded_blobs": 6,
+     "large_via_worker": 0
+    },
+    "wall_s": 10.84
+   }
+  },
+  {
+   "id": "483d178037e88b072b48cd03d732a007",
+   "kind": "video",
+   "key": "8bb21db13dc979a8f09079d8fe41ba54f6289b0cba49ea99bba46563fa021cd7",
+   "state": "done",
+   "owner": "kworker@Sam_ZephyrusG14",
+   "lease_until": null,
+   "attempts": 1,
+   "expired_leases": 0,
+   "runs": 1,
+   "error": null,
+   "created_at": 1794506526321,
+   "updated_at": 1794506957130,
+   "payload": {
+    "source_url": "https://video.twimg.com/tweet_video/HVf65mDaEAAqh3T.mp4",
+    "media_kind": "video",
+    "post_id": "2114435454154191075"
+   },
+   "deps": [],
+   "result": {
+    "result": {
+     "sha256": "3fa11d5045d5d3c1971e97909356830ffd3a56b18ee932f10e687db14e1275a6",
+     "mime": "video/mp4",
+     "source_url": "https://video.twimg.com/tweet_video/HVf65mDaEAAqh3T.mp4",
+     "post_id": "2114435454154191075",
+     "probe": {
+      "duration_s": 7.95,
+      "width": 1280,
+      "height": 720,
+      "has_audio": false,
+      "probe_sha": "4251c0eb65a456fc3829714865e93008b116fb92c02744dbee919d03a80de91b"
+     },
+     "transcript_sha": null,
+     "transcript_by": null,
+     "transcript_note": "no audio stream",
+     "key_frames": [
+      {
+       "sha256": "484a7f92286cc50110ee49fc152b51500b4969b383ed1cd71314dfffa1003892",
+       "t": 0
+      },
+      {
+       "sha256": "dbd51633ea7c9bb61468d1ce47d6f4ac03906d44cbe545780a0252767ecc708b",
+       "t": 3.98
+      }
+     ],
+     "read_sha": "2028646e1937076874a4a1513890a76d169851f27c4c34f9fbc333f96846b87a",
+     "read_by": {
+      "provider": "cliproxy",
+      "model": "claude-haiku-5-5",
+      "prompt_v": "video-frames-v1"
+     }
+    },
+    "stats": {
+     "fetches": 1,
+     "fetches_by_host": {
+      "video.twimg.com": 1
+     },
+     "model_calls": 1,
+     "model_calls_by_model": {
+      "cliproxy/claude-haiku-5-5": 1
+     },
+     "tokens": {
+      "video_read.in": 2808,
+      "video_read.out": 730
+     },
+     "cache_hits": {},
+     "uploaded_bytes": 211471,
+     "uploaded_blobs": 6,
+     "large_via_worker": 0
+    },
+    "wall_s": 9.09
+   }
+  },
+  {
+   "id": "9ae02dd060a609a855e339695425c686",
+   "kind": "video",
+   "key": "48bafefd40943213f12b75a200282e417c73a2d272caa9c52a5ad4e20568b908",
+   "state": "done",
+   "owner": "kworker@Sam_ZephyrusG14",
+   "lease_until": null,
+   "attempts": 1,
+   "expired_leases": 0,
+   "runs": 1,
+   "error": null,
+   "created_at": 1794506526310,
+   "updated_at": 1794506945871,
+   "payload": {
+    "source_url": "https://video.twimg.com/tweet_video/HVf61-QacAA_qCP.mp4",
+    "media_kind": "video",
+    "post_id": "2114435452170375453"
+   },
+   "deps": [],
+   "result": {
+    "result": {
+     "sha256": "d0311f93d3e6ca15da5614d23bce7ef7c5b8093ae4d1dd897ecb4ca3c5c7b4b4",
+     "mime": "video/mp4",
+     "source_url": "https://video.twimg.com/tweet_video/HVf61-QacAA_qCP.mp4",
+     "post_id": "2114435452170375453",
+     "probe": {
+      "duration_s": 12.2,
+      "width": 1280,
+      "height": 720,
+      "has_audio": false,
+      "probe_sha": "58162c9af8ef13548867431dd61bfe5c760d55d1eb736f5efd72a0a7e3215eef"
+     },
+     "transcript_sha": null,
+     "transcript_by": null,
+     "transcript_note": "no audio stream",
+     "key_frames": [
+      {
+       "sha256": "171f722dbce0928fe72d9b1a320139c488aab1840b41b2bf9bee5c06360473a5",
+       "t": 0
+      },
+      {
+       "sha256": "65fb27518feaa183152610ed8f2e8e7fe5776b37e05355f1e85e5c635466f072",
+       "t": 4.07
+      },
+      {
+       "sha256": "d64868f1831b41c9f9889981dd87826eac130773ad227f5414926b493d7a927c",
+       "t": 8.13
+      }
+     ],
+     "read_sha": "54b1a9e405cc6ff63b5f501981d81810b3b9ed43d2603fe4959692817d45900a",
+     "read_by": {
+      "provider": "cliproxy",
+      "model": "claude-haiku-5-5",
+      "prompt_v": "video-frames-v1"
+     }
+    },
+    "stats": {
+     "fetches": 1,
+     "fetches_by_host": {
+      "video.twimg.com": 1
+     },
+     "model_calls": 1,
+     "model_calls_by_model": {
+      "cliproxy/claude-haiku-5-5": 1
+     },
+     "tokens": {
+      "video_read.in": 4020,
+      "video_read.out": 1524
+     },
+     "cache_hits": {},
+     "uploaded_bytes": 826033,
+     "uploaded_blobs": 7,
+     "large_via_worker": 0
+    },
+    "wall_s": 12.83
+   }
+  },
+  {
+   "id": "67d5cd2e1457916d26922a289b816d7e",
+   "kind": "video",
+   "key": "6137df19f61e47f8da3ee2b25a03bf06328d894c3d1f4a682cfa6d8fcd36a397",
+   "state": "done",
+   "owner": "kworker@Sam_ZephyrusG14",
+   "lease_until": null,
+   "attempts": 1,
+   "expired_leases": 0,
+   "runs": 1,
+   "error": null,
+   "created_at": 1794506526299,
+   "updated_at": 1794506930979,
+   "payload": {
+    "source_url": "https://video.twimg.com/tweet_video/HVf6yyhaoAAXyNJ.mp4",
+    "media_kind": "video",
+    "post_id": "2114435450018594985"
+   },
+   "deps": [],
+   "result": {
+    "result": {
+     "sha256": "1950a57807ad028e84d59512d171982dd928669dbfd5e7020442dcf93cb5b612",
+     "mime": "video/mp4",
+     "source_url": "https://video.twimg.com/tweet_video/HVf6yyhaoAAXyNJ.mp4",
+     "post_id": "2114435450018594985",
+     "probe": {
+      "duration_s": 12.15,
+      "width": 1280,
+      "height": 720,
+      "has_audio": false,
+      "probe_sha": "617be7fb942a80cdd090508565bd0eaa6d3b9196d5cd602434b00167740c4f87"
+     },
+     "transcript_sha": null,
+     "transcript_by": null,
+     "transcript_note": "no audio stream",
+     "key_frames": [
+      {
+       "sha256": "5f4aa6e79142d6810c891ecac4c460c575e243251d456a951f7e0bbadeff5f86",
+       "t": 0
+      },
+      {
+       "sha256": "f4af6c96ba9644898cea1a992676645328dca395448e47c6420d9a4debddb160",
+       "t": 4.05
+      },
+      {
+       "sha256": "9580bfcb8a1417acb4cc23c30d6dcc73e651763be020b8c58773c05ade0f04f0",
+       "t": 8.1
+      }
+     ],
+     "read_sha": "b1ac326e6be630e9c1a239b0c09213558078e987701e1626def3ada4fb070be8",
+     "read_by": {
+      "provider": "cliproxy",
+      "model": "claude-haiku-5-5",
+      "prompt_v": "video-frames-v1"
+     }
+    },
+    "stats": {
+     "fetches": 1,
+     "fetches_by_host": {
+      "video.twimg.com": 1
+     },
+     "model_calls": 1,
+     "model_calls_by_model": {
+      "cliproxy/claude-haiku-5-5": 1
+     },
+     "tokens": {
+      "video_read.in": 4020,
+      "video_read.out": 1161
+     },
+     "cache_hits": {},
+     "uploaded_bytes": 521537,
+     "uploaded_blobs": 7,
+     "large_via_worker": 0
+    },
+    "wall_s": 11.17
+   }
+  },
+  {
+   "id": "962c5803b000b04f07d5b374ec8139c9",
+   "kind": "video",
+   "key": "4994c8fb01c063b93e6ce56c81013ebbdc1711be15ed73afab7691326acd77ea",
+   "state": "done",
+   "owner": "kworker@Sam_ZephyrusG14",
+   "lease_until": null,
+   "attempts": 1,
+   "expired_leases": 0,
+   "runs": 1,
+   "error": null,
+   "created_at": 1794506526274,
+   "updated_at": 1794506877768,
+   "payload": {
+    "source_url": "https://video.twimg.com/tweet_video/HVf6SIyboAACGJR.mp4",
+    "media_kind": "video",
+    "post_id": "2114435445866254772"
+   },
+   "deps": [],
+   "result": {
+    "result": {
+     "sha256": "524501035744816c5ce3087494002c65aae588c9cd744feae1c827180f1691ca",
+     "mime": "video/mp4",
+     "source_url": "https://video.twimg.com/tweet_video/HVf6SIyboAACGJR.mp4",
+     "post_id": "2114435445866254772",
+     "probe": {
+      "duration_s": 10,
+      "width": 1280,
+      "height": 720,
+      "has_audio": false,
+      "probe_sha": "7c2a736bdca52600f284bf9e91bbb0329478d83765c9423667d31a06ca79b49b"
+     },
+     "transcript_sha": null,
+     "transcript_by": null,
+     "transcript_note": "no audio stream",
+     "key_frames": [
+      {
+       "sha256": "9465e0abad6dfa1fd2b53817c788649610792efeff4e5b16183a58577ad1563d",
+       "t": 0
+      },
+      {
+       "sha256": "96bc1d9b202675b5a248c3f492d4919ef97fff593c8ebae0be8818d96f699109",
+       "t": 5
+      }
+     ],
+     "read_sha": "f90f8fa2f7ee663a78738a97ba039434c797bf853880bfcf100c05caad6eb147",
+     "read_by": {
+      "provider": "cliproxy",
+      "model": "claude-haiku-5-5",
+      "prompt_v": "video-frames-v1"
+     }
+    },
+    "stats": {
+     "fetches": 1,
+     "fetches_by_host": {
+      "video.twimg.com": 1
+     },
+     "model_calls": 1,
+     "model_calls_by_model": {
+      "cliproxy/claude-haiku-5-5": 1
+     },
+     "tokens": {
+      "video_read.in": 2808,
+      "video_read.out": 1211
+     },
+     "cache_hits": {},
+     "uploaded_bytes": 482650,
+     "uploaded_blobs": 6,
+     "large_via_worker": 0
+    },
+    "wall_s": 9.84
+   }
+  },
+  {
+   "id": "3a91d19b22c225982fccd297346ee895",
+   "kind": "video",
+   "key": "cbcbaba18e8efb02d51e5b5a204b248d18f5b69c49b207a7eb6548dd96d6ad82",
+   "state": "done",
+   "owner": "kworker@Sam_ZephyrusG14",
+   "lease_until": null,
+   "attempts": 1,
+   "expired_leases": 0,
+   "runs": 1,
+   "error": null,
+   "created_at": 1794506526262,
+   "updated_at": 1794506865907,
+   "payload": {
+    "source_url": "https://video.twimg.com/amplify_video/2114433558794444800/vid/avc1/1920x1080/C7wBNP7RonH7OjKI.mp4?tag=29",
+    "media_kind": "video",
+    "post_id": "2114435444587065486"
+   },
+   "deps": [],
+   "result": {
+    "result": {
+     "sha256": "4942c7d3ce7447c264da87e9d12d85f462088db5cac1684432f5bd35cf376ae2",
+     "mime": "video/mp4",
+     "source_url": "https://video.twimg.com/amplify_video/2114433558794444800/vid/avc1/1920x1080/C7wBNP7RonH7OjKI.mp4?tag=29",
+     "post_id": "2114435444587065486",
+     "probe": {
+      "duration_s": 116.616489,
+      "width": 1920,
+      "height": 1080,
+      "has_audio": true,
+      "probe_sha": "4b3a308875ae53c2d96b1d38beb80a403f5c3c56456f56d7c468f91466fb610d"
+     },
+     "transcript_sha": "108d93ee37689a96a2bbf4a3f6823d2f1c3bef5bbed3110a9c759071bb523609",
+     "transcript_by": {
+      "provider": "faster-whisper",
+      "model": "large-v3-turbo",
+      "prompt_v": "whisper-v1"
+     },
+     "transcript_note": null,
+     "key_frames": [
+      {
+       "sha256": "25fce46cde810555dbbefc4846be3bfde3ab730327b5428f18ad888731fe0cf0",
+       "t": 0
+      },
+      {
+       "sha256": "50aa196a387b582ccb937c5285f9d038b8c86fb7d28c10df40c2378ddd260cc4",
+       "t": 8.01
+      },
+      {
+       "sha256": "a4c10e166980ef3408171ca430f958f885fd030dfa908f4a897b219199032b2e",
+       "t": 21.56
+      },
+      {
+       "sha256": "32564d16b89e6c4bf41bd9854d26deebd46c1e4991dbcc1aaaca62311651fe71",
+       "t": 32.49
+      },
+      {
+       "sha256": "b5066c5225789f203a41a99de49a758545254066ad6829dc3ca31a217e7b8925",
+       "t": 52.39
+      },
+      {
+       "sha256": "5374433fa4964c9ee14d52f121a7105bfeabfb590022b6781b871e0380a382c6",
+       "t": 65.82
+      },
+      {
+       "sha256": "40c110b969932359758f749257bae8570881c17a62ad3f7d40c632949ba74eaf",
+       "t": 79.08
+      },
+      {
+       "sha256": "9e9b99f2deeafafd806472bfa850ce00ce21d19a5562fc4ffa3257aadf25d2ba",
+       "t": 91.63
+      }
+     ],
+     "read_sha": "80b2133ae7bba1212f8c13a95272d8695d87808d6c045a16f3234482436d4eab",
+     "read_by": {
+      "provider": "cliproxy",
+      "model": "claude-haiku-5-5",
+      "prompt_v": "video-frames-v1"
+     }
+    },
+    "stats": {
+     "fetches": 1,
+     "fetches_by_host": {
+      "video.twimg.com": 1
+     },
+     "model_calls": 2,
+     "model_calls_by_model": {
+      "faster-whisper/large-v3-turbo": 1,
+      "cliproxy/claude-haiku-5-5": 1
+     },
+     "tokens": {
+      "video_read.in": 10794,
+      "video_read.out": 1727
+     },
+     "cache_hits": {},
+     "uploaded_bytes": 36362188,
+     "uploaded_blobs": 13,
+     "large_via_worker": 1
+    },
+    "wall_s": 22.61
+   }
+  },
+  {
+   "id": "b6f2c494e5ba09ce53e59b80881e1b6e",
+   "kind": "video",
+   "key": "652406d683f8479c9b65830d2e861150d7539296dd7100c6ff2699337feedbd4",
+   "state": "done",
+   "owner": "kworker@Sam_ZephyrusG14",
+   "lease_until": null,
+   "attempts": 1,
+   "expired_leases": 0,
+   "runs": 1,
+   "error": null,
+   "created_at": 1794506504571,
+   "updated_at": 1794506617760,
+   "payload": {
+    "source_url": "https://video.twimg.com/amplify_video/2112875525425233920/vid/avc1/1168x848/Lc_rACT1jiaGf8F_.mp4?tag=29",
+    "media_kind": "video",
+    "post_id": "2112875577388712123"
+   },
+   "deps": [],
+   "result": {
+    "result": {
+     "sha256": "0c928bbc279ecf8f710cb3a4b7c419a92525227edee9ef58de484bc803629ff9",
+     "mime": "video/mp4",
+     "source_url": "https://video.twimg.com/amplify_video/2112875525425233920/vid/avc1/1168x848/Lc_rACT1jiaGf8F_.mp4?tag=29",
+     "post_id": "2112875577388712123",
+     "probe": {
+      "duration_s": 3.806667,
+      "width": 1168,
+      "height": 848,
+      "has_audio": false,
+      "probe_sha": "3e2b0429f891faf36dad4e09ccb1b5d66783c668f49c591c4c0270fea5e36452"
+     },
+     "transcript_sha": null,
+     "transcript_by": null,
+     "transcript_note": "no audio stream",
+     "key_frames": [
+      {
+       "sha256": "3fa58aa99e46300568f101f4f58139ce25986a514d801130e5b3f94a10fbe0c7",
+       "t": 0
+      }
+     ],
+     "read_sha": "70006e31f48c6aab42bd85da68e5ecc4cb30f76cef9aec9ac2c0429e3264f445",
+     "read_by": {
+      "provider": "cliproxy",
+      "model": "claude-haiku-5-5",
+      "prompt_v": "video-frames-v1"
+     }
+    },
+    "stats": {
+     "fetches": 1,
+     "fetches_by_host": {
+      "video.twimg.com": 1
+     },
+     "model_calls": 1,
+     "model_calls_by_model": {
+      "cliproxy/claude-haiku-5-5": 1
+     },
+     "tokens": {
+      "video_read.in": 1702,
+      "video_read.out": 1163
+     },
+     "cache_hits": {},
+     "uploaded_bytes": 1590528,
+     "uploaded_blobs": 5,
+     "large_via_worker": 0
+    },
+    "wall_s": 9.91
+   }
+  },
+  {
+   "id": "347c893dbd484a8eef3c843c62943467",
+   "kind": "video",
+   "key": "b32defb8f442854206ba6113c0b7d14f74a0893873e0831877fb52d703221639",
+   "state": "done",
+   "owner": "kworker@Sam_ZephyrusG14",
+   "lease_until": null,
+   "attempts": 1,
+   "expired_leases": 0,
+   "runs": 1,
+   "error": null,
+   "created_at": 1794506498055,
+   "updated_at": 1794506599230,
+   "payload": {
+    "source_url": "https://video.twimg.com/amplify_video/2113101311860482048/vid/avc1/1206x2622/Pivh4m-5Fwz2qoz9.mp4?tag=29",
+    "media_kind": "video",
+    "post_id": "2113101611669307727"
+   },
+   "deps": [],
+   "result": {
+    "result": {
+     "sha256": "d6d15cd9a2e243487a10e3f0f0049d466540bf70694f1840384079adb32dd361",
+     "mime": "video/mp4",
+     "source_url": "https://video.twimg.com/amplify_video/2113101311860482048/vid/avc1/1206x2622/Pivh4m-5Fwz2qoz9.mp4?tag=29",
+     "post_id": "2113101611669307727",
+     "probe": {
+      "duration_s": 88.816327,
+      "width": 1206,
+      "height": 2622,
+      "has_audio": true,
+      "probe_sha": "9bc68f7033fe3fe1c8146c7dd9af75b07511d3b7eeaca460e2d884f5453a644b"
+     },
+     "transcript_sha": "3c457250ee1fdf8892035bd3eb411230905674fb9d00c1907fcde6ecca3a90cd",
+     "transcript_by": {
+      "provider": "faster-whisper",
+      "model": "large-v3-turbo",
+      "prompt_v": "whisper-v1"
+     },
+     "transcript_note": null,
+     "key_frames": [
+      {
+       "sha256": "4efe672b014cb29ebc8d96bcd8397d65c740013ea43d3bd06f2e3ace4daf34bf",
+       "t": 0
+      },
+      {
+       "sha256": "1d7db9a2203fbec9ab9ec5333e055beb90d8f9eb23b8af64596b5ca3493517a4",
+       "t": 11.1
+      },
+      {
+       "sha256": "143113c118cad7c8462d9a3ed26fa970cbbcc288de12852e4e83b38b84782c66",
+       "t": 22.2
+      },
+      {
+       "sha256": "b1ac4ea793268f3d9e778f300831140d639c64289f6bd9b43171d9ad26afcc53",
+       "t": 33.31
+      },
+      {
+       "sha256": "21da13b139422f1fe23c44412a22bff59307bc68c54d2d00dd57061ec006c2ef",
+       "t": 44.41
+      },
+      {
+       "sha256": "75e63f5b548d1d04b42c99e057d73af8b32cca848390df29da9f88037eb75b0c",
+       "t": 55.51
+      },
+      {
+       "sha256": "2ba74e5798d67dc5c3a5cc7d7a8d23f3d2de6f562c0d1a0c53276c068c2359af",
+       "t": 66.61
+      },
+      {
+       "sha256": "941f8a039dce1934888a9e72fd4c8c0224ab8206da4ebdddd624996065eae166",
+       "t": 77.71
+      }
+     ],
+     "read_sha": "60f84bab5cb638e084269d50b74c2771fb501595ffcd1e905ca1d492242ec582",
+     "read_by": {
+      "provider": "cliproxy",
+      "model": "claude-haiku-5-5",
+      "prompt_v": "video-frames-v1"
+     }
+    },
+    "stats": {
+     "fetches": 1,
+     "fetches_by_host": {
+      "video.twimg.com": 1
+     },
+     "model_calls": 2,
+     "model_calls_by_model": {
+      "faster-whisper/large-v3-turbo": 1,
+      "cliproxy/claude-haiku-5-5": 1
+     },
+     "tokens": {
+      "video_read.in": 32160,
+      "video_read.out": 2520
+     },
+     "cache_hits": {},
+     "uploaded_bytes": 12424998,
+     "uploaded_blobs": 13,
+     "large_via_worker": 1
+    },
+    "wall_s": 45.17
+   }
+  },
+  {
+   "id": "7b0d5ddd0bc520e75d1f907f7916c9a0",
+   "kind": "bundle",
+   "key": "2112632133357346889",
+   "state": "done",
+   "owner": "kworker@Sam_ZephyrusG14",
+   "lease_until": null,
+   "attempts": 1,
+   "expired_leases": 0,
+   "runs": 1,
+   "error": null,
+   "created_at": 1794506551554,
+   "updated_at": 1794507185024,
+   "payload": {
+    "post_id": "2112632133357346889",
+    "expansion_sha": "b9b7accfc9d0dce087d42cacfa7e0067d3dc69c8876d1b0ec5aba6860a4c3995",
+    "gate_sha": "c15e0f57ce06a8307fe5c3b26e9bb89627a644d1ebc5ea7cb74a7ea68737cd7a",
+    "children": [
+     {
+      "kind": "link",
+      "key": "f85b8be5d6e53375b17ff3cbb8fd677fe2b063e9a29ee1241be5082726169044",
+      "url": "https://academy.dair.ai/dashboard/resources/jev-as-a-judge",
+      "from": "post"
+     },
+     {
+      "kind": "link",
+      "key": "8b5582f2bcddc8059401f584f925ec84821b83881e11578cd4bf0bb1ed4e531a",
+      "url": "https://academy.dair.ai/labs/jev-as-a-judge-for-agent-evals",
+      "from": "post"
+     },
+     {
+      "kind": "link",
+      "key": "3e84be91c0a64bb534c5e2e13ac086d86c6ec4e3866f2022cf6536cc3f104268",
+      "url": "https://arxiv.org/abs/2609.26550",
+      "from": "post"
+     }
+    ]
+   },
+   "deps": [
+    "4130227b95989ae863838799f2dbb9ff",
+    "aec1eed2c9925a944b5e044b8a17d63b",
+    "12d7da37b712fae5c71285091fc1b10f"
+   ],
+   "result": {
+    "result": {
+     "post_id": "2112632133357346889",
+     "json_sha": "964a60a471147ca4bdf6bc0c219ffb5ccc1ea67b8ce307dd4748fa37f1b47d71",
+     "md_sha": "9189c8e98afb4a5bf0359a24c4f74a716caec4ea6d489a304adfe8923496103b",
+     "registered": {
+      "created": true,
+      "post_id": "2112632133357346889",
+      "version": 1,
+      "r2_key": "bundles/2112632133357346889/v1.md",
+      "json_key": "bundles/2112632133357346889/v1.json"
+     },
+     "completeness": "partial",
+     "missing": 3
+    },
+    "stats": {
+     "fetches": 0,
+     "fetches_by_host": {},
+     "model_calls": 0,
+     "model_calls_by_model": {},
+     "tokens": {},
+     "cache_hits": {},
+     "uploaded_bytes": 14086,
+     "uploaded_blobs": 2,
+     "large_via_worker": 0
+    },
+    "wall_s": 0.22
+   }
+  },
+  {
+   "id": "db76088a8e0dd041eae1370f89af9365",
+   "kind": "bundle",
+   "key": "2112247046082363821",
+   "state": "done",
+   "owner": "kworker@Sam_ZephyrusG14",
+   "lease_until": null,
+   "attempts": 1,
+   "expired_leases": 0,
+   "runs": 1,
+   "error": null,
+   "created_at": 1794506545217,
+   "updated_at": 1794507137976,
+   "payload": {
+    "post_id": "2112247046082363821",
+    "expansion_sha": "2da4857c33841bc78186f6e4e117d2157e3562c0fcfc3fc1cd121ec1c3cb0330",
+    "gate_sha": "dfb22c14db5c4723271c8004d98c052db037f071dae84c6b7fe8e2ef98ade740",
+    "children": [
+     {
+      "kind": "video",
+      "key": "f7288ca3c5fcad1194dca1590424de18e40303bff632570958b41fa4ee09b4f6",
+      "source_url": "https://video.twimg.com/amplify_video/2112245358327959552/vid/avc1/2690x1814/9aoWkbwawOloLD3z.mp4?tag=29",
+      "media_kind": "video",
+      "post_id": "2112247046082363821"
+     },
+     {
+      "kind": "link",
+      "key": "ddf75ed8cfcf978872a1a3844c7b5a069f4f94bf6eef08c3670f63ddf82f7f68",
+      "url": "http://fx0.vercel.dev",
+      "from": "post"
+     },
+     {
+      "kind": "link",
+      "key": "a36ff6680b43be6f00dd746110255cdcbcf5a889ba33ae518c58c93216bd55ad",
+      "url": "https://github.com/stevysmith/fx0",
+      "from": "reply:2112917698858643659"
+     }
+    ]
+   },
+   "deps": [
+    "69c213a056cb2d214d4dbf4b406895ab",
+    "3c2b615fc7b61e277edbd457ab08b52a",
+    "0240b6917ed8a1be81b49195e35f8943"
+   ],
+   "result": {
+    "result": {
+     "post_id": "2112247046082363821",
+     "json_sha": "f1c221d328167b0cdd6d1044a6f9e7332b8b62d18990467b6cf1f94c768d21d4",
+     "md_sha": "fe348bc9d49bbb4b4450db8f9361f1a42840974b73e70c23108971cedd4e99c0",
+     "registered": {
+      "created": true,
+      "post_id": "2112247046082363821",
+      "version": 1,
+      "r2_key": "bundles/2112247046082363821/v1.md",
+      "json_key": "bundles/2112247046082363821/v1.json"
+     },
+     "completeness": "complete",
+     "missing": 2
+    },
+    "stats": {
+     "fetches": 0,
+     "fetches_by_host": {},
+     "model_calls": 0,
+     "model_calls_by_model": {},
+     "tokens": {},
+     "cache_hits": {},
+     "uploaded_bytes": 46350,
+     "uploaded_blobs": 2,
+     "large_via_worker": 0
+    },
+    "wall_s": 0.24
+   }
+  },
+  {
+   "id": "34c03a8a8046ad4f7a1129ccc067cf14",
+   "kind": "bundle",
+   "key": "2111478858478465421",
+   "state": "done",
+   "owner": "kworker@Sam_ZephyrusG14",
+   "lease_until": null,
+   "attempts": 1,
+   "expired_leases": 0,
+   "runs": 1,
+   "error": null,
+   "created_at": 1794506538624,
+   "updated_at": 1794507108886,
+   "payload": {
+    "post_id": "2111478858478465421",
+    "expansion_sha": "8979ce149f1fab3217b1343bdf379e2f5f9a519bb897f3efe8a075d2e7afff1d",
+    "gate_sha": "578a89d1e2c2dd9290d6ce4082586a675a8260aa631b3a84cbc4f665ccb5d64f",
+    "children": [
+     {
+      "kind": "image",
+      "key": "5c1e2ba71894f07d10c34b40ca43d72f8b99f160d11c4e72fb44cbdd48aa7621",
+      "source_url": "https://pbs.twimg.com/media/HU16x7NWoAAatvp.jpg?name=orig",
+      "media_kind": "photo",
+      "post_id": "2111478858478465421"
+     },
+     {
+      "kind": "link",
+      "key": "bfd3d4ae70439c67dd6b68ab63ced9e70b3bfd71a8aa9e92cbdef1a2fbd8b369",
+      "url": "https://bencho.dev",
+      "from": "post"
+     }
+    ]
+   },
+   "deps": [
+    "5036c0baf90a82db9b1ddcbf09c5d174",
+    "d2a4de095d14062af896867f4f2ed526"
+   ],
+   "result": {
+    "result": {
+     "post_id": "2111478858478465421",
+     "json_sha": "b5a12b961c9078b3c8350bd364f42dfbf46829239ed15302ce9e4f5b72e2a3f1",
+     "md_sha": "5178851f4cb301c822b5459e080067d754b295979187030035aac773eef7d9fc",
+     "registered": {
+      "created": true,
+      "post_id": "2111478858478465421",
+      "version": 1,
+      "r2_key": "bundles/2111478858478465421/v1.md",
+      "json_key": "bundles/2111478858478465421/v1.json"
+     },
+     "completeness": "complete",
+     "missing": 2
+    },
+    "stats": {
+     "fetches": 0,
+     "fetches_by_host": {},
+     "model_calls": 0,
+     "model_calls_by_model": {},
+     "tokens": {},
+     "cache_hits": {},
+     "uploaded_bytes": 13510,
+     "uploaded_blobs": 2,
+     "large_via_worker": 0
+    },
+    "wall_s": 0.19
+   }
+  },
+  {
+   "id": "7bd6fe34c1e5cd6b8db66a4b5c08631d",
+   "kind": "bundle",
+   "key": "2111883168190275752",
+   "state": "done",
+   "owner": "kworker@Sam_ZephyrusG14",
+   "lease_until": null,
+   "attempts": 1,
+   "expired_leases": 0,
+   "runs": 1,
+   "error": null,
+   "created_at": 1794506532077,
+   "updated_at": 1794507094097,
+   "payload": {
+    "post_id": "2111883168190275752",
+    "expansion_sha": "e30ce1d3dda6e7a23b916c3000171f3e0071bd26c49c3647cd22aca9cb6c84aa",
+    "gate_sha": "7262f05431691a6b96ffe2d1090a567f2e791f8ac4848de72a1a4a0a475f412e",
+    "children": [
+     {
+      "kind": "video",
+      "key": "0fff8b9f5dc48bf8b6d682ca2bac895e3b8dde255c90bfbf97c176ab5fe481a2",
+      "source_url": "https://video.twimg.com/amplify_video/2111883041320964096/vid/avc1/1920x1080/GpBN8jgArEivlZFv.mp4?tag=29",
+      "media_kind": "video",
+      "post_id": "2111883082953547881"
+     },
+     {
+      "kind": "video",
+      "key": "272385a6908fbf773ebc7dd4df247ba1e3136615c6da0854104bfd7c936f7680",
+      "source_url": "https://video.twimg.com/amplify_video/2111883106118709248/vid/avc1/1920x1080/RvEiFj0XeRAeKWZp.mp4?tag=29",
+      "media_kind": "video",
+      "post_id": "2111883168190275752"
+     },
+     {
+      "kind": "video",
+      "key": "112abec1bcb3dc4217f3eec3cd99171c8e080b651dde01d8b4dcf65daa531234",
+      "source_url": "https://video.twimg.com/amplify_video/2111883801819484160/vid/avc1/1920x1080/nkNlhBv4szwoldW2.mp4?tag=29",
+      "media_kind": "video",
+      "post_id": "2111883843846451632"
+     },
+     {
+      "kind": "video",
+      "key": "5294e14dd0f52413a1fd06072400a157befe950e27f0a38ef526c8e4cd5965dd",
+      "source_url": "https://video.twimg.com/amplify_video/2111884147589619712/vid/avc1/1920x1080/h8V6sDgPpU2tqquG.mp4?tag=29",
+      "media_kind": "video",
+      "post_id": "2111884199359897953"
+     },
+     {
+      "kind": "link",
+      "key": "7b18180db34775ce103338a1af3be62f07dc83c84ccefe7f5496804292f35dbb",
+      "url": "https://x.com/trq212/status/2105333496768319969?s=46",
+      "from": "thread:2111883082953547881"
+     }
+    ]
+   },
+   "deps": [
+    "e17b3ffaf37e5b866f89301d6de12804",
+    "2e671a1e52d7d7c49059b40f90f891c0",
+    "1d7f8c01d2b304199199c34e39722198",
+    "ed1ba6e0b9b30d5cab0ab752a32f71e4",
+    "916c52fe3723d14c87da6fa95994986b"
+   ],
+   "result": {
+    "result": {
+     "post_id": "2111883168190275752",
+     "json_sha": "162308e935474c5ac16fe2330c60a1922d6d26083f85a5b40cf5995c38efeb80",
+     "md_sha": "b7713b79b4d40cad23cc61624d197af38365515e51a89fe6db803940bae9f62d",
+     "registered": {
+      "created": true,
+      "post_id": "2111883168190275752",
+      "version": 1,
+      "r2_key": "bundles/2111883168190275752/v1.md",
+      "json_key": "bundles/2111883168190275752/v1.json"
+     },
+     "completeness": "complete",
+     "missing": 2
+    },
+    "stats": {
+     "fetches": 0,
+     "fetches_by_host": {},
+     "model_calls": 0,
+     "model_calls_by_model": {},
+     "tokens": {},
+     "cache_hits": {},
+     "uploaded_bytes": 33020,
+     "uploaded_blobs": 2,
+     "large_via_worker": 0
+    },
+    "wall_s": 0.39
+   }
+  },
+  {
+   "id": "639672a7178088f512cc0e0930e4ecbd",
+   "kind": "bundle",
+   "key": "2114435444587065486",
+   "state": "done",
+   "owner": "kworker@Sam_ZephyrusG14",
+   "lease_until": null,
+   "attempts": 1,
+   "expired_leases": 0,
+   "runs": 1,
+   "error": null,
+   "created_at": 1794506526390,
+   "updated_at": 1794507022772,
+   "payload": {
+    "post_id": "2114435444587065486",
+    "expansion_sha": "0a98e0fff1618ea672fdf474bdd9b9fe2aece531db1e0da029fbdf3081812b5c",
+    "gate_sha": "0af140a48c8a8a243c599df506f9dafbab1da344bd4d5662908c60f08e025856",
+    "children": [
+     {
+      "kind": "video",
+      "key": "cbcbaba18e8efb02d51e5b5a204b248d18f5b69c49b207a7eb6548dd96d6ad82",
+      "source_url": "https://video.twimg.com/amplify_video/2114433558794444800/vid/avc1/1920x1080/C7wBNP7RonH7OjKI.mp4?tag=29",
+      "media_kind": "video",
+      "post_id": "2114435444587065486"
+     },
+     {
+      "kind": "video",
+      "key": "4994c8fb01c063b93e6ce56c81013ebbdc1711be15ed73afab7691326acd77ea",
+      "source_url": "https://video.twimg.com/tweet_video/HVf6SIyboAACGJR.mp4",
+      "media_kind": "video",
+      "post_id": "2114435445866254772"
+     },
+     {
+      "kind": "image",
+      "key": "db49802ece12facb6106a2d1f29d1d1587464069e272ce8725c25f23cf26a264",
+      "source_url": "https://pbs.twimg.com/media/HVf6hiabsAATZ0f.jpg?name=orig",
+      "media_kind": "photo",
+      "post_id": "2114435447992771013"
+     },
+     {
+      "kind": "video",
+      "key": "6137df19f61e47f8da3ee2b25a03bf06328d894c3d1f4a682cfa6d8fcd36a397",
+      "source_url": "https://video.twimg.com/tweet_video/HVf6yyhaoAAXyNJ.mp4",
+      "media_kind": "video",
+      "post_id": "2114435450018594985"
+     },
+     {
+      "kind": "video",
+      "key": "48bafefd40943213f12b75a200282e417c73a2d272caa9c52a5ad4e20568b908",
+      "source_url": "https://video.twimg.com/tweet_video/HVf61-QacAA_qCP.mp4",
+      "media_kind": "video",
+      "post_id": "2114435452170375453"
+     },
+     {
+      "kind": "video",
+      "key": "8bb21db13dc979a8f09079d8fe41ba54f6289b0cba49ea99bba46563fa021cd7",
+      "source_url": "https://video.twimg.com/tweet_video/HVf65mDaEAAqh3T.mp4",
+      "media_kind": "video",
+      "post_id": "2114435454154191075"
+     },
+     {
+      "kind": "video",
+      "key": "72a1c1a2432677f135a69199898f9a78b6225fca906d70fe83a90fbc3387ab4b",
+      "source_url": "https://video.twimg.com/tweet_video/HVf6_I_bQAAp1lU.mp4",
+      "media_kind": "video",
+      "post_id": "2114435455995572325"
+     },
+     {
+      "kind": "image",
+      "key": "d35bbbfbe49de29cf890c60915d44fbae3da610d26d15ba5f5df2582339d5ac7",
+      "source_url": "https://pbs.twimg.com/media/HVf7wi6agAEvSM5.jpg?name=orig",
+      "media_kind": "photo",
+      "post_id": "2114435458197582269"
+     },
+     {
+      "kind": "link",
+      "key": "6b9d220c749b233b33403021899ee40633ba49056a4512b4dc227c39ce2a1f86",
+      "url": "https://pomerado.ai",
+      "from": "thread:2114435945474998716"
+     },
+     {
+      "kind": "link",
+      "key": "c1cfc2873b6750f87fafd6ae2f9fd11720e3b096272f98ec6d524317af41f238",
+      "url": "https://github.com/Pomerado/pomerado",
+      "from": "thread:2114436006778925376"
+     }
+    ]
+   },
+   "deps": [
+    "3a91d19b22c225982fccd297346ee895",
+    "962c5803b000b04f07d5b374ec8139c9",
+    "248f2238e1ee6eba3a70e33c3e21d148",
+    "67d5cd2e1457916d26922a289b816d7e",
+    "9ae02dd060a609a855e339695425c686",
+    "483d178037e88b072b48cd03d732a007",
+    "13cdfbc4660f37e1735bc7257110f61d",
+    "3eb81f3a3f378c0df5f6f24a16a30802",
+    "a155bc51d12a90dfd327f8cc5e06bb88",
+    "c24a6e64b19864919f504b561d7bd19b"
+   ],
+   "result": {
+    "result": {
+     "post_id": "2114435444587065486",
+     "json_sha": "a722b245e4e3bc48678ee6c82198aedd157fe0b12993a8b57606a3a0af80b790",
+     "md_sha": "fdb09446b8e29d6c9f00d2e1440a65a678bf7778ed92743d04757a0bddbaf961",
+     "registered": {
+      "created": true,
+      "post_id": "2114435444587065486",
+      "version": 1,
+      "r2_key": "bundles/2114435444587065486/v1.md",
+      "json_key": "bundles/2114435444587065486/v1.json"
+     },
+     "completeness": "complete",
+     "missing": 2
+    },
+    "stats": {
+     "fetches": 0,
+     "fetches_by_host": {},
+     "model_calls": 0,
+     "model_calls_by_model": {},
+     "tokens": {},
+     "cache_hits": {},
+     "uploaded_bytes": 93833,
+     "uploaded_blobs": 2,
+     "large_via_worker": 0
+    },
+    "wall_s": 0.64
+   }
+  },
+  {
+   "id": "f19d2d3a1ff8be68823296c7a40d3275",
+   "kind": "bundle",
+   "key": "2109412046244913643",
+   "state": "done",
+   "owner": "kworker@Sam_ZephyrusG14",
+   "lease_until": null,
+   "attempts": 1,
+   "expired_leases": 0,
+   "runs": 1,
+   "error": null,
+   "created_at": 1794506520279,
+   "updated_at": 1794506841039,
+   "payload": {
+    "post_id": "2109412046244913643",
+    "expansion_sha": "705539013a087d9866d139744832006a7cbfc289dbd9c9de9d83a48f1b65c434",
+    "gate_sha": "41bd5dc7224b9484d584959636d43990faaa37edeccbc857bd6691e18897e267",
+    "children": [
+     {
+      "kind": "image",
+      "key": "276f1f9133b58d25b8ccc6c1d970b088a89acabbdfd0bb4619b399caadace6d4",
+      "source_url": "https://pbs.twimg.com/media/HUYhjMnW8AAM-ty.jpg?name=orig",
+      "media_kind": "photo",
+      "post_id": "2109412046244913643"
+     },
+     {
+      "kind": "image",
+      "key": "3b4d49b270643e09161ca10726e9ae351a9fe0d22e6c6eff576f2679e80a1a37",
+      "source_url": "https://pbs.twimg.com/media/HUYhnxrXoAA8WCz.jpg?name=orig",
+      "media_kind": "photo",
+      "post_id": "2109412046244913643"
+     },
+     {
+      "kind": "link",
+      "key": "1a750e8506fbf6e395fbb2af1054cd26261ea669752bae36df30e631716d7bcc",
+      "url": "https://www.coinbase.com/blog/part-one-how-coinbase-built-evaluated-and-post-trained-a-fraud-agent",
+      "from": "thread:2109412049562611793"
+     },
+     {
+      "kind": "link",
+      "key": "657be5e8371146ca79c3caf50fe2e00bd1e73e9de7362dc008c3400cee0d0f86",
+      "url": "https://coinbase.com/careers",
+      "from": "thread:2109412049562611793"
+     }
+    ]
+   },
+   "deps": [
+    "0694862c44df5f0007e60071b9a99901",
+    "964b52889511e1197fbf5c1825526ac4",
+    "a4215c04d47d4fd71f92c66cc709c799",
+    "4ee018b2a08d398e90844fcb280f177e"
+   ],
+   "result": {
+    "result": {
+     "post_id": "2109412046244913643",
+     "json_sha": "cfd14b5b39693fede3be18f03a646d7764bc32cf791af43731f797c650d10777",
+     "md_sha": "ca593cf9071d4d8beaac37b1e9e13b9232ee3486e18a69c5297f6f3f1333d203",
+     "registered": {
+      "created": true,
+      "post_id": "2109412046244913643",
+      "version": 1,
+      "r2_key": "bundles/2109412046244913643/v1.md",
+      "json_key": "bundles/2109412046244913643/v1.json"
+     },
+     "completeness": "complete",
+     "missing": 2
+    },
+    "stats": {
+     "fetches": 0,
+     "fetches_by_host": {},
+     "model_calls": 0,
+     "model_calls_by_model": {},
+     "tokens": {},
+     "cache_hits": {},
+     "uploaded_bytes": 67077,
+     "uploaded_blobs": 2,
+     "large_via_worker": 0
+    },
+    "wall_s": 0.25
+   }
+  },
+  {
+   "id": "e6826148373a1e98010611f76ce1aa7c",
+   "kind": "bundle",
+   "key": "2112712092163957157",
+   "state": "done",
+   "owner": "kworker@Sam_ZephyrusG14",
+   "lease_until": null,
+   "attempts": 1,
+   "expired_leases": 0,
+   "runs": 1,
+   "error": null,
+   "created_at": 1794506512704,
+   "updated_at": 1794506770515,
+   "payload": {
+    "post_id": "2112712092163957157",
+    "expansion_sha": "050b4c3651565a6e979a721be3f3438c89bc9c96ccd80eda2fcf021bb4240a4a",
+    "gate_sha": "bce4c9bc75540cab7fc3b4a994755612e859bf0b85e33f6d722a8440a5529727",
+    "children": [
+     {
+      "kind": "image",
+      "key": "bc72840b95b45108df872e8c36c0528d31ff40185e1ee404b6a7c927363f3090",
+      "source_url": "https://pbs.twimg.com/media/HVHcZjlbMAAfNQ3.jpg?name=orig",
+      "media_kind": "photo",
+      "post_id": "2112712092163957157"
+     },
+     {
+      "kind": "image",
+      "key": "81d83a153ee063fc696fb56ca570ac33eb1ae5eb06f57967e6336f2bb88f5cb7",
+      "source_url": "https://pbs.twimg.com/media/HVHchv_bkAAFO-J.jpg?name=orig",
+      "media_kind": "photo",
+      "post_id": "2112712462772658479"
+     },
+     {
+      "kind": "image",
+      "key": "151a0190efde136d23db1e19a006666ec94661ffa9626d073df664b87b4f9674",
+      "source_url": "https://pbs.twimg.com/media/HVHcwmga0AA7R0T.jpg?name=orig",
+      "media_kind": "photo",
+      "post_id": "2112712462772658479"
+     },
+     {
+      "kind": "link",
+      "key": "c9bdc2a4d68d157267ebe576d9e0f3ce5cb224462429e2422747e245fcdd35a1",
+      "url": "https://rkufoapn89co.postplan.dev/",
+      "from": "thread:2112712462772658479"
+     }
+    ]
+   },
+   "deps": [
+    "5572d741c78e0f20c8828ba5a4005c7a",
+    "384d8c4d5e64d1602f9a1ddb4525f1be",
+    "1e73d7b9d65bec5037fe07e852e03a05",
+    "905ccde10f2165cd8bab2d85055156d6"
+   ],
+   "result": {
+    "result": {
+     "post_id": "2112712092163957157",
+     "json_sha": "ae3f6c6ed03c05d5a02b63362c2c0cdfc8ce02a3bdb97348f7949b26859dd89f",
+     "md_sha": "8ff569b0d446874073027ee83e989b544ff6732cd27cffa94c2e8489559be9f8",
+     "registered": {
+      "created": true,
+      "post_id": "2112712092163957157",
+      "version": 1,
+      "r2_key": "bundles/2112712092163957157/v1.md",
+      "json_key": "bundles/2112712092163957157/v1.json"
+     },
+     "completeness": "complete",
+     "missing": 2
+    },
+    "stats": {
+     "fetches": 0,
+     "fetches_by_host": {},
+     "model_calls": 0,
+     "model_calls_by_model": {},
+     "tokens": {},
+     "cache_hits": {},
+     "uploaded_bytes": 90152,
+     "uploaded_blobs": 2,
+     "large_via_worker": 0
+    },
+    "wall_s": 0.36
+   }
+  },
+  {
+   "id": "c654d7dc15c4fff0d2a1e0e0e189ccbc",
+   "kind": "bundle",
+   "key": "2112288527837024667",
+   "state": "done",
+   "owner": "kworker@Sam_ZephyrusG14",
+   "lease_until": null,
+   "attempts": 1,
+   "expired_leases": 0,
+   "runs": 1,
+   "error": null,
+   "created_at": 1794506510069,
+   "updated_at": 1794506631382,
+   "payload": {
+    "post_id": "2112288527837024667",
+    "expansion_sha": "4c122d2ef9239ae09e70858989de65c4bdd182d21576940bcb2e2d170c14647a",
+    "gate_sha": "55637b6fdb48ab11fa9e6c36873daaa150c0b956b8de548ad6da7be5b658966a",
+    "children": [
+     {
+      "kind": "image",
+      "key": "99ac5c255e3573af9554166c607535ac57f1d571edccc2d5e8215d27a85f8fe3",
+      "source_url": "https://pbs.twimg.com/media/HVBbK6LWoAAUQpF.png?name=orig",
+      "media_kind": "photo",
+      "post_id": "2112288527837024667"
+     }
+    ]
+   },
+   "deps": [
+    "8e0383b4bc8351e0d4d9f96bbc6a58c9"
+   ],
+   "result": {
+    "result": {
+     "post_id": "2112288527837024667",
+     "json_sha": "de010048c60c35a4c8f51e46e2cae071bb49b54ab962f95773b12aa5c2af6cef",
+     "md_sha": "99837ed7df2e7ca8f2990c868682baaacdeac514a0704364fa42057b0e41f90e",
+     "registered": {
+      "created": true,
+      "post_id": "2112288527837024667",
+      "version": 1,
+      "r2_key": "bundles/2112288527837024667/v1.md",
+      "json_key": "bundles/2112288527837024667/v1.json"
+     },
+     "completeness": "complete",
+     "missing": 2
+    },
+    "stats": {
+     "fetches": 0,
+     "fetches_by_host": {},
+     "model_calls": 0,
+     "model_calls_by_model": {},
+     "tokens": {},
+     "cache_hits": {},
+     "uploaded_bytes": 6202,
+     "uploaded_blobs": 2,
+     "large_via_worker": 0
+    },
+    "wall_s": 0.19
+   }
+  },
+  {
+   "id": "7e4704d2792a290ed331ff9e1a87b61f",
+   "kind": "bundle",
+   "key": "2112875577388712123",
+   "state": "done",
+   "owner": "kworker@Sam_ZephyrusG14",
+   "lease_until": null,
+   "attempts": 1,
+   "expired_leases": 0,
+   "runs": 1,
+   "error": null,
+   "created_at": 1794506504585,
+   "updated_at": 1794506620434,
+   "payload": {
+    "post_id": "2112875577388712123",
+    "expansion_sha": "5b58412cfe13ee084d2618c38284ea0357f81ba4d4a24e2f6993ff24e66a6501",
+    "gate_sha": "2ff7b99fcec4a95b0595d3c7619c5d05b3c6637720488a5f7e493b730ec41937",
+    "children": [
+     {
+      "kind": "video",
+      "key": "652406d683f8479c9b65830d2e861150d7539296dd7100c6ff2699337feedbd4",
+      "source_url": "https://video.twimg.com/amplify_video/2112875525425233920/vid/avc1/1168x848/Lc_rACT1jiaGf8F_.mp4?tag=29",
+      "media_kind": "video",
+      "post_id": "2112875577388712123"
+     }
+    ]
+   },
+   "deps": [
+    "b6f2c494e5ba09ce53e59b80881e1b6e"
+   ],
+   "result": {
+    "result": {
+     "post_id": "2112875577388712123",
+     "json_sha": "f7b56d59055605e9649865c59e5ddcf32ef7a87a558a8206d1b478dcde209f66",
+     "md_sha": "af67f4a5824637162440d461acf65201e6cec6c02fc5e4c39b1deae3065a8243",
+     "registered": {
+      "created": true,
+      "post_id": "2112875577388712123",
+      "version": 1,
+      "r2_key": "bundles/2112875577388712123/v1.md",
+      "json_key": "bundles/2112875577388712123/v1.json"
+     },
+     "completeness": "complete",
+     "missing": 2
+    },
+    "stats": {
+     "fetches": 0,
+     "fetches_by_host": {},
+     "model_calls": 0,
+     "model_calls_by_model": {},
+     "tokens": {},
+     "cache_hits": {},
+     "uploaded_bytes": 7671,
+     "uploaded_blobs": 2,
+     "large_via_worker": 0
+    },
+    "wall_s": 0.19
+   }
+  },
+  {
+   "id": "fc0a48eaa9939865c0fd338589ab58f1",
+   "kind": "bundle",
+   "key": "2113101611669307727",
+   "state": "done",
+   "owner": "kworker@Sam_ZephyrusG14",
+   "lease_until": null,
+   "attempts": 1,
+   "expired_leases": 0,
+   "runs": 1,
+   "error": null,
+   "created_at": 1794506498100,
+   "updated_at": 1794506605354,
+   "payload": {
+    "post_id": "2113101611669307727",
+    "expansion_sha": "74aca2cb5c9e598cb4f153ef8da590af12e5e0b2f5d1bafaa40759d82e9c7b47",
+    "gate_sha": "88935878ebc5737df1030fca1daa3f9c87dd3efd95b5682e254ae3656802eb63",
+    "children": [
+     {
+      "kind": "video",
+      "key": "b32defb8f442854206ba6113c0b7d14f74a0893873e0831877fb52d703221639",
+      "source_url": "https://video.twimg.com/amplify_video/2113101311860482048/vid/avc1/1206x2622/Pivh4m-5Fwz2qoz9.mp4?tag=29",
+      "media_kind": "video",
+      "post_id": "2113101611669307727"
+     },
+     {
+      "kind": "link",
+      "key": "f5220dab8f55b741ff6e0de2d1db5732f5e5083a350a027b427995d7b8fbc2a4",
+      "url": "https://claude.com/resources/articles/claude-duet",
+      "from": "reply:2113279721488412973"
+     }
+    ]
+   },
+   "deps": [
+    "347c893dbd484a8eef3c843c62943467",
+    "c2848cd18987851b7c4a4e84dd7cbdfe"
+   ],
+   "result": {
+    "result": {
+     "post_id": "2113101611669307727",
+     "json_sha": "4b547253187f098d96c20dfbdaaaadaf04c9292ec01afe84130726cf6f86bdbf",
+     "md_sha": "19b6f48ffc77d0c6de9ad6bce9d26b3d5b1f09097dddf56aaba48044bdce822d",
+     "registered": {
+      "created": true,
+      "post_id": "2113101611669307727",
+      "version": 1,
+      "r2_key": "bundles/2113101611669307727/v1.md",
+      "json_key": "bundles/2113101611669307727/v1.json"
+     },
+     "completeness": "complete",
+     "missing": 2
+    },
+    "stats": {
+     "fetches": 0,
+     "fetches_by_host": {},
+     "model_calls": 0,
+     "model_calls_by_model": {},
+     "tokens": {},
+     "cache_hits": {},
+     "uploaded_bytes": 34122,
+     "uploaded_blobs": 2,
+     "large_via_worker": 0
+    },
+    "wall_s": 0.24
+   }
+  }
+ ]
+}

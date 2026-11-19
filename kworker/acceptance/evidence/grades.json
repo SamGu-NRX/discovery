@@ -1,0 +1,8 @@
+{
+ "judge": "gpt-6.1-sol, reasoningEffort high, native Codex (codex_cliproxy), fresh context per round, read-only, given only baseline/CONVENTIONS.md and the ten bundle.md files",
+ "round_1": {"bundles_at": "beb7bdd", "overall": 7, "completeness": 7, "verbatim_fidelity": 8, "usefulness": 7, "organization": 9,
+   "problems": ["a linked page cut at 6,000 characters (2112712092163957157.md)", "\"2 kept, 10 dropped\" with some reply ids unrecorded (2111478858478465421.md)", "a recommended resource behind a login (2112632133357346889.md)"]},
+ "round_2": {"bundles_at": "123d199", "overall": 8, "completeness": 8, "verbatim_fidelity": 8, "usefulness": 8, "organization": 8,
+   "problems": ["upstream and linking context not captured in step 1 (every entry)", "the login-gated dair.ai resource (2112632133357346889.md)", "a reply the archive itself stored truncated (2109412046244913643.md)"],
+   "other_notes": ["a page's extracted text holds a very large CSV data URL (2112712092163957157.md)", "a 900-line careers page dump (2109412046244913643.md)"]}
+}

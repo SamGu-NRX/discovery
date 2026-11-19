@@ -4,8 +4,9 @@
 // Usage: node scripts/register-watchers.mjs <base-url> <admin-token-file> [watchers.json]
 
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
-const [base, tokenFile, file = new URL("./production-watchers.json", import.meta.url).pathname] = process.argv.slice(2);
+const [base, tokenFile, file = fileURLToPath(new URL("./production-watchers.json", import.meta.url))] = process.argv.slice(2);
 if (!base || !tokenFile) throw new Error("usage: register-watchers.mjs <base-url> <admin-token-file> [watchers.json]");
 const token = readFileSync(tokenFile, "utf8").trim();
 

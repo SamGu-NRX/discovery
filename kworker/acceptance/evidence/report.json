@@ -1,0 +1,182 @@
+[
+ {
+  "post_id": "2113101611669307727",
+  "what": "video (chrisflores_us, Claude Duet onboarding, 88 s)",
+  "wall_s": 72.6,
+  "uploaded_bytes": 13198625,
+  "tokens": {
+   "gate_band.in": 1700,
+   "gate_band.out": 58,
+   "video_read.in": 32160,
+   "video_read.out": 2520
+  },
+  "model_calls": {
+   "fastembed/BAAI/bge-base-en-v1.5": 2,
+   "cliproxy/claude-haiku-5-5": 2,
+   "faster-whisper/large-v3-turbo": 1
+  },
+  "jobs": 4
+ },
+ {
+  "post_id": "2112875577388712123",
+  "what": "video (raunofreiberg, og:video)",
+  "wall_s": 13.9,
+  "uploaded_bytes": 1626915,
+  "tokens": {
+   "gate_band.in": 1896,
+   "gate_band.out": 302,
+   "video_read.in": 1702,
+   "video_read.out": 1163
+  },
+  "model_calls": {
+   "fastembed/BAAI/bge-base-en-v1.5": 1,
+   "cliproxy/claude-haiku-5-5": 2
+  },
+  "jobs": 3
+ },
+ {
+  "post_id": "2112288527837024667",
+  "what": "text screenshot (codybrouwers, code review tool)",
+  "wall_s": 9.0,
+  "uploaded_bytes": 60417,
+  "tokens": {
+   "gate_band.in": 1772,
+   "gate_band.out": 115,
+   "image_read.in": 630,
+   "image_read.out": 874
+  },
+  "model_calls": {
+   "fastembed/BAAI/bge-base-en-v1.5": 1,
+   "cliproxy/claude-haiku-5-5": 2
+  },
+  "jobs": 3
+ },
+ {
+  "post_id": "2112712092163957157",
+  "what": "text screenshot, two-post thread (theo, cost to land changes)",
+  "wall_s": 127.2,
+  "uploaded_bytes": 1097880,
+  "tokens": {
+   "image_read.in": 13560,
+   "image_read.out": 3958,
+   "image_second_read.in": 15977,
+   "image_second_read.out": 3166
+  },
+  "model_calls": {
+   "cliproxy/claude-haiku-5-5": 3,
+   "cliproxy/gpt-6-luna": 3
+  },
+  "jobs": 6
+ },
+ {
+  "post_id": "2109412046244913643",
+  "what": "two text screenshots, two-post thread (brian_armstrong, Qwen fine-tune)",
+  "wall_s": 64.3,
+  "uploaded_bytes": 740026,
+  "tokens": {
+   "gate_band.in": 2447,
+   "gate_band.out": 434,
+   "image_read.in": 5466,
+   "image_read.out": 2258,
+   "image_second_read.in": 4672,
+   "image_second_read.out": 938
+  },
+  "model_calls": {
+   "fastembed/BAAI/bge-base-en-v1.5": 1,
+   "cliproxy/claude-haiku-5-5": 3,
+   "cliproxy/gpt-6-luna": 2
+  },
+  "jobs": 6
+ },
+ {
+  "post_id": "2114435444587065486",
+  "what": "ten-post thread with media (akshay_manglik, Pomerado)",
+  "wall_s": 161.3,
+  "uploaded_bytes": 39280284,
+  "tokens": {
+   "gate_band.in": 1956,
+   "gate_band.out": 269,
+   "image_read.in": 5841,
+   "image_read.out": 3110,
+   "image_second_read.in": 5034,
+   "image_second_read.out": 1963,
+   "video_read.in": 27258,
+   "video_read.out": 7454
+  },
+  "model_calls": {
+   "fastembed/BAAI/bge-base-en-v1.5": 1,
+   "cliproxy/claude-haiku-5-5": 9,
+   "cliproxy/gpt-6-luna": 2,
+   "faster-whisper/large-v3-turbo": 1
+  },
+  "jobs": 12
+ },
+ {
+  "post_id": "2111883168190275752",
+  "what": "five-post thread, save in the middle (trq212)",
+  "wall_s": 61.7,
+  "uploaded_bytes": 37324222,
+  "tokens": {
+   "gate_band.in": 1799,
+   "gate_band.out": 73,
+   "video_read.in": 25776,
+   "video_read.out": 4912
+  },
+  "model_calls": {
+   "fastembed/BAAI/bge-base-en-v1.5": 1,
+   "cliproxy/claude-haiku-5-5": 5,
+   "faster-whisper/large-v3-turbo": 4
+  },
+  "jobs": 7
+ },
+ {
+  "post_id": "2111478858478465421",
+  "what": "product site with repo (cabralorenzo, bencho.dev)",
+  "wall_s": 12.4,
+  "uploaded_bytes": 253379,
+  "tokens": {
+   "gate_band.in": 1994,
+   "gate_band.out": 421,
+   "image_read.in": 4313,
+   "image_read.out": 936
+  },
+  "model_calls": {
+   "fastembed/BAAI/bge-base-en-v1.5": 1,
+   "cliproxy/claude-haiku-5-5": 2
+  },
+  "jobs": 4
+ },
+ {
+  "post_id": "2112247046082363821",
+  "what": "product site with repo, quoted post (rauchg, fx0.vercel.dev)",
+  "wall_s": 24.7,
+  "uploaded_bytes": 7235682,
+  "tokens": {
+   "gate_band.in": 1936,
+   "gate_band.out": 157,
+   "video_read.in": 4710,
+   "video_read.out": 1472
+  },
+  "model_calls": {
+   "fastembed/BAAI/bge-base-en-v1.5": 1,
+   "cliproxy/claude-haiku-5-5": 2,
+   "faster-whisper/large-v3-turbo": 1
+  },
+  "jobs": 5
+ },
+ {
+  "post_id": "2112632133357346889",
+  "what": "login-gated link, arXiv link, quoted post (omarsar0, evals)",
+  "wall_s": 41.6,
+  "uploaded_bytes": 126831,
+  "tokens": {
+   "gate_band.in": 2178,
+   "gate_band.out": 191
+  },
+  "model_calls": {
+   "fastembed/BAAI/bge-base-en-v1.5": 1,
+   "cliproxy/claude-haiku-5-5": 1
+  },
+  "jobs": 5
+ }
+]

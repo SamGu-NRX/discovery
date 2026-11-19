@@ -1,0 +1,118 @@
+{
+ "model": "BAAI/bge-base-en-v1.5",
+ "top_k": 5,
+ "positives": 59,
+ "labeled_items": 351,
+ "relevant": 116,
+ "score_quantiles": {
+  "relevant": [
+   0.478,
+   0.577,
+   0.642,
+   0.708,
+   0.764
+  ],
+  "irrelevant": [
+   0.45,
+   0.555,
+   0.611,
+   0.677,
+   0.756
+  ]
+ },
+ "shipped": {
+  "keep_at": 0.76,
+  "drop_at": 0.53,
+  "kept": 2,
+  "dropped": 9,
+  "wrong_keeps": 0,
+  "wrong_drops": 1,
+  "to_model": 340
+ },
+ "best_zero_error": {
+  "keep_at": 0.76,
+  "drop_at": 0.46,
+  "settled": 3,
+  "wrong_keeps": 0,
+  "wrong_drops": 0
+ },
+ "best_within_budget": {
+  "keep_at": 0.7,
+  "drop_at": 0.53,
+  "settled": 36,
+  "wrong_keeps": 9,
+  "wrong_drops": 1
+ },
+ "grid_zero_error_top": [
+  {
+   "keep_at": 0.76,
+   "drop_at": 0.46,
+   "settled": 3,
+   "wrong_keeps": 0,
+   "wrong_drops": 0
+  },
+  {
+   "keep_at": 0.76,
+   "drop_at": 0.47,
+   "settled": 3,
+   "wrong_keeps": 0,
+   "wrong_drops": 0
+  },
+  {
+   "keep_at": 0.76,
+   "drop_at": 0.4,
+   "settled": 2,
+   "wrong_keeps": 0,
+   "wrong_drops": 0
+  },
+  {
+   "keep_at": 0.76,
+   "drop_at": 0.41,
+   "settled": 2,
+   "wrong_keeps": 0,
+   "wrong_drops": 0
+  },
+  {
+   "keep_at": 0.76,
+   "drop_at": 0.42,
+   "settled": 2,
+   "wrong_keeps": 0,
+   "wrong_drops": 0
+  },
+  {
+   "keep_at": 0.76,
+   "drop_at": 0.43,
+   "settled": 2,
+   "wrong_keeps": 0,
+   "wrong_drops": 0
+  },
+  {
+   "keep_at": 0.76,
+   "drop_at": 0.44,
+   "settled": 2,
+   "wrong_keeps": 0,
+   "wrong_drops": 0
+  },
+  {
+   "keep_at": 0.76,
+   "drop_at": 0.45,
+   "settled": 2,
+   "wrong_keeps": 0,
+   "wrong_drops": 0
+  },
+  {
+   "keep_at": 0.77,
+   "drop_at": 0.46,
+   "settled": 1,
+   "wrong_keeps": 0,
+   "wrong_drops": 0
+  },
+  {
+   "keep_at": 0.77,
+   "drop_at": 0.47,
+   "settled": 1,
+   "wrong_keeps": 0,
+   "wrong_drops": 0
+  }
+ ]
+}
