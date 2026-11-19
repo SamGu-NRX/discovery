@@ -100,23 +100,23 @@ The fleet watcher finds T3 runs that ended abnormally and posts one card for eac
 | --- | --- |
 | `completed` | None. T3 already notifies Sam |
 | `failed` | Yes, with T3's failure class and message |
-| `interrupted`, stopped by Sam | None. The stop command must come from his app (a client UUID, a force stop, or a cascade from his stop of the lead), and the interrupt item must carry the text T3 writes for that kind of stop |
+| `interrupted`, stopped by Sam | None. The stop command must come from his app (a client UUID, a force stop, or a cascade from his stop of the lead), and the interrupt item must carry the text T3 writes for that kind of stop. With no interrupt item, his stop must have landed within a minute of the run's end |
 | `interrupted` by an agent (an MCP stop) | Yes, with the agent's reason |
 | `interrupted` with no clear evidence | Yes, marked unclear. Never acted on |
-| `cancelled` after it started | Yes, if 10 minutes later no run continues it. T3 cancels runs a restart kills and usually continues them itself |
+| `cancelled` after it started | Yes, if no later run started and T3 has been up for 10 minutes without continuing it. T3 cancels runs a restart kills and usually continues them when it starts again |
 | open, nothing new for `fleet_stall_min` (30) minutes | Yes, if the watcher has been awake that whole time, so a Mac that slept does not stall every run |
 
-A dead child's card names its lead and says whether the lead is idle. Nothing is sent to either. The Operator thread never cards itself. A Full access thread can only be resumed by Sam, because T3 refuses the operator's Auto sign-in there (`threadAccess.ts`). Card text that comes from other threads, such as titles, T3's error text and agents' stop reasons, is quoted and labeled as data.
+A dead child's card names its lead and says whether the lead is idle. Nothing is sent to either. The Operator thread and its children never get cards. A Full access thread can only be resumed by Sam, because T3 refuses the operator's Auto sign-in there (`threadAccess.ts`). Card text that comes from other threads, such as titles, T3's error text and agents' stop reasons, is quoted and labeled as data.
 
 **Writes.** Only `launcher.py` writes to T3, and only through `t3client.py`. A test fails if any other module imports it.
 
 - **Stable keys.** Each write has a stable key. The key goes to T3 as `clientRequestId`, and T3 replays a repeated key within one sign-in, across T3 restarts. The key also goes into the message as a last line, `fleet-key: <key>`.
 - **Journal.** `state/fleet-journal.json` records each write before the call and marks it accepted after.
 - **Retries.** Before any retry, the launcher reads T3's messages table for the key line. A new sign-in drops T3's replay, so this check stops a second message even then. It reads the table directly because T3's search index leaves out messages agents write.
-- **Lost answers.** A lost answer is written as an `uncertain` receipt. A refused connection is not, because that call never reached T3.
+- **Lost answers.** A lost answer is written as an `uncertain` receipt. A refused connection is not, because that call never reached T3. Either one drops the cached client, so a T3 restart on another port is picked up at once. A post T3 refuses (an archived Operator thread, say) holds its cards and shows in the heartbeat as `post_refused`; the rest of the cycle still runs.
 - **Card order.** The watcher saves a run as seen only after its card is in `state/fleet-outbox.json`. Cards T3 has not accepted stay there.
 
-**Modes** (`fleet_mode`): `cards`, the default, only posts cards. `full` also shows each drafted launch (`fleet draft`) in the Operator thread and launches it once Sam types `go 2` there. Only text whose `createdBy` is "user" counts, and only a "go" typed after the draft was shown. A launch refused at that point stays queued, and the Operator thread says why. In `full` mode each cycle also counts every run in each tree the operator launched, children included. A tree over 20 runs is stopped the way its Stop button does, and no new launch goes out while one is over. Resuming the operator's own threads and the unattended `wrap` and `correct` launches are not built yet.
+**Modes** (`fleet_mode`): `cards`, the default, only posts cards. `full` also shows each drafted launch (`fleet draft`) in the Operator thread and launches it once Sam types `go 2` there. Only text Sam typed in the app counts (`createdBy` "user" from web, mobile or his queued messages, never a scheduled task's), and only a "go" typed after the draft was shown. Drafts and notes in the Operator thread start with a line telling that thread's agent the text is data for Sam. A launch refused at that point stays queued, and the Operator thread says why. In `full` mode each cycle also counts every run in each tree the operator launched, children included. A tree still running past 20 runs is stopped the way its Stop button does, unless Sam has typed in it since, and no new launch goes out while one is over. Resuming the operator's own threads and the unattended `wrap` and `correct` launches are not built yet.
 
 **Launch checks.** Launches run at Auto or lower. `envelope.py` refuses each of these before T3 is called, naming the field:
 

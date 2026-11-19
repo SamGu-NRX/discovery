@@ -2,8 +2,8 @@
 
 It holds, in order: the sam-mode skill's lines (once that skill exists), the current repo's decisions, then
 Sam's global decisions, newest first. A repo's decisions count only in a repo Sam owns: one whose
-`.agents/topology.json` lists SamGu-NRX as an owner and whose `origin` remote matches the file, so a
-cloned third-party repo can't put its "decisions" in front of a session as Sam's. A decision counts only when its entry says `Status: confirmed`, in the
+`origin` remote is on github.com/SamGu-NRX and whose `.agents/topology.json` lists him as owner and matches
+that remote. A cloned third-party repo can claim an owner in its files, but its remote is someone else's. A decision counts only when its entry says `Status: confirmed`, in the
 template SecondBrain's decision log uses (`### YYYY-MM-DD — Title`, then `- **Status:**`, `- **Decision:**`).
 
 It reaches a session three ways: Claude Code's SessionStart hook and Codex's (`fleet charter --hook claude`
@@ -77,7 +77,10 @@ def sams_repo(repo: Path) -> bool:
     from .envelope import _git, _same_remote, load_topology
     topo = load_topology(repo)
     actual = _git(repo, "remote", "get-url", "origin")
-    return bool(topo and OWNER in (topo.get("owners") or []) and actual and topo.get("origin")
+    # The remote must be on Sam's own GitHub account: a clone's files can claim any owner, but not this.
+    mine = actual and re.fullmatch(rf"(git@github\.com:|https://github\.com/){OWNER}/[\w.-]+?(\.git)?/?",
+                                   actual.strip(), re.I)
+    return bool(mine and topo and OWNER in (topo.get("owners") or []) and topo.get("origin")
                 and _same_remote(actual, topo["origin"]))
 
 

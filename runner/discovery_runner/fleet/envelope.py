@@ -157,13 +157,17 @@ def check(env: Envelope, con=None, routes=None) -> None:
 MIN_PIECE_WORDS = 2
 
 
+WORD = re.compile(r"[^\W_]+(?:['\u2019\-_][^\W_]+)*")  # "can't" and "non-blocking" are one word each
+
+
+def _splits_word(text: str, i: int) -> bool:
+    return any(m.start() < i < m.end() for m in WORD.finditer(text))
+
+
 def _find_on_word_edges(text: str, piece: str, start: int) -> int:
     i = text.find(piece, start)
     while i >= 0:
-        before = text[i - 1] if i else " "
-        after = text[i + len(piece)] if i + len(piece) < len(text) else " "
-        edge = lambda a, b: not (a.isalnum() and b.isalnum())
-        if edge(before, piece[0]) and edge(piece[-1], after):
+        if not _splits_word(text, i) and not _splits_word(text, i + len(piece)):
             return i
         i = text.find(piece, i + 1)
     return -1
@@ -200,7 +204,7 @@ def verbatim_problems(con, excerpts) -> str | None:
             if row is None:
                 return f"excerpt {i}: message {mid} is not in T3"
             payload = json.loads(row[0])
-            if not probe.typed_by_sam(payload):
+            if not probe.typed_by_sam(payload, mid):
                 return f"excerpt {i}: message {mid} was not typed by Sam"
             sources.append(payload.get("text") or "")
         if not sources:

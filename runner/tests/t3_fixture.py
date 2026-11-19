@@ -102,7 +102,8 @@ class T3DB:
 
     def message(self, tid, text, role="user", by="user", at="2026-11-10T00:00:00.000Z", mid=None):
         mid = mid or str(uuid.uuid4())
-        payload = {"id": mid, "role": role, "text": text, "createdBy": by}
+        payload = {"id": mid, "role": role, "text": text, "createdBy": by,
+                   "creationSource": "web" if by == "user" else "mcp"}
         cur = self.con.execute("INSERT INTO orchestration_v2_projection_messages (message_id, thread_id, role,"
                                " created_at, updated_at, payload_json) VALUES (?,?,?,?,?,?)",
                                (mid, tid, role, at, at, json.dumps(payload)))
@@ -207,7 +208,7 @@ class FakeT3:
                 self.db.message(tid, args["message"], by="agent", at=_now())
                 result = {"structuredContent": {"threadId": tid, "runId": None, "status": "starting"}}
             elif tool == "t3_thread_interrupt":
-                result = {"structuredContent": {"threadId": args["threadId"], "status": "stopped"}}
+                result = {"structuredContent": {"threadId": args["threadId"], "status": "interrupt_requested"}}
             else:
                 return {"isError": True, "content": [{"type": "text", "text": f"unknown tool {tool}"}]}
             self.replays[replay_key] = result

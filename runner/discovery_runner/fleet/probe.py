@@ -134,7 +134,7 @@ def sam_messages(con, thread_id, limit=20, before=None):
     """Messages Sam typed (role user, not written by an agent), newest first."""
     return [{"message_id": r[0], "created_at": r[1], "text": r[2] or ""} for r in con.execute(
         f"SELECT message_id, created_at, json_extract(payload_json, '$.text') FROM {MESSAGES} WHERE thread_id = ?"
-        " AND role = 'user' AND json_extract(payload_json, '$.createdBy') = 'user' AND (? IS NULL OR created_at < ?)"
+        f" AND role = 'user' AND {TYPED_BY_SAM_SQL} AND (? IS NULL OR created_at < ?)"
         " ORDER BY created_at DESC LIMIT ?", (thread_id, before, before, limit))]
 
 
@@ -142,12 +142,22 @@ def sam_messages_after(con, thread_id, after, limit=1):
     """The first messages Sam typed in a thread after a timestamp, oldest first."""
     return [{"message_id": r[0], "created_at": r[1], "text": r[2] or ""} for r in con.execute(
         f"SELECT message_id, created_at, json_extract(payload_json, '$.text') FROM {MESSAGES} WHERE thread_id = ?"
-        " AND role = 'user' AND created_at > ? AND json_extract(payload_json, '$.createdBy') = 'user'"
+        f" AND role = 'user' AND created_at > ? AND {TYPED_BY_SAM_SQL}"
         " ORDER BY created_at LIMIT ?", (thread_id, after, limit))]
 
 
-def typed_by_sam(payload: dict) -> bool:
-    """T3 marks every user-role message with `createdBy`: "user" for what Sam typed in the app (web or
-    mobile), "agent" for t3_thread_send (the t3 CLI's `thread send` included), delegate_task and
-    scheduled-task text. Measured on 1,732 user-role messages from 2026-11-15 on: no other value occurs."""
-    return payload.get("createdBy") == "user"
+SCHEDULED = "scheduled-task-message:"
+TYPED_BY_SAM_SQL = ("json_extract(payload_json, '$.createdBy') = 'user'"
+                    " AND coalesce(json_extract(payload_json, '$.creationSource'), '') IN ('web', 'mobile', 'server')"
+                    f" AND substr(message_id, 1, {len(SCHEDULED)}) <> '{SCHEDULED}'")
+
+
+def typed_by_sam(payload: dict, message_id: str = "") -> bool:
+    """Text Sam typed in T3's app. T3 marks every user-role message with `createdBy` and `creationSource`.
+    Measured on user-role messages since 2026-10-01: "user" with "web", "mobile" or "server" (his queued
+    messages and answers) is Sam; "agent" covers t3_thread_send (the t3 CLI's `thread send` included),
+    delegate_task and scheduled tasks. A scheduled task's message takes the task's own `createdBy`
+    (t3code ScheduledTaskService.ts), and "user" with "mcp" came from an MCP client, so both are left out."""
+    mid = message_id or str(payload.get("id") or "")
+    return (payload.get("createdBy") == "user" and payload.get("creationSource") in ("web", "mobile", "server")
+            and not mid.startswith(SCHEDULED))

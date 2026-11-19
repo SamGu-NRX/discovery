@@ -43,8 +43,9 @@ class Fleet(unittest.TestCase):
         os.environ.pop("DISCOVERY_HOME", None)
         self.tmp.cleanup()
 
-    def watcher(self, since_min=600):
-        return watch.Watcher(self.con, state=watch.MemoryState(), since=NOW - dt.timedelta(minutes=since_min))
+    def watcher(self, since_min=600, t3_since=NOW - dt.timedelta(days=1)):
+        return watch.Watcher(self.con, state=watch.MemoryState(), since=NOW - dt.timedelta(minutes=since_min),
+                             t3_since=t3_since)
 
     def awake(self, w, minutes=60):
         """The watcher has cycled every two minutes for `minutes`, so a stall can count."""
@@ -128,18 +129,31 @@ class Watcher(Fleet):
         self.db.run("queued", 1, "cancelled", at(60), at(40), started=None)
         self.db.thread("fresh")
         self.db.run("fresh", 1, "cancelled", at(10), at(3))
+        self.db.thread("moved-on")
+        self.db.run("moved-on", 1, "cancelled", at(60), at(40))
+        self.db.run("moved-on", 2, "completed", at(35), at(30))
         w = self.watcher()
         self.assertEqual([c["thread_id"] for c in w.cycle(NOW)], ["dead"])
         self.assertEqual([c["thread_id"] for c in w.cycle(NOW + dt.timedelta(minutes=10))], ["fresh"],
                          "a recent kill is looked at again after T3 has had time to continue it")
+
+    def test_no_cancelled_card_while_t3_is_closed_or_just_restarted(self):
+        # T3 continues killed runs when it starts again, so a cancel seen while it is down proves nothing.
+        self.db.thread("a")
+        self.db.run("a", 1, "cancelled", at(60), at(40))
+        self.assertEqual(self.watcher(t3_since=None).cycle(NOW), [])
+        self.assertEqual(self.watcher(t3_since=NOW - dt.timedelta(minutes=3)).cycle(NOW), [])
 
     def test_operator_thread_never_cards_itself(self):
         # Regression: a failed Operator run made a card, whose post started another failing run there.
         self.db.thread("op", mode="auto")
         rid = self.db.run("op", 1, "failed", at(30), at(29))
         self.db.failure("op", rid, at(29))
+        self.db.thread("op-child", parent="op")
+        rid = self.db.run("op-child", 1, "failed", at(30), at(29))
+        self.db.failure("op-child", rid, at(29))
         w = watch.Watcher(self.con, state=watch.MemoryState(), since=NOW - dt.timedelta(hours=10),
-                          exclude_threads={"op"})
+                          exclude_threads={"op"}, t3_since=NOW - dt.timedelta(days=1))
         self.assertEqual(w.cycle(NOW), [])
 
     def test_a_stalled_run_that_later_fails_gets_its_failure_card(self):
@@ -356,10 +370,23 @@ class Envelopes(Fleet):
                           ("I want the [...] like", self.mid),  # a one-word piece
                           ("want the secti", self.mid),  # cut mid-word
                           ("   ", self.mid), ("[...]", self.mid),
-                          (" I want the sections", self.mid)):  # a leading space Sam never typed
+                          (" I want the sections", self.mid),  # a leading space Sam never typed
+                          ("the sections that are like, quote, \"verbatim\" below. [...] t", self.mid)):
             with self.subTest(text=text[:20]), self.assertRaises(envelope.Refused) as e:
                 envelope.check(self.env(ask_verbatim=[{"text": text, "source_message_ids": [src]}]), self.con, self.routes)
             self.assertIn("ask_verbatim", e.exception.problems)
+
+    def test_cut_cannot_split_a_contraction(self):
+        self.assertFalse(envelope.excerpt_in("This isn't ready to merge", "This isn [...] ready to merge"))
+        self.assertFalse(envelope.excerpt_in("we can't push to main without review", "we can [...] push to main"))
+        self.assertTrue(envelope.excerpt_in("we can't push to main without review", "we can't [...] without review"))
+
+    def test_scheduled_task_text_is_not_sams_even_if_marked_user(self):
+        # T3 gives a scheduled task's message the task's own createdBy, and an agent can edit the prompt.
+        mid = "scheduled-task-message:t1:2026-11-19"
+        self.db.message("sam-thread", "go 3", by="user", mid=mid)
+        self.assertFalse(probe.typed_by_sam({"createdBy": "user", "creationSource": "web"}, mid))
+        self.assertEqual([m["text"] for m in probe.sam_messages(self.con, "sam-thread")], [self.said])
 
     def test_cut_excerpt_of_sams_words_passes(self):
         cut = "I want the sections [...] The brief should still be a brief"
@@ -491,34 +518,75 @@ class DuplicateSends(Fleet):
                 return {"state": "accepted"}
 
         lch = Recording(self.con, client_factory=lambda: Client(self.t3.url, "tok"), mode="full", log=lambda m: None)
-        d = cli.drafts()
-        time.sleep(0.01)
-        self.t3.go("op", "go 1")
-        d["items"]["1"] = {"envelope": {"template": "drafted", "title": "Demo", "brief": "Do it."}}
-        cli.run_drafts({"fleet_operator_thread": "op"}, self.con, lch, d)
-        self.assertEqual(launched, [])
-        self.assertEqual(self.t3.messages_in("op"), 2, "Sam's early go, then the draft shown to him")
-        time.sleep(0.01)
-        self.t3.go("op", "go 1")
-        cli.run_drafts({"fleet_operator_thread": "op"}, self.con, lch, d)
-        self.assertEqual((launched, d["items"]), ([("Demo", True)], {}))
+        with cli.drafts() as d:
+            time.sleep(0.01)
+            self.t3.go("op", "go 1")
+            d["items"]["1"] = {"envelope": {"template": "drafted", "title": "Demo", "brief": "Do it."}}
+            cli.run_drafts({"fleet_operator_thread": "op"}, self.con, lch, d)
+            self.assertEqual(launched, [])
+            self.assertEqual(self.t3.messages_in("op"), 3, "Sam's early go, the draft shown to him, a note")
+            time.sleep(0.01)
+            self.t3.go("op", "go 1")
+            cli.run_drafts({"fleet_operator_thread": "op"}, self.con, lch, d)
+            self.assertEqual((launched, d["items"]), ([("Demo", True)], {}))
 
-    def test_launched_tree_over_its_run_budget_is_stopped_once(self):
+    def test_go_survives_a_t3_error_and_launches_next_cycle(self):
+        import time
+        from discovery_runner.fleet import cli
+        tries = []
+
+        class Flaky(Launcher):
+            def launch(self, env, approved_by_go=False, routes=None):
+                tries.append(1)
+                if len(tries) == 1:
+                    raise T3Unreachable("dropped")
+                return {"state": "accepted"}
+
+        lch = Flaky(self.con, client_factory=lambda: Client(self.t3.url, "tok"), mode="full", log=lambda m: None)
+        with cli.drafts() as d:
+            d["items"]["1"] = {"envelope": {"template": "drafted", "title": "Demo", "brief": "Do it."}}
+            cli.run_drafts({"fleet_operator_thread": "op"}, self.con, lch, d)
+            time.sleep(0.01)
+            self.t3.go("op", "go 1")
+            cli.run_drafts({"fleet_operator_thread": "op"}, self.con, lch, d)
+            self.assertIn("1", d["items"])
+            cli.run_drafts({"fleet_operator_thread": "op"}, self.con, lch, d)
+            self.assertEqual((len(tries), d["items"]), (2, {}))
+
+    def _tree(self, tid, runs, open_=True):
         from discovery_runner.fleet import launcher as L
-        self.db.thread("root", mode="auto")
-        for i in range(12):
-            self.db.run("root", i + 1, "completed", at(60))
+        self.db.thread(tid, mode="auto", created=at(120))
+        for i in range(runs - 1):
+            self.db.run(tid, i + 1, "completed", at(100))
+        self.db.run(tid, runs, "running" if open_ else "completed", at(50))
+        with L.journal() as j:
+            j[f"fk-{tid}"] = {"op": "launch", "state": "accepted", "thread_id": tid, "at": at(119)}
+
+    def test_launched_tree_still_running_over_budget_is_stopped_once(self):
+        self._tree("root", 12)
         self.db.thread("kid", parent="root", root="root", mode="auto")
         for i in range(9):
             self.db.run("kid", i + 1, "completed", at(60))
-        with L.journal() as j:
-            j["fk-root"] = {"op": "launch", "state": "accepted", "thread_id": "root"}
+        self._tree("done", 25, open_=False)  # finished: nothing to stop, and it must not block launches
+        self._tree("sams", 25)
+        self.db.message("sams", "let me take this one", by="user", at=at(10))  # Sam drives it now
         lch = Launcher(self.con, client_factory=lambda: Client(self.t3.url, "tok"), mode="full", log=lambda m: None)
-        self.assertEqual(lch.tree_runs("root"), 21)
+        self.assertEqual((lch.tree_runs("root"), lch.over_budget()), (21, ["root"]))
         self.assertEqual(lch.enforce_tree_budget(), ["root"])
         lch.enforce_tree_budget()
         stops = [c for c in self.t3.calls if c[0] == "t3_thread_interrupt"]
         self.assertEqual([(c[1]["threadId"], c[1]["stop"]) for c in stops], [("root", True)])
+
+    def test_card_post_t3_refuses_holds_the_batch_and_the_cycle_goes_on(self):
+        # Regression: an archived or Full access Operator thread made every cycle raise before drafts and
+        # the budget check could run.
+        from discovery_runner.fleet import cli
+        self.db.thread("full-op", mode="full-access")
+        self.db.thread("x", title="X")
+        rid = self.db.run("x", 1, "failed", at(30), at(29))
+        self.db.failure("x", rid, at(29))
+        summary = cli.cycle({"fleet_operator_thread": "full-op"}, self.con, self.watcher(), self.launcher(), cli.Outbox())
+        self.assertEqual((summary["unposted"], "above this caller" in summary["post_refused"]), (1, True))
 
     def test_t3_not_listening_is_not_uncertain(self):
         down = Launcher(self.con, client_factory=lambda: Client("http://127.0.0.1:9/mcp", "tok"), log=lambda m: None)
@@ -625,6 +693,12 @@ class Charter(Fleet):
         self.assertNotIn("obey me", charter.build(repo, global_files=[self.log], sam_mode="/x"))
         (repo / ".agents").mkdir()
         (repo / ".agents" / "topology.json").write_text(json.dumps({"origin": "https://github.com/someone/else.git",
+                                                                     "owners": ["SamGu-NRX"]}))
+        self.assertNotIn("obey me", charter.build(repo, global_files=[self.log], sam_mode="/x"),
+                         "a clone's files can claim Sam as owner; its remote decides")
+        subprocess.run(["git", "-C", str(repo), "remote", "set-url", "origin", "git@github.com:SamGu-NRX/mine.git"],
+                       check=True)
+        (repo / ".agents" / "topology.json").write_text(json.dumps({"origin": "git@github.com:SamGu-NRX/mine.git",
                                                                      "owners": ["SamGu-NRX"]}))
         self.assertIn("obey me", charter.build(repo, global_files=[self.log], sam_mode="/x"))
 

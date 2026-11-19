@@ -29,10 +29,11 @@ from . import probe
 
 OPEN = ("preparing", "starting", "running")
 TERMINAL_KINDS = ("failed", "stopped_by_agent", "interrupted_unknown", "cancelled")
-# Texts T3 writes on the interrupt item (t3code apps/server/src/orchestration-v2): USER_STOP_REASON for a
-# stop without a reason (RunExecutionService.ts:2341), "Interrupt requested" for run.interrupt, the steer
-# that skips compaction (Orchestrator.ts:11456), and a force stop (ThreadManagementService.ts:604). An MCP
-# stop always reads "Stopped by an agent..." (mcp/OrchestratorMcpService.ts:275).
+# Texts T3 writes as the interrupt item's message (t3code apps/server/src/orchestration-v2): the reason, or
+# USER_STOP_REASON "Stopped by user" without one (RunExecutionService.ts:2341, Orchestrator.ts:12714), the
+# steer that skips compaction (Orchestrator.ts:11456), and a force stop (ThreadManagementService.ts:604).
+# "Interrupt requested" is the item's title today, but 24 app interrupts before November carry it as the
+# message too. An MCP stop always reads "Stopped by an agent..." (mcp/OrchestratorMcpService.ts:275).
 USER_STOP = {"Stopped by user", "Interrupt requested"}
 STEER_STOP = "Skipped compaction to send a queued message"
 FORCE_STOP = "Force stopped by user"
@@ -128,11 +129,24 @@ def interrupted_by(ev: dict) -> str:
     return "unknown"
 
 
-def continued(con, thread_id, run_id) -> bool:
-    """T3 started a run that continues this one after a restart."""
-    return con.execute(f"SELECT 1 FROM {probe.RUNS} WHERE thread_id = ? AND"
-                       " json_extract(payload_json, '$.restartContinuationOfRunId') = ? LIMIT 1",
-                       (thread_id, run_id)).fetchone() is not None
+def continued(con, thread_id, run_id, ordinal) -> bool:
+    """The thread moved on: T3 continued this run after a restart, or a later run started. T3 skips the
+    continuation when a later run already ran (t3code orchestration-v2/RestartContinuation.ts)."""
+    return con.execute(f"SELECT 1 FROM {probe.RUNS} WHERE thread_id = ? AND (json_extract(payload_json,"
+                       " '$.restartContinuationOfRunId') = ? OR (ordinal > ? AND"
+                       " json_extract(payload_json, '$.startedAt') IS NOT NULL)) LIMIT 1",
+                       (thread_id, run_id, ordinal)).fetchone() is not None
+
+
+def t3_up_since(runtime=Path("~/.t3/userdata/server-runtime.json")) -> dt.datetime | None:
+    """When the running T3 server started, or None when it is not running."""
+    import os
+    try:
+        d = json.loads(runtime.expanduser().read_text())
+        os.kill(int(d["pid"]), 0)
+        return parse(d["startedAt"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
 
 
 def cause(f: dict | None) -> str:
@@ -164,7 +178,7 @@ def run_facts(con, run_id) -> dict | None:
 DEFER = object()  # classify's answer for a run to look at again later
 
 
-def classify(con, run: dict, now: dt.datetime | None = None, stall_min=30, awake_since=None):
+def classify(con, run: dict, now: dt.datetime | None = None, stall_min=30, awake_since=None, t3_since=None):
     """The card for one run, None when the run needs none, or DEFER to look again in a later cycle."""
     status = run["status"]
     started = run.get("started_at") or run["requested_at"]
@@ -183,9 +197,10 @@ def classify(con, run: dict, now: dt.datetime | None = None, stall_min=30, awake
     elif status == "cancelled":
         if run.get("started_at") is None:
             return None  # cancelled while queued: it never ran
-        if continued(con, run["thread_id"], run["run_id"]):
+        if continued(con, run["thread_id"], run["run_id"], run["ordinal"]):
             return None
-        if now is None or parse(run["completed_at"] or started) > now - CONTINUE_AFTER:
+        # T3 continues killed runs when it starts again, so wait until it has been up for the whole window.
+        if now is None or t3_since is None or max(parse(run["completed_at"] or started), t3_since) > now - CONTINUE_AFTER:
             return DEFER
         ev = stop_evidence(con, run["thread_id"], run["run_id"], started, run["completed_at"])
         if interrupted_by(ev) == "sam":
@@ -236,11 +251,13 @@ class Watcher:
     SEEN_DAYS = 14
     GAP = dt.timedelta(minutes=6)  # three missed 2-minute cycles: the Mac slept or the job was off
 
-    def __init__(self, con, state=None, since: dt.datetime | None = None, stall_min=30, exclude_threads=()):
+    def __init__(self, con, state=None, since: dt.datetime | None = None, stall_min=30, exclude_threads=(),
+                 t3_since=t3_up_since):
         self.con = con
         self.state = state if state is not None else FileState(config.path("state", "fleet-watch.json"))
         self.stall_min = stall_min
         self.exclude_threads = set(exclude_threads)
+        self.t3_since = t3_since
         self.last_scan_rows = 0
         self.errors = []
         self._next = None
@@ -255,8 +272,8 @@ class Watcher:
     def _skip(self, run, seen) -> bool:
         if run["deleted_at"] or (run["archived_at"] and not self.include_archived):
             return True
-        if run["thread_id"] in self.exclude_threads:
-            return True  # the Operator thread: a card about it would start another run there
+        if run["thread_id"] in self.exclude_threads or run.get("parent_id") in self.exclude_threads:
+            return True  # the Operator thread and its children: a card about them starts another run there
         kinds = ("stalled",) if run["status"] in OPEN else TERMINAL_KINDS
         return any(f"{run['run_id']}:{k}" in seen for k in kinds)
 
@@ -278,13 +295,15 @@ class Watcher:
                     rows.append(r)
         self.last_scan_rows = len(rows)
         cards, self.errors = [], []
+        t3_since = self.t3_since() if callable(self.t3_since) else self.t3_since
         for run in rows:
             if run["status"] not in ("failed", "interrupted", "cancelled", *OPEN) or self._skip(run, nxt["seen"]):
                 continue
             try:
-                card = classify(self.con, run, now, self.stall_min, nxt.get("awake_since"))
-            except Exception as e:  # one odd row must not stop every other card
+                card = classify(self.con, run, now, self.stall_min, nxt.get("awake_since"), t3_since)
+            except Exception as e:  # one odd row must not stop every other card; look at it again later
                 self.errors.append(f"{run['run_id']}: {type(e).__name__}: {e}")
+                nxt["recheck"].setdefault(run["run_id"], iso(now))
                 continue
             if card is DEFER:
                 nxt["recheck"].setdefault(run["run_id"], iso(now))
@@ -323,12 +342,12 @@ def render(cards: list[dict], link) -> str:
         what = {"failed": "failed", "stopped_by_agent": "was stopped by an agent", "stalled": "stalled",
                 "cancelled": "was cancelled after it started",
                 "interrupted_unknown": "was interrupted, and nothing shows that you stopped it"}[c["kind"]]
-        lines.append(f"\n- {link(c['thread_id'], c['title'])} run {c['ordinal']} {what} ({c['cause']}).")
+        lines.append(f"\n- {link(c['thread_id'], json.dumps(c['title'] or ''))} run {c['ordinal']} {what} ({c['cause']}).")
         if c.get("detail"):
             lines.append(f"  T3 says: \"{' '.join(str(c['detail']).split())[:240]}\"")
         if c.get("lead"):
             state = "idle" if c["lead"]["idle"] else "still running"
-            lines.append(f"  Its lead is {link(c['lead']['thread_id'], c['lead']['title'])}, {state}. "
+            lines.append(f"  Its lead is {link(c['lead']['thread_id'], json.dumps(c['lead']['title'] or ''))}, {state}. "
                          "Nothing was sent to either.")
         if c.get("mode") == "full-access":
             lines.append("  Full access: only you can resume it.")

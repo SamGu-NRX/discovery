@@ -72,8 +72,15 @@ class Launcher:
         """Test seam: runs after T3 accepted and before the journal records it."""
 
     def find_marker(self, key, rec) -> dict | None:
-        """The message carrying `fleet-key: <key>` written since the key's first attempt, or None."""
+        """What a landed write left in T3's database since the key's first attempt, or None: the message
+        carrying `fleet-key: <key>`, or for a stop, the interrupt item carrying its reason."""
         since = watch.iso(watch.parse(rec["first_at"]) - dt.timedelta(minutes=5))
+        if rec.get("op") == "stop":
+            r = self.con.execute(
+                f"SELECT run_id FROM {probe.TURN_ITEMS} WHERE thread_id = ? AND type = 'run_interrupt_request'"
+                " AND updated_at >= ? AND json_extract(payload_json, '$.message') = ? LIMIT 1",
+                (rec["thread_id"], since, rec.get("match"))).fetchone()
+            return {"thread_id": rec["thread_id"], "run_id": r[0]} if r else None
         line = f"{MARK}{key}"
         if rec.get("thread_id"):
             threads = [rec["thread_id"]]
@@ -89,7 +96,8 @@ class Launcher:
                     return {"thread_id": tid, "message_id": mid}
         return None
 
-    def write(self, op: str, key: str, tool: str, args: dict, thread_id=None, project_id=None, ask="") -> dict:
+    def write(self, op: str, key: str, tool: str, args: dict, thread_id=None, project_id=None, ask="",
+              match=None) -> dict:
         with journal() as j:
             rec = j.get(key)
         if rec and rec["state"] == "accepted":
@@ -98,15 +106,17 @@ class Launcher:
             found = self.find_marker(key, rec)
             if found:
                 return self._record(key, {**rec, "state": "accepted", **found, "recovered": True})
-        base = {"op": op, "thread_id": thread_id, "project_id": project_id,
+        base = {"op": op, "thread_id": thread_id, "project_id": project_id, "match": match,
                 "first_at": (rec or {}).get("first_at") or config.now_iso(),
                 "attempts": (rec or {}).get("attempts", 0) + 1}
         self._record(key, {**base, "state": "pending", "at": config.now_iso()})
         try:
             result = self.client.call(tool, {**args, "clientRequestId": key})
         except T3Down:
+            self._client = None  # T3 may come back on another port; read its address again next time
             raise  # the call never reached T3; the entry stays pending
         except T3Unreachable as e:
+            self._client = None
             self._record(key, {**base, "state": "uncertain", "at": config.now_iso(), "error": str(e)[:300]})
             receipts.write({"ts": config.now_iso(), "level": "claimed", "for": ask, "key": key, "op": op,
                             "thread_id": thread_id, "flags": ["uncertain"], "error": str(e)[:300]})
@@ -158,26 +168,44 @@ class Launcher:
             f"SELECT count(DISTINCT thread_id) FROM {probe.RUNS} WHERE thread_id IN ({marks})"
             " AND status IN ('queued','preparing','starting','running','waiting')", ids).fetchone()[0]
 
+    TREE = ("(t.thread_id = ? OR CASE WHEN json_valid(t.payload_json) THEN"  # this form uses T3's index
+            " json_extract(t.payload_json, '$.lineage.rootThreadId') END = ?)")
+
     def tree_runs(self, root_thread_id) -> int:
         """Runs in a launched thread and every thread under it (T3's lineage.rootThreadId)."""
         return self.con.execute(
-            f"SELECT count(*) FROM {probe.RUNS} r JOIN {probe.THREADS} t ON t.thread_id = r.thread_id"
-            " WHERE t.thread_id = ? OR json_extract(t.payload_json, '$.lineage.rootThreadId') = ?",
-            (root_thread_id, root_thread_id)).fetchone()[0]
+            f"SELECT count(*) FROM {probe.THREADS} t JOIN {probe.RUNS} r ON r.thread_id = t.thread_id"
+            f" WHERE {self.TREE}", (root_thread_id, root_thread_id)).fetchone()[0]
+
+    def tree_open(self, root_thread_id) -> bool:
+        return self.con.execute(
+            f"SELECT 1 FROM {probe.THREADS} t JOIN {probe.RUNS} r ON r.thread_id = t.thread_id WHERE {self.TREE}"
+            " AND r.status IN ('queued','preparing','starting','running','waiting') LIMIT 1",
+            (root_thread_id, root_thread_id)).fetchone() is not None
+
+    def sam_took_over(self, root_thread_id, since) -> bool:
+        """Sam typed in the launched thread himself, so its runs are his, not the operator's."""
+        return bool(probe.sam_messages_after(self.con, root_thread_id, since, limit=1))
+
+    def over_budget(self) -> list[str]:
+        """Launched trees still running past `runs_per_launch` runs, children counted, that Sam has not
+        taken over."""
+        with journal() as j:
+            launched = {r["thread_id"]: r.get("at") or "" for r in j.values()
+                        if r.get("op") == "launch" and r["state"] == "accepted"}
+        return [t for t, at in launched.items() if self.tree_open(t) and not self.sam_took_over(t, at)
+                and self.tree_runs(t) > self.lim["runs_per_launch"]]
 
     def enforce_tree_budget(self) -> list[str]:
-        """Stop each launched tree that has used more than `runs_per_launch` runs, children counted, the way
-        its Stop button does (every delegated task included). Returns the stopped thread ids."""
+        """Stop each tree over budget the way its Stop button does (its delegated tasks included)."""
         self._require_full("stopping a launched tree")
         stopped = []
-        for tid in self.own_threads():
+        for tid in self.over_budget():
             n = self.tree_runs(tid)
-            if n <= self.lim["runs_per_launch"]:
-                continue
-            key = "fk-stop-" + hashlib.sha256(tid.encode()).hexdigest()[:24]
+            key = "fk-stop-" + hashlib.sha256(f"{tid}\n{n}".encode()).hexdigest()[:24]
             reason = f"Operator budget: this launch used {n} runs, over its {self.lim['runs_per_launch']}."
             rec = self.write("stop", key, "t3_thread_interrupt", {"threadId": tid, "stop": True, "reason": reason},
-                             thread_id=tid)
+                             thread_id=tid, match=f"Stopped by an agent: {reason}")
             if rec["state"] == "accepted":
                 stopped.append(tid)
         return stopped
@@ -199,7 +227,7 @@ class Launcher:
         free_gb = shutil.disk_usage(Path(env.repo).expanduser()).free / 1e9
         if free_gb < self.lim["disk_floor_gb"]:
             raise envelope.Refused({"disk": f"{free_gb:.1f} GB free, under the {self.lim['disk_floor_gb']} GB floor"})
-        over = [t for t in self.own_threads() if self.tree_runs(t) > self.lim["runs_per_launch"]]
+        over = self.over_budget()
         if over:
             raise envelope.Refused({"runs_per_launch": f"{len(over)} launched trees are over their run budget"})
         if self.open_launches() >= self.lim["concurrent"]:
@@ -219,4 +247,9 @@ class Launcher:
         if not already and not config.take("fleet_launches", self.lim["launches_per_day"]):
             raise envelope.Refused({"launches_per_day": f"{self.lim['launches_per_day']} launches today already"})
         ask = "\n".join(e["text"] for e in env.ask_verbatim)
-        return self.write("launch", key, "t3_thread_launch", args, project_id=project_id, ask=ask)
+        try:
+            return self.write("launch", key, "t3_thread_launch", args, project_id=project_id, ask=ask)
+        except T3Unreachable:
+            raise
+        except T3Error as e:  # T3's own refusal, reported to Sam like the envelope's
+            raise envelope.Refused({"t3": str(e)[:300]}) from None
