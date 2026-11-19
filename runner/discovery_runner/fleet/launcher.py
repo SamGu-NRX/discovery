@@ -41,6 +41,10 @@ def limits(path=LIMITS_FILE) -> dict:
     return {**LIMITS, **over}
 
 
+def cards_key(cards) -> str:
+    return "fk-cards-" + hashlib.sha256("\n".join(sorted(c["key"] for c in cards)).encode()).hexdigest()[:24]
+
+
 @contextmanager
 def journal():
     f = config.path("state", "fleet-journal.json")
@@ -142,7 +146,7 @@ class Launcher:
     def post_cards(self, operator_thread_id: str, cards: list[dict]) -> dict | None:
         if not cards:
             return None
-        key = "fk-cards-" + hashlib.sha256("\n".join(sorted(c["key"] for c in cards)).encode()).hexdigest()[:24]
+        key = cards_key(cards)
         with journal() as j:
             already = key in j
         if not already and not config.take("fleet_card_messages", self.lim["card_messages_per_day"]):
@@ -195,20 +199,20 @@ class Launcher:
             f"SELECT 1 FROM {probe.THREADS} t JOIN {probe.RUNS} r ON r.thread_id = t.thread_id WHERE {self.TREE}"
             f" AND {self.OPEN_RUN} LIMIT 1", (root_thread_id, root_thread_id)).fetchone() is not None
 
-    def sam_took_over(self, root_thread_id, since) -> bool:
-        """Sam typed in the launched thread or any thread under it, so the tree is his, not the operator's."""
-        return any(probe.sam_messages_after(self.con, t, since, limit=1) for t in self.tree_threads(root_thread_id))
+    def sam_took_over(self, root_thread_id) -> bool:
+        """Sam typed in the launched thread or any thread under it, so the tree is his, not the operator's.
+        Every thread in the tree was made for the launch, so any message he typed there counts."""
+        return any(probe.sam_messages_after(self.con, t, "", limit=1) for t in self.tree_threads(root_thread_id))
 
     def over_budget(self) -> list[str]:
         """Launched trees still running past `runs_per_launch` runs, children counted, that Sam has not
         taken over and that are still at Auto or lower."""
         with journal() as j:
-            launched = {r["thread_id"]: r.get("at") or "" for r in j.values()
-                        if r.get("op") == "launch" and r["state"] == "accepted"}
+            launched = [r["thread_id"] for r in j.values() if r.get("op") == "launch" and r["state"] == "accepted"]
         out = []
-        for t, at in launched.items():
+        for t in launched:
             mode = (watch.thread_info(self.con, t) or {}).get("runtime_mode")
-            if mode in envelope.MODES_AT_OR_BELOW_AUTO and self.tree_open(t) and not self.sam_took_over(t, at) \
+            if mode in envelope.MODES_AT_OR_BELOW_AUTO and self.tree_open(t) and not self.sam_took_over(t) \
                     and self.tree_runs(t) > self.lim["runs_per_launch"]:
                 out.append(t)
         return out

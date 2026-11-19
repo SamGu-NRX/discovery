@@ -175,6 +175,14 @@ def last_activity(con, thread_id, run_id, started_at) -> str | None:
     return max([x for x in (r[0], started_at) if x], default=None)
 
 
+def still_due(con, card) -> bool:
+    """A held card still says something true: a cancelled run has not been continued since."""
+    if card["kind"] != "cancelled":
+        return True
+    r = con.execute(f"SELECT ordinal FROM {probe.RUNS} WHERE run_id = ?", (card["run_id"],)).fetchone()
+    return r is not None and not continued(con, card["thread_id"], card["run_id"], r[0])
+
+
 def run_facts(con, run_id) -> dict | None:
     r = con.execute(RUN_SELECT + "WHERE r.run_id = ?", (run_id,)).fetchone()
     return dict(r) if r else None
@@ -295,11 +303,13 @@ class Watcher:
         wm = parse(nxt["watermark"])
         rows = [dict(r) for r in self.con.execute(RUN_SCAN, {"wm": iso(wm - self.OVERLAP)})]
         scanned = {r["run_id"] for r in rows}
+        rechecked = set()
         for rid in list(nxt["recheck"]):
             if rid not in scanned:
                 r = run_facts(self.con, rid)
                 if r:
                     rows.append(r)
+                    rechecked.add(rid)
         self.last_scan_rows = len(rows)
         cards, self.errors = [], []
         t3_since = self.t3_since() if callable(self.t3_since) else self.t3_since
@@ -322,8 +332,8 @@ class Watcher:
         stamps = [r[k] for r in rows if r["run_id"] in scanned for k in ("requested_at", "completed_at") if r[k]]
         if stamps:
             nxt["watermark"] = max(nxt["watermark"], min(max(stamps), iso(now)))
-        day = iso(now - dt.timedelta(days=1))
-        nxt["recheck"] = {k: v for k, v in nxt["recheck"].items() if v >= day}
+        # A deferred run stays until it resolves, however long T3 is down; a run gone from T3 drops out.
+        nxt["recheck"] = {k: v for k, v in nxt["recheck"].items() if k in scanned or k in rechecked}
         cutoff = iso(now - dt.timedelta(days=self.SEEN_DAYS))
         nxt["seen"] = {k: v for k, v in nxt["seen"].items() if v >= cutoff}
         nxt["last_cycle"] = iso(now)

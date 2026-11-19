@@ -209,6 +209,16 @@ class Watcher(Fleet):
         (card,) = w.cycle(NOW)
         self.assertEqual(card["kind"], "stalled")
 
+    def test_a_run_deferred_for_days_is_still_carded_when_t3_returns(self):
+        # Regression: deferred runs expired after a day, and the watermark had moved past them.
+        self.db.thread("a")
+        self.db.run("a", 1, "cancelled", at(60), at(40))
+        w = self.watcher(since_min=90, t3_since=None)
+        self.assertEqual(w.cycle(NOW), [])
+        later = NOW + dt.timedelta(hours=30)
+        w.t3_since = later - dt.timedelta(minutes=11)
+        self.assertEqual([c["kind"] for c in w.cycle(later)], ["cancelled"])
+
     def test_no_stall_card_while_t3_is_closed(self):
         # T3 closed stops every run; T3 cancels and continues them when it starts, so no card is due.
         self.db.thread("a")
@@ -642,6 +652,18 @@ class DuplicateSends(Fleet):
         rec = self.launcher().post_cards("op", [self.card])
         self.assertEqual((rec["state"], self.t3.messages_in("op")), ("accepted", 1))
         self.assertTrue(self.t3.calls[-1][1]["clientRequestId"].endswith(".r2"))
+
+    def test_held_cancelled_card_is_dropped_once_the_thread_moved_on(self):
+        from discovery_runner.fleet import cli
+        self.db.thread("x", title="X")
+        self.db.run("x", 1, "cancelled", at(60), at(40))
+        card = {**self.card, "key": "run:thread:x:ordinal:1:cancelled", "kind": "cancelled",
+                "run_id": "run:thread:x:ordinal:1", "thread_id": "x"}
+        outbox = cli.Outbox()
+        outbox.save([[card]])  # held by the daily cap earlier
+        self.db.run("x", 2, "completed", at(30), at(20))
+        cli.cycle({"fleet_operator_thread": "op"}, self.con, self.watcher(), self.launcher(), outbox)
+        self.assertEqual((outbox.load(), self.t3.messages_in("op")), ([], 0))
 
     def test_card_post_t3_refuses_holds_the_batch_and_the_cycle_goes_on(self):
         # Regression: an archived or Full access Operator thread made every cycle raise before drafts and

@@ -13,7 +13,7 @@ from pathlib import Path
 
 from .. import config
 from . import charter, envelope, find, probe, receipts, replay, watch
-from .launcher import T3Error, T3Unreachable
+from .launcher import T3Error, T3Unreachable, cards_key, journal
 
 GO = re.compile(r"^\s*go((?:\s+\d+)+)\s*$", re.I)
 
@@ -164,6 +164,14 @@ def cycle(cfg, con, watcher, launcher, outbox):
     refused = None
     if launcher is not None:
         while batches:
+            with journal() as j:
+                tried = (j.get(cards_key(batches[0])) or {}).get("state")
+            if tried not in ("pending", "uncertain"):  # never sent, so its text may still change
+                batches[0] = [c for c in batches[0] if watch.still_due(con, c)]
+                if not batches[0]:
+                    batches.pop(0)
+                    outbox.save(batches)
+                    continue
             try:
                 posted = launcher.post_cards(cfg["fleet_operator_thread"], batches[0])
             except T3Error as e:  # e.g. the Operator thread was archived or raised above Auto
