@@ -71,8 +71,8 @@ def thread_ids(con, question: str) -> list[str]:
     """Threads whose id (or its first 8 hex digits, as Sam often pastes it) appears in the question."""
     out = []
     for m in UUID_PART.findall(question.lower()):
-        for (tid,) in con.execute(f"SELECT thread_id FROM {probe.THREADS} WHERE thread_id = ? OR thread_id LIKE ?"
-                                  " LIMIT 2", (m, f"{m}-%")):
+        for (tid,) in con.execute(f"SELECT thread_id FROM {probe.THREADS} WHERE thread_id IN (?, ?) OR thread_id LIKE ?"
+                                  " OR thread_id LIKE ? LIMIT 2", (m, f"mcp:{m}", f"{m}-%", f"mcp:{m}-%")):
             if tid not in out:
                 out.append(tid)
     return out

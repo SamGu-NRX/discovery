@@ -1,7 +1,9 @@
 """The charter: the block every new Claude and Codex session starts with, at most 40 lines.
 
 It holds, in order: the sam-mode skill's lines (once that skill exists), the current repo's decisions, then
-Sam's global decisions, newest first. A decision counts only when its entry says `Status: confirmed`, in the
+Sam's global decisions, newest first. A repo's decisions count only in a repo Sam owns: one whose
+`.agents/topology.json` lists SamGu-NRX as an owner and whose `origin` remote matches the file, so a
+cloned third-party repo can't put its "decisions" in front of a session as Sam's. A decision counts only when its entry says `Status: confirmed`, in the
 template SecondBrain's decision log uses (`### YYYY-MM-DD — Title`, then `- **Status:**`, `- **Decision:**`).
 
 It reaches a session three ways: Claude Code's SessionStart hook and Codex's (`fleet charter --hook claude`
@@ -56,7 +58,7 @@ def build(cwd=None, global_files=None, sam_mode=SAM_MODE, budget=LINE_BUDGET) ->
     lines = [f"Charter ({dt.date.today().isoformat()}): Sam's standing decisions. Follow them; a newer one wins."]
     lines += _sam_mode(sam_mode)
     repo = _repo_root(cwd) if cwd else None
-    repo_ds = [d for name in REPO_DECISIONS for d in decisions(repo / name)] if repo else []
+    repo_ds = [d for name in REPO_DECISIONS for d in decisions(repo / name)] if repo and sams_repo(repo) else []
     global_ds = [d for f in (global_files if global_files is not None else GLOBAL_DECISIONS) for d in decisions(f)]
     for title, ds in ((f"Decisions in {repo.name}:" if repo else None, repo_ds), ("Global decisions:", global_ds)):
         if not ds:
@@ -66,6 +68,17 @@ def build(cwd=None, global_files=None, sam_mode=SAM_MODE, budget=LINE_BUDGET) ->
     if len(lines) > budget:
         lines = lines[:budget - 1] + [f"(older decisions omitted to stay within {budget} lines)"]
     return "\n".join(lines)
+
+
+OWNER = "SamGu-NRX"
+
+
+def sams_repo(repo: Path) -> bool:
+    from .envelope import _git, _same_remote, load_topology
+    topo = load_topology(repo)
+    actual = _git(repo, "remote", "get-url", "origin")
+    return bool(topo and OWNER in (topo.get("owners") or []) and actual and topo.get("origin")
+                and _same_remote(actual, topo["origin"]))
 
 
 def _repo_root(cwd) -> Path | None:

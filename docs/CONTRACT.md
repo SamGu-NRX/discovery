@@ -286,9 +286,9 @@ The runner also watches Sam's T3 threads (runner/README.md, Fleet). It is a seco
 
 - **Reads** come only from T3's database, `~/.t3/userdata/statev2.sqlite`, opened read-only. A schema check at startup disables the watcher, naming each missing column, when T3's schema changes.
 - **Writes** go only through T3's MCP endpoint, with a sign-in Sam approved at Auto. T3 refuses that sign-in any thread above Auto, so the operator cannot message the Full access threads Sam runs; those get a card and Sam resumes them himself.
-- **Cards** are for abnormal ends only: a failed run, a run interrupted when nothing shows Sam stopped it, or an open run with no activity for 30 minutes. A normal finish gets none, because T3 already notifies Sam. A run Sam stopped is never acted on.
-- **Launches** happen only with `fleet_mode` set to `full`. They run at Auto or lower, from an envelope that names the repo, its origin, the route's model, the base branch and the round, and a drafted brief launches only after Sam replies "go" in the Operator thread. The brief quotes Sam's words below a divider, unchanged.
-- The fleet makes no model calls of its own, so invariant 6 holds.
+- **Cards** are for abnormal ends only: a failed run, a run interrupted when nothing shows Sam stopped it, a started run cancelled and not continued, or an open run with no activity for 30 minutes. A normal finish gets none, because T3 already notifies Sam. A run Sam stopped is never acted on. Card text from other threads is quoted as data (invariant 3), and each card message starts one turn in the Operator thread.
+- **Launches** happen only with `fleet_mode` set to `full`. They run at Auto or lower, from an envelope that names the repo, its origin, the route's model, the base branch and the round. A drafted brief is shown in the Operator thread and launches only after Sam replies "go" there. It quotes Sam's words below a divider, unchanged.
+- The fleet makes no model calls of its own, so invariant 6 holds. The Operator thread's turns use whatever model that thread runs.
 
 ## Appendix: X GraphQL paths
 

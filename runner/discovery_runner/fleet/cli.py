@@ -1,6 +1,7 @@
 """`discovery-runner fleet <command>`. See runner/README.md, "Fleet"."""
 import argparse
 import datetime as dt
+import hashlib
 import json
 import re
 import sys
@@ -51,36 +52,82 @@ def record_cards(cards):
 
 
 def drafts() -> dict:
+    """Drafted launches waiting for Sam. `last_go` starts when the file is made, so a "go" typed before then
+    never counts."""
     f = config.path("state", "fleet-drafts.json")
-    return json.loads(f.read_text()) if f.exists() else {"next": 1, "items": {}, "last_go": None}
+    return json.loads(f.read_text()) if f.exists() else {"next": 1, "items": {}, "last_go": _now_ms()}
+
+
+def _now_ms():
+    return watch.iso(dt.datetime.now(dt.timezone.utc))  # T3's own format, so times compare as strings
 
 
 def save_drafts(d):
     config.path("state", "fleet-drafts.json").write_text(json.dumps(d, indent=1))
 
 
-def take_go(con, operator_thread, d) -> list[int]:
-    """Numbers from Sam's newest "go 2 4" in the Operator thread, once each. Only text he typed counts."""
-    msgs = probe.sam_messages_after(con, operator_thread, d.get("last_go") or "", limit=20)
-    nums = []
-    for m in msgs:
+def take_go(con, operator_thread, d) -> list[tuple[int, str]]:
+    """(number, time) for each draft Sam named in a "go 2 4" he typed in the Operator thread, in order."""
+    out = []
+    for m in probe.sam_messages_after(con, operator_thread, d["last_go"], limit=50):
         g = GO.match(m["text"])
         if g:
-            nums += [int(x) for x in g.group(1).split()]
+            out += [(int(x), m["created_at"]) for x in g.group(1).split()]
         d["last_go"] = m["created_at"]
-    return nums
+    return out
+
+
+def run_drafts(cfg, con, launcher, d) -> list[dict]:
+    """Show each new draft in the Operator thread, then launch the ones Sam approved after seeing them."""
+    op = cfg["fleet_operator_thread"]
+    for n, item in d["items"].items():
+        if item.get("posted_at"):
+            continue
+        env = envelope.Envelope(**item["envelope"])
+        key = "fk-draft-" + env.key()[3:]
+        text = (f"Draft {n}: {envelope.title(env)}\n\n{envelope.render_brief(env)}\nReply `go {n}` to launch it."
+                f"\n\n{launcher_mark()}{key}")
+        rec = launcher.write("draft", key, "t3_thread_send", {"threadId": op, "message": text, "mode": "queue"},
+                             thread_id=op)
+        if rec["state"] == "accepted":
+            item["posted_at"] = _now_ms()
+    launched = []
+    for n, said_at in take_go(con, op, d):
+        item = d["items"].get(str(n))
+        if item is None or not item.get("posted_at") or said_at <= item["posted_at"]:
+            log(f"go {n}: no draft {n} had been shown when Sam typed it")
+            continue
+        try:
+            launched.append(launcher.launch(envelope.Envelope(**item["envelope"]), approved_by_go=True))
+            d["items"].pop(str(n))
+        except envelope.Refused as e:
+            item["refused"] = str(e)  # the draft stays; Sam can type "go" again once the reason clears
+            key = f"fk-note-{n}-" + hashlib.sha256(f"{said_at}\n{e}".encode()).hexdigest()[:16]
+            launcher.write("note", key, "t3_thread_send",
+                           {"threadId": op, "mode": "queue",
+                            "message": f"Draft {n} was not launched: {e}\n\n{launcher_mark()}{key}"},
+                           thread_id=op)
+    return launched
+
+
+def launcher_mark():
+    from .launcher import MARK
+    return MARK
 
 
 def cycle(cfg, con, watcher, launcher, outbox):
-    cards = watcher.cycle()
+    cards = watcher.cycle(commit=False)
+    if watcher.errors:
+        log(f"watcher skipped {len(watcher.errors)} runs: {watcher.errors[:3]}")
     if cards:
         record_cards(cards)
         log(f"{len(cards)} new cards: {[c['key'] for c in cards]}")
     batches = outbox.load()
+    if launcher is not None and cards:
+        batches.append(cards)
+        outbox.save(batches)  # before the watcher records them as seen, so a crash re-finds them
+    watcher.commit()
     if launcher is not None:
-        if cards:
-            batches.append(cards)
-            outbox.save(batches)  # before posting: a T3 error below must not lose the new cards
         while batches:
             posted = launcher.post_cards(cfg["fleet_operator_thread"], batches[0])
             if not posted or posted["state"] != "accepted":
@@ -90,16 +137,10 @@ def cycle(cfg, con, watcher, launcher, outbox):
     launched = []
     if launcher is not None and launcher.mode == "full":
         d = drafts()
-        for n in take_go(con, cfg["fleet_operator_thread"], d):
-            item = d["items"].pop(str(n), None)
-            if item is None:
-                log(f"go {n}: no such draft")
-                continue
-            try:
-                launched.append(launcher.launch(envelope.Envelope(**item), approved_by_go=True))
-            except envelope.Refused as e:
-                log(f"go {n}: {e}")
-        save_drafts(d)
+        try:
+            launched = run_drafts(cfg, con, launcher, d)
+        finally:
+            save_drafts(d)
     return {"cards": len(cards), "unposted": sum(len(b) for b in batches), "launched": len(launched),
             "scan_rows": watcher.last_scan_rows}
 
@@ -117,7 +158,8 @@ def loop(cfg):
             if con is None or time.time() >= next_schema_check:
                 con = _con(cfg)
                 next_schema_check = time.time() + 3600
-                watcher = watch.Watcher(con, stall_min=cfg["fleet_stall_min"])
+                watcher = watch.Watcher(con, stall_min=cfg["fleet_stall_min"],
+                                        exclude_threads={cfg["fleet_operator_thread"]} - {None})
                 launcher = None
                 if cfg["fleet_operator_thread"]:
                     launcher = Launcher(con, mode=cfg["fleet_mode"], log=log)
@@ -201,7 +243,7 @@ def main(argv):
         envelope.check(env, con)
         d = drafts()
         n = d["next"]
-        d["items"][str(n)] = env.__dict__
+        d["items"][str(n)] = {"envelope": env.__dict__}
         d["next"] = n + 1
         save_drafts(d)
-        print(f"draft {n} queued; Sam replies \"go {n}\" in the Operator thread to launch it")
+        print(f"draft {n} queued; the loop shows it in the Operator thread, and Sam replies \"go {n}\" to launch it")

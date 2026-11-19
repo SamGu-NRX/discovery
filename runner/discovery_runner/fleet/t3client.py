@@ -32,8 +32,20 @@ class T3Error(RuntimeError):
 
 
 class T3Unreachable(RuntimeError):
-    """No answer: T3 is down, or the connection dropped before the response. The call may have landed."""
+    """No answer: the connection dropped before the response. The call may have landed."""
 
+
+class T3Down(T3Unreachable):
+    """T3 refused the connection, so the call never reached it."""
+
+
+class SessionExpired(T3Error):
+    """T3 no longer knows this MCP session (it restarted). Nothing in the request ran."""
+
+
+# A token from an approval above Auto carries these too (t3code packages/contracts/src/auth.ts
+# mcpClientScopes); the operator must never hold one.
+ABOVE_AUTO_SCOPES = {"settings:write", "source-control:write"}
 
 def origin() -> str:
     return json.loads(RUNTIME.expanduser().read_text())["origin"]
@@ -66,8 +78,14 @@ class Client:
                 raw = r.read().decode()
                 ctype = r.headers.get("content-type", "")
         except urllib.error.HTTPError as e:
+            if e.code == 404 and self.session:
+                raise SessionExpired("T3 no longer knows this MCP session") from None
             raise T3Error(f"T3 answered HTTP {e.code}: {e.read()[:300]!r}") from None
-        except (urllib.error.URLError, ConnectionError, socket.timeout, http.client.HTTPException) as e:
+        except urllib.error.URLError as e:
+            if isinstance(e.reason, ConnectionRefusedError):
+                raise T3Down(f"T3 is not listening at {self.endpoint}") from None
+            raise T3Unreachable(f"{type(e).__name__}: {e}") from None
+        except (ConnectionError, socket.timeout, http.client.HTTPException) as e:
             raise T3Unreachable(f"{type(e).__name__}: {e}") from None
         if not raw.strip():
             return None
@@ -102,7 +120,12 @@ class Client:
 
     def call(self, tool: str, args: dict) -> dict:
         self.open()
-        res = self._rpc("tools/call", {"name": tool, "arguments": args})
+        try:
+            res = self._rpc("tools/call", {"name": tool, "arguments": args})
+        except SessionExpired:
+            self.session = None
+            self.open()
+            res = self._rpc("tools/call", {"name": tool, "arguments": args})
         if res.get("isError"):
             text = " ".join(c.get("text", "") for c in res.get("content", []))
             raise T3Error(f"{tool}: {text[:500]}")
@@ -113,6 +136,14 @@ class Client:
             return json.loads(text)
         except ValueError:
             return {"text": text}
+
+
+def check_scopes(scope: str | None):
+    """Refuse a token approved above Auto (or one that cannot send at all) before it is saved."""
+    scopes = set((scope or "").split())
+    if "orchestration:operate" not in scopes or scopes & ABOVE_AUTO_SCOPES:
+        raise T3Error(f"the approval was not at Auto (scopes: {sorted(scopes) or 'none'}); nothing was saved. "
+                      "Run `fleet login` again and choose Auto")
 
 
 def login(t3_origin: str | None = None, token_file=TOKEN_FILE, open_browser=True, timeout=600) -> Path:
@@ -166,6 +197,7 @@ def login(t3_origin: str | None = None, token_file=TOKEN_FILE, open_browser=True
             timeout=30).read())
     finally:
         srv.shutdown()
+    check_scopes(tok.get("scope"))
     f = Path(token_file).expanduser()
     f.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(f, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)

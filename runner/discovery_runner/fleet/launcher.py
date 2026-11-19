@@ -2,16 +2,18 @@
 
 Each write has a stable key (`fk-...`), sent as T3's `clientRequestId` and also written as a last line,
 `fleet-key: <key>`, in the message itself. The key is recorded in a journal before the call and marked
-accepted after it. On any retry the launcher first searches T3's database for that line, so a write that
-landed is never sent again, even when the answer was lost, the runner was killed after T3 accepted, or T3
-restarted and its replay of `clientRequestId` no longer applies (T3 scopes the replay to the sign-in
-session: t3code apps/server/src/mcp/OrchestratorMcpService.ts stableCommandId).
+accepted after it. T3 replays a repeated `clientRequestId` within one sign-in, across T3 restarts
+(t3code apps/server/src/mcp/OrchestratorMcpService.ts stableCommandId; auth/McpOAuth.ts:627). A new
+`fleet login` starts a new sign-in, and the replay no longer applies. So on any retry the launcher first
+reads T3's messages table for the key line, written since the first attempt, and sends only when it is
+absent. T3's search index leaves out messages agents write, so the lookup reads the table itself.
 
 Two modes, from config `fleet_mode`:
 - `cards` (the default): post cards to the Operator thread. Nothing else.
-- `full`: also launch drafted briefs Sam approved with "go", the unattended templates, and resume threads
-  the operator launched itself.
+- `full`: also launch drafted briefs Sam approved with "go". Resuming the operator's own threads and the
+  unattended wrap and correct launches are not wired to the loop yet.
 """
+import datetime as dt
 import fcntl
 import hashlib
 import json
@@ -21,7 +23,7 @@ from pathlib import Path
 
 from .. import config
 from . import envelope, probe, receipts, watch
-from .t3client import Client, T3Error, T3Unreachable, login  # noqa: F401 (login: the CLI's sign-in)
+from .t3client import Client, T3Down, T3Error, T3Unreachable, login  # noqa: F401 (login: the CLI's sign-in)
 
 LIMITS_FILE = Path("~/.agent-config/operator/limits.json")
 # Starting values from the design (final-design.md 3.3), not measured.
@@ -69,43 +71,51 @@ class Launcher:
     def _after_accept(self, key, result):
         """Test seam: runs after T3 accepted and before the journal records it."""
 
-    def find_marker(self, key, thread_id=None):
-        """The message carrying `fleet-key: <key>`, from T3's database, or None."""
-        q = f'"{MARK}{key}"'
-        sql = (f"SELECT m.thread_id, m.message_id FROM {probe.MESSAGE_SEARCH} s JOIN {probe.MESSAGES} m"
-               f" ON m.rowid = s.rowid WHERE {probe.MESSAGE_SEARCH} MATCH ? AND m.role = 'user'")
-        args = [q]
-        if thread_id:
-            sql += " AND m.thread_id = ?"
-            args.append(thread_id)
-        r = self.con.execute(sql + " LIMIT 1", args).fetchone()
-        return {"thread_id": r[0], "message_id": r[1]} if r else None
+    def find_marker(self, key, rec) -> dict | None:
+        """The message carrying `fleet-key: <key>` written since the key's first attempt, or None."""
+        since = watch.iso(watch.parse(rec["first_at"]) - dt.timedelta(minutes=5))
+        line = f"{MARK}{key}"
+        if rec.get("thread_id"):
+            threads = [rec["thread_id"]]
+        else:  # a launch: the new thread is in the project, created since the first attempt
+            threads = [r[0] for r in self.con.execute(
+                f"SELECT thread_id FROM {probe.THREADS} WHERE project_id = ? AND created_at >= ?",
+                (rec.get("project_id"), since))]
+        for tid in threads:
+            for mid, payload in self.con.execute(
+                    f"SELECT message_id, payload_json FROM {probe.MESSAGES} WHERE thread_id = ? AND role = 'user'"
+                    " AND created_at >= ? ORDER BY created_at", (tid, since)):
+                if line in (json.loads(payload).get("text") or "").splitlines():
+                    return {"thread_id": tid, "message_id": mid}
+        return None
 
-    def write(self, op: str, key: str, tool: str, args: dict, thread_id=None, ask="") -> dict:
+    def write(self, op: str, key: str, tool: str, args: dict, thread_id=None, project_id=None, ask="") -> dict:
         with journal() as j:
             rec = j.get(key)
         if rec and rec["state"] == "accepted":
             return rec
-        if rec:
-            found = self.find_marker(key, thread_id)
+        if rec and rec["state"] in ("pending", "uncertain"):
+            found = self.find_marker(key, rec)
             if found:
                 return self._record(key, {**rec, "state": "accepted", **found, "recovered": True})
-        self._record(key, {"op": op, "state": "pending", "thread_id": thread_id, "at": config.now_iso(),
-                           "attempts": (rec or {}).get("attempts", 0) + 1})
+        base = {"op": op, "thread_id": thread_id, "project_id": project_id,
+                "first_at": (rec or {}).get("first_at") or config.now_iso(),
+                "attempts": (rec or {}).get("attempts", 0) + 1}
+        self._record(key, {**base, "state": "pending", "at": config.now_iso()})
         try:
             result = self.client.call(tool, {**args, "clientRequestId": key})
+        except T3Down:
+            raise  # the call never reached T3; the entry stays pending
         except T3Unreachable as e:
-            self._record(key, {"op": op, "state": "uncertain", "thread_id": thread_id, "at": config.now_iso(),
-                               "error": str(e)[:300], "attempts": (rec or {}).get("attempts", 0) + 1})
+            self._record(key, {**base, "state": "uncertain", "at": config.now_iso(), "error": str(e)[:300]})
             receipts.write({"ts": config.now_iso(), "level": "claimed", "for": ask, "key": key, "op": op,
                             "thread_id": thread_id, "flags": ["uncertain"], "error": str(e)[:300]})
             raise
         except T3Error as e:
-            self._record(key, {"op": op, "state": "refused", "thread_id": thread_id, "at": config.now_iso(),
-                               "error": str(e)[:300]})
+            self._record(key, {**base, "state": "refused", "at": config.now_iso(), "error": str(e)[:300]})
             raise
         self._after_accept(key, result)
-        return self._record(key, {"op": op, "state": "accepted", "at": config.now_iso(),
+        return self._record(key, {**base, "state": "accepted", "at": config.now_iso(),
                                   "thread_id": result.get("threadId") or thread_id, "run_id": result.get("runId")})
 
     def _record(self, key, rec):
@@ -148,13 +158,6 @@ class Launcher:
             f"SELECT count(DISTINCT thread_id) FROM {probe.RUNS} WHERE thread_id IN ({marks})"
             " AND status IN ('queued','preparing','starting','running','waiting')", ids).fetchone()[0]
 
-    def tree_runs(self, root_thread_id) -> int:
-        """Runs in a launched thread and every thread under it (T3's lineage.rootThreadId)."""
-        return self.con.execute(
-            f"SELECT count(*) FROM {probe.RUNS} r JOIN {probe.THREADS} t ON t.thread_id = r.thread_id"
-            " WHERE t.thread_id = ? OR json_extract(t.payload_json, '$.lineage.rootThreadId') = ?",
-            (root_thread_id, root_thread_id)).fetchone()[0]
-
     def project_for(self, repo) -> str:
         root = str(Path(repo).expanduser().resolve())
         r = self.con.execute("SELECT project_id FROM projection_projects WHERE workspace_root = ?"
@@ -164,6 +167,7 @@ class Launcher:
         return r[0]
 
     def launch(self, env: envelope.Envelope, approved_by_go=False, routes=None) -> dict:
+        """Every check runs before the daily budget is spent and before T3 is called."""
         envelope.check(env, self.con, routes)
         self._require_full("a launch")
         if env.template == "drafted" and not approved_by_go:
@@ -173,37 +177,19 @@ class Launcher:
             raise envelope.Refused({"disk": f"{free_gb:.1f} GB free, under the {self.lim['disk_floor_gb']} GB floor"})
         if self.open_launches() >= self.lim["concurrent"]:
             raise envelope.Refused({"concurrent": f"{self.lim['concurrent']} launched threads are still open"})
+        project_id = self.project_for(env.repo)
         key = env.key()
-        with journal() as j:
-            already = key in j
-        if not already and not config.take("fleet_launches", self.lim["launches_per_day"]):
-            raise envelope.Refused({"launches_per_day": f"{self.lim['launches_per_day']} launches today already"})
-        message = (envelope.render_brief(env) if env.template == "drafted" else template_text(env)) + f"\n{MARK}{key}\n"
-        args = {"projectId": self.project_for(env.repo), "title": env.title or f"{env.template} {env.ids}",
-                "message": message, "runtimeMode": env.runtime_mode,
+        message = (envelope.render_brief(env) if env.template == "drafted" else envelope.template_text(env))
+        args = {"projectId": project_id, "title": envelope.title(env), "message": message + f"\n{MARK}{key}\n",
+                "runtimeMode": env.runtime_mode,
                 "modelSelection": {"instanceId": env.provider, "model": env.model,
                                    "options": [{"id": "reasoningEffort" if env.provider.startswith("codex")
                                                 else "effort", "value": env.effort}]},
                 "workspaceStrategy": {"type": "worktree", "baseRef": f"origin/{env.base_branch}",
                                       "startFromOrigin": True}}
+        with journal() as j:
+            already = key in j
+        if not already and not config.take("fleet_launches", self.lim["launches_per_day"]):
+            raise envelope.Refused({"launches_per_day": f"{self.lim['launches_per_day']} launches today already"})
         ask = "\n".join(e["text"] for e in env.ask_verbatim)
-        return self.write("launch", key, "t3_thread_launch", args, ask=ask)
-
-    def resume_own(self, thread_id, run_id) -> dict:
-        """Continue a thread the operator launched. Any other thread is Sam's to resume."""
-        self._require_full("a resume")
-        if thread_id not in self.own_threads():
-            raise envelope.Refused({"thread": f"{thread_id} was not launched by the operator; Sam resumes it"})
-        key = "fk-resume-" + hashlib.sha256(f"{thread_id}\n{run_id}".encode()).hexdigest()[:24]
-        text = (f"Your run {run_id} ended without finishing. Continue the task from where it stopped, and say "
-                f"what changed since.\n\n{MARK}{key}\n")
-        return self.write("resume", key, "t3_thread_send", {"threadId": thread_id, "message": text, "mode": "queue"},
-                          thread_id=thread_id)
-
-
-def template_text(env: envelope.Envelope) -> str:
-    if env.template == "wrap":
-        return f"Run the nightly wrap for {env.ids['date']} as runner/README.md, Fleet, describes."
-    if env.template == "correct":
-        return f"Fix mistake class {env.ids['class_id']} at the highest level that works, as runner/README.md describes."
-    raise envelope.Refused({"template": f"{env.template} has no launch text"})
+        return self.write("launch", key, "t3_thread_launch", args, project_id=project_id, ask=ask)

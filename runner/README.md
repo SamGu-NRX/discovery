@@ -90,9 +90,9 @@ launchctl print gui/$(id -u)/com.samgu.discovery-runner | grep -E 'state|pid'
 
 ## Fleet
 
-The fleet watcher finds T3 runs that ended abnormally and posts one card for each to a pinned Operator thread. It runs as a second launchd job, `fleet loop`, every 2 minutes, because the main loop sleeps 10 minutes and can block on preps. It obeys `STOP`. It makes no model calls.
+The fleet watcher finds T3 runs that ended abnormally and posts one card for each to a pinned Operator thread. It runs as a second launchd job, `fleet loop`, every 2 minutes, because the main loop sleeps 10 minutes and can block on preps. It obeys `STOP`. It makes no model calls of its own, but each card message starts one turn in the Operator thread.
 
-**Where it reads.** It reads only T3's database, `~/.t3/userdata/statev2.sqlite`, opened read-only (`mode=ro`, `query_only`). Each cycle runs one query on `orchestration_v2_projection_runs`, joined to the thread table for mode, parent and archived state. The query is watermarked on `requested_at` and `completed_at`, with 2 minutes of overlap, plus the runs still open. On the live 17 GB database on 2026-11-19, a full 14-day poll of 3,346 runs took 38 ms and a normal cycle 9 ms. At startup, `probe.py` checks every table and column the fleet queries. If T3's schema changes, the watcher stops and logs each missing column as `WATCHER DISABLED`; it rechecks hourly.
+**Where it reads.** It reads only T3's database, `~/.t3/userdata/statev2.sqlite`, opened read-only (`mode=ro`, `query_only`). Each cycle runs one query on `orchestration_v2_projection_runs`, joined to the thread table for mode, parent and archived state. The query is watermarked on `requested_at` and `completed_at`, with 2 minutes of overlap, plus the runs still open. T3 has no index on those two columns, so the query scans the run table. On 2026-11-19 that was 22,852 rows: a cycle took 9 ms warm and about 0.3 s cold, and a full 14-day poll took 38 ms. At startup, `probe.py` checks every table and column the fleet queries. If T3's schema changes, the watcher stops and logs each missing column as `WATCHER DISABLED`; it rechecks hourly.
 
 **What gets a card.**
 
@@ -100,22 +100,35 @@ The fleet watcher finds T3 runs that ended abnormally and posts one card for eac
 | --- | --- |
 | `completed` | None. T3 already notifies Sam |
 | `failed` | Yes, with T3's failure class and message |
-| `interrupted`, stopped from Sam's app | None. That needs a client stop command in T3's receipts and one of the texts T3 writes for an app stop |
+| `interrupted`, stopped by Sam | None. The stop command must come from his app (a client UUID, a force stop, or a cascade from his stop of the lead), and the interrupt item must carry the text T3 writes for that kind of stop |
 | `interrupted` by an agent (an MCP stop) | Yes, with the agent's reason |
 | `interrupted` with no clear evidence | Yes, marked unclear. Never acted on |
+| `cancelled` after it started | Yes, if 10 minutes later no run continues it. T3 cancels runs a restart kills and usually continues them itself |
 | open, nothing new for `fleet_stall_min` (30) minutes | Yes, if the watcher has been awake that whole time, so a Mac that slept does not stall every run |
 
-A dead child's card names its lead and says whether the lead is idle. Nothing is sent to either. A Full access thread can only be resumed by Sam, because T3 refuses the operator's Auto sign-in there (`threadAccess.ts`).
+A dead child's card names its lead and says whether the lead is idle. Nothing is sent to either. The Operator thread never cards itself. A Full access thread can only be resumed by Sam, because T3 refuses the operator's Auto sign-in there (`threadAccess.ts`). Card text that comes from other threads, such as titles, T3's error text and agents' stop reasons, is quoted and labeled as data.
 
-**Writes.** Only `launcher.py` writes to T3, and only through `t3client.py`. A test fails if any other module imports it. Each write has a stable key. The key goes to T3 as `clientRequestId` and also into the message as a last line, `fleet-key: <key>`. A journal (`state/fleet-journal.json`) records each write before the call and marks it accepted after. Before any retry, the launcher searches T3's database for the key line. So a lost answer, a kill after T3 accepted, or a T3 restart never sends a second message. A lost answer is also written as an `uncertain` receipt. Cards T3 has not accepted stay in `state/fleet-outbox.json`.
+**Writes.** Only `launcher.py` writes to T3, and only through `t3client.py`. A test fails if any other module imports it.
 
-**Modes** (`fleet_mode`): `cards`, the default, only posts cards. `full` also:
+- **Stable keys.** Each write has a stable key. The key goes to T3 as `clientRequestId`, and T3 replays a repeated key within one sign-in, across T3 restarts. The key also goes into the message as a last line, `fleet-key: <key>`.
+- **Journal.** `state/fleet-journal.json` records each write before the call and marks it accepted after.
+- **Retries.** Before any retry, the launcher reads T3's messages table for the key line. A new sign-in drops T3's replay, so this check stops a second message even then. It reads the table directly because T3's search index leaves out messages agents write.
+- **Lost answers.** A lost answer is written as an `uncertain` receipt. A refused connection is not, because that call never reached T3.
+- **Card order.** The watcher saves a run as seen only after its card is in `state/fleet-outbox.json`. Cards T3 has not accepted stay there.
 
-- launches a drafted brief after Sam types `go 2 4` in the Operator thread. Only text whose `createdBy` is "user" counts;
-- launches the unattended templates `wrap(date)` and `correct(class_id)`;
-- resumes threads the operator launched itself.
+**Modes** (`fleet_mode`): `cards`, the default, only posts cards. `full` also shows each drafted launch (`fleet draft`) in the Operator thread and launches it once Sam types `go 2` there. Only text whose `createdBy` is "user" counts, and only a "go" typed after the draft was shown. A launch refused at that point stays queued, and the Operator thread says why. Resuming the operator's own threads, the unattended `wrap` and `correct` launches, and the design's 20-runs-per-launch limit are not built yet.
 
-Launches run at Auto or lower. `envelope.py` refuses a launch missing its repo, origin, route model, base branch or round, naming each field. It also refuses a model that is not one of the route's T3 targets in `routes.json`, a repo without `.agents/topology.json`, round 4, and a brief written from anything but Sam's words. A drafted brief quotes Sam below a divider, and each excerpt must appear byte for byte in a message he typed. Limits come from `~/.agent-config/operator/limits.json` when it exists, otherwise from the design's starting values: 12 launches a day, 3 open at once, an 8 GB disk floor and 24 card messages a day.
+**Launch checks.** Launches run at Auto or lower. `envelope.py` refuses each of these before T3 is called, naming the field:
+
+- a launch missing its repo, origin, route model, base branch or round;
+- a model that is not one of the route's T3 targets in `routes.json`;
+- a repo without `.agents/topology.json`;
+- round 4;
+- quoted words that are not Sam's.
+
+A drafted brief quotes Sam below a divider. Each excerpt's pieces, split at `[...]`, must appear in a message he typed, byte for byte, in order and on word edges, at least two words each. The brief above the divider is the drafter's own text; Sam reads it before he types "go".
+
+**Limits.** They come from `~/.agent-config/operator/limits.json` when it exists, otherwise from the design's starting values: 12 launches a day, 3 open at once, and an 8 GB disk floor. A 24-a-day cap on card messages is not in the design; it stops a runaway loop.
 
 **Receipts** (`logs/receipts.jsonl`) record what the runner checked:
 
@@ -125,7 +138,7 @@ Launches run at Auto or lower. `envelope.py` refuses a launch missing its repo, 
 
 `mismatch` means an executed model differed from the requested one. A provider that reports no model shows "model unknown".
 
-**The charter** is the block a new session starts with: confirmed decisions from the repo and from SecondBrain's decision log, newest first, 40 lines at most.
+**The charter** is the block a new session starts with, 40 lines at most. It holds confirmed decisions from SecondBrain's decision log, newest first, plus the repo's own decisions when the repo is Sam's (its `topology.json` lists him as owner and matches its origin).
 
 | Command | What it does |
 | --- | --- |
@@ -133,10 +146,10 @@ Launches run at Auto or lower. `envelope.py` refuses a launch missing its repo, 
 | `fleet replay [--days 14]` | Day-1 check: replays the window through the watcher and scores it on real dead, Sam-stopped and healthy runs. Exits 1 on a fail |
 | `fleet cycle` | One cycle over the last 24 hours. Prints the cards and posts nothing |
 | `fleet find "<question>"`, `fleet find --eval cases.json` | Which thread was that? Searches titles, Sam's messages and answers, archived threads included |
-| `fleet charter [--hook claude\|codex] [--publish FILE]` | Prints the session-start block, as SessionStart hook JSON, or writes it between markers in a CLAUDE.md or AGENTS.md |
+| `fleet charter [--hook claude] [--publish FILE]` | Prints the session-start block, as Claude Code SessionStart hook JSON, or writes it between markers in a CLAUDE.md or AGENTS.md (the route that was checked for Codex) |
 | `fleet observe <run_id> --ask "<Sam's words>"` | Writes an observed receipt |
 | `fleet draft <envelope.json>` | Checks a drafted launch and queues it for Sam's `go` |
-| `fleet login` | Signs the runner in to T3. Sam approves at Auto on T3's page. The token goes to `~/.agent-secrets/discovery-t3-mcp` (mode 600) |
+| `fleet login` | Signs the runner in to T3. Sam approves at Auto on T3's page. A token with scopes above Auto is refused and never saved; a good one goes to `~/.agent-secrets/discovery-t3-mcp` (mode 600) |
 | `fleet loop` | The launchd job |
 
 Install, after `fleet login` and setting `fleet_operator_thread` in the config:

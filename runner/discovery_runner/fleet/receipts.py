@@ -98,8 +98,10 @@ def read_all() -> list[dict]:
 
 
 def flags_now(receipt: dict, gaps: list[list[str]]) -> list[str]:
-    """The receipt's flags plus `stale` when the Mac slept after it was written."""
-    stale = any(start >= receipt["ts"] for start, _ in gaps)
+    """The receipt's flags plus `stale` when the Mac slept after it was written: a gap that ended later."""
+    from .watch import parse
+    written = parse(receipt["ts"])
+    stale = any(parse(end) > written for _, end in gaps)
     return receipt.get("flags", []) + (["stale"] if stale else [])
 
 

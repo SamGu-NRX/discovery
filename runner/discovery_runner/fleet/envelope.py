@@ -5,12 +5,20 @@ route's provider, model and effort must be one of the T3 targets `routes.json` l
 repo must carry `.agents/topology.json` and an `origin` remote that matches it. Runtime mode is Auto or lower.
 
 A drafted launch carries text, so it also needs Sam's words: `ask_verbatim` is a list of excerpts, each
-naming the T3 messages it quotes. Every piece of an excerpt (split at `[...]`) must appear byte for byte in
-one of those messages, and each message must be one Sam typed (T3's `createdBy` is "user"). The rendered
-brief puts those words below a divider, unchanged.
+naming the T3 messages it quotes, and each message must be one Sam typed (T3's `createdBy` is "user").
+The pieces of an excerpt, split at `[...]`, must appear byte for byte in one of those messages, in order,
+without overlapping, starting and ending on word edges, each at least two words long. That keeps a cut
+from reordering Sam's words or slicing a word in half. It cannot stop a cut from leaving out a word that
+mattered, which is why every cut stays visible as `[...]`. The rendered brief puts those words below a
+divider, unchanged. The brief itself is written by the drafter and is not checked against Sam's words;
+Sam reads it before he types "go".
+
+An unattended template (`wrap`, `correct`) carries ids only, each checked against a pattern, and its title
+and text are built from them.
 """
 import hashlib
 import json
+import re
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -18,8 +26,9 @@ from pathlib import Path
 from . import probe
 
 ROUTES = Path("~/.agent-config/claude/agent-references/routing/routes.json")
-TEMPLATES = ("drafted", "wrap", "correct", "resume_own")
-UNATTENDED = ("wrap", "correct", "resume_own")  # a template id plus ids; no free text
+TEMPLATES = ("drafted", "wrap", "correct")
+TEMPLATE_IDS = {"wrap": {"date": re.compile(r"\d{4}-\d{2}-\d{2}")},
+                "correct": {"class_id": re.compile(r"[a-z0-9][a-z0-9-]{0,39}")}}
 MODES_AT_OR_BELOW_AUTO = ("approval-required", "auto-accept-edits", "auto")
 MAX_ROUND = 3
 CUT = "[...]"
@@ -48,8 +57,7 @@ class Envelope:
     runtime_mode: str = "auto"
     brief: str = ""
     ask_verbatim: list = field(default_factory=list)  # [{"text": str, "source_message_ids": [str]}]
-    text_source: str = "sam"  # who wrote brief and title: "sam" or the template; anything read is refused
-    ids: dict = field(default_factory=dict)  # template ids: wrap(date), correct(class_id), resume_own(thread, run)
+    ids: dict = field(default_factory=dict)  # template ids: wrap(date), correct(class_id)
 
     def key(self) -> str:
         """Stable across retries: the same envelope always yields the same clientRequestId."""
@@ -90,11 +98,13 @@ def check(env: Envelope, con=None, routes=None) -> None:
         p["runtime_mode"] = f"{env.runtime_mode!r} is above Auto; the operator launches at Auto or lower"
     if env.round is not None and not (isinstance(env.round, int) and 1 <= env.round <= MAX_ROUND):
         p["round"] = f"round {env.round} is outside 1..{MAX_ROUND}; a fourth round needs Sam"
-    if env.text_source != "sam" and env.template == "drafted":
-        p["text_source"] = (f"text from {env.text_source!r} can make a card, never fill a launch field; "
-                            "Sam must write or approve the brief")
-    if env.template in UNATTENDED and (env.brief or env.ask_verbatim):
-        p["brief"] = f"an unattended {env.template} launch carries ids only, no text"
+    if env.template in TEMPLATE_IDS:
+        if env.brief or env.ask_verbatim or env.title:
+            p["brief"] = f"an unattended {env.template} launch carries ids only, no text"
+        want = TEMPLATE_IDS[env.template]
+        if set(env.ids) != set(want) or not all(isinstance(env.ids[k], str) and rx.fullmatch(env.ids[k])
+                                                 for k, rx in want.items()):
+            p["ids"] = f"{env.template} takes exactly {sorted(want)}, each matching its pattern"
     if env.repo and "repo" not in p:
         repo = Path(env.repo).expanduser()
         topo = load_topology(repo) if repo.is_dir() else None
@@ -128,6 +138,8 @@ def check(env: Envelope, con=None, routes=None) -> None:
     if env.template == "drafted":
         if not env.brief.strip():
             p["brief"] = "a drafted launch needs a brief"
+        elif any(l.strip() == DIVIDER or VERBATIM_HEADER in l or "fleet-key:" in l for l in env.brief.splitlines()):
+            p["brief"] = "the brief may not contain the divider, the verbatim header or a fleet-key line"
         if not env.ask_verbatim:
             p["ask_verbatim"] = "a drafted launch quotes Sam's words"
         elif con is None:
@@ -140,8 +152,43 @@ def check(env: Envelope, con=None, routes=None) -> None:
         raise Refused(p)
 
 
+MIN_PIECE_WORDS = 2
+
+
+def _find_on_word_edges(text: str, piece: str, start: int) -> int:
+    i = text.find(piece, start)
+    while i >= 0:
+        before = text[i - 1] if i else " "
+        after = text[i + len(piece)] if i + len(piece) < len(text) else " "
+        edge = lambda a, b: not (a.isalnum() and b.isalnum())
+        if edge(before, piece[0]) and edge(piece[-1], after):
+            return i
+        i = text.find(piece, i + 1)
+    return -1
+
+
+def excerpt_in(text: str, excerpt: str) -> bool:
+    """The excerpt's pieces appear in `text` in order, without overlap, on word edges."""
+    pieces = [p.strip() for p in excerpt.split(CUT)]
+    cut = len(pieces) > 1
+    if not any(pieces) or (cut and any(len(p.split()) < MIN_PIECE_WORDS for p in pieces if p)):
+        return False
+    if not cut:
+        return _find_on_word_edges(text, excerpt, 0) >= 0
+    pos = 0
+    for piece in (p for p in pieces if p):
+        i = _find_on_word_edges(text, piece, pos)
+        if i < 0:
+            return False
+        pos = i + len(piece)
+    return True
+
+
 def verbatim_problems(con, excerpts) -> str | None:
     for i, ex in enumerate(excerpts, 1):
+        text = ex.get("text") or ""
+        if not text.strip():
+            return f"excerpt {i} is empty"
         sources = []
         for mid in ex.get("source_message_ids") or []:
             row = con.execute(f"SELECT payload_json FROM {probe.MESSAGES} WHERE message_id = ?", (mid,)).fetchone()
@@ -153,10 +200,26 @@ def verbatim_problems(con, excerpts) -> str | None:
             sources.append(payload.get("text") or "")
         if not sources:
             return f"excerpt {i} names no source message"
-        for piece in (s.strip() for s in ex["text"].split(CUT)):
-            if piece and not any(piece in s for s in sources):
-                return f"excerpt {i}: {piece[:60]!r} is not in Sam's message"
+        if not any(excerpt_in(src, text) for src in sources):
+            return (f"excerpt {i}: {text[:60]!r} is not Sam's words in order, on word edges, with at least "
+                    f"{MIN_PIECE_WORDS} words around each cut")
     return None
+
+
+def title(env: Envelope) -> str:
+    if env.template == "wrap":
+        return f"Nightly wrap {env.ids['date']}"
+    if env.template == "correct":
+        return f"Correct mistake class {env.ids['class_id']}"
+    return env.title or "Operator launch"
+
+
+def template_text(env: Envelope) -> str:
+    if env.template == "wrap":
+        return f"Run the nightly wrap for {env.ids['date']} as runner/README.md, Fleet, describes."
+    if env.template == "correct":
+        return f"Fix mistake class {env.ids['class_id']} at the highest level that works, as runner/README.md describes."
+    raise Refused({"template": f"{env.template} has no template text"})
 
 
 def quote(text: str) -> str:

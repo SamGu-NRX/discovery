@@ -132,37 +132,22 @@ def probe(con, sample_thread_ids=None) -> dict:
 
 def sam_messages(con, thread_id, limit=20, before=None):
     """Messages Sam typed (role user, not written by an agent), newest first."""
-    rows = con.execute(
-        f"SELECT message_id, created_at, payload_json FROM {MESSAGES} WHERE thread_id = ? AND role = 'user'"
-        " AND (? IS NULL OR created_at < ?) ORDER BY created_at DESC LIMIT ?",
-        (thread_id, before, before, limit * 3)).fetchall()
-    out = []
-    for r in rows:
-        p = json.loads(r["payload_json"])
-        if not typed_by_sam(p):
-            continue
-        out.append({"message_id": r["message_id"], "created_at": r["created_at"], "text": p.get("text") or ""})
-        if len(out) >= limit:
-            break
-    return out
+    return [{"message_id": r[0], "created_at": r[1], "text": r[2] or ""} for r in con.execute(
+        f"SELECT message_id, created_at, json_extract(payload_json, '$.text') FROM {MESSAGES} WHERE thread_id = ?"
+        " AND role = 'user' AND json_extract(payload_json, '$.createdBy') = 'user' AND (? IS NULL OR created_at < ?)"
+        " ORDER BY created_at DESC LIMIT ?", (thread_id, before, before, limit))]
 
 
 def sam_messages_after(con, thread_id, after, limit=1):
     """The first messages Sam typed in a thread after a timestamp, oldest first."""
-    out = []
-    for r in con.execute(f"SELECT message_id, created_at, payload_json FROM {MESSAGES} WHERE thread_id = ?"
-                         " AND role = 'user' AND created_at > ? ORDER BY created_at LIMIT ?",
-                         (thread_id, after, limit * 10)):
-        p = json.loads(r["payload_json"])
-        if typed_by_sam(p):
-            out.append({"message_id": r["message_id"], "created_at": r["created_at"], "text": p.get("text") or ""})
-            if len(out) >= limit:
-                break
-    return out
+    return [{"message_id": r[0], "created_at": r[1], "text": r[2] or ""} for r in con.execute(
+        f"SELECT message_id, created_at, json_extract(payload_json, '$.text') FROM {MESSAGES} WHERE thread_id = ?"
+        " AND role = 'user' AND created_at > ? AND json_extract(payload_json, '$.createdBy') = 'user'"
+        " ORDER BY created_at LIMIT ?", (thread_id, after, limit))]
 
 
 def typed_by_sam(payload: dict) -> bool:
-    """T3 marks every user-role message with `createdBy`: "user" for what Sam typed (web, mobile or the t3
-    CLI), "agent" for t3_thread_send, delegate_task and scheduled-task text. Measured on 1,732 user-role
-    messages from 2026-11-15 on: no other value occurs."""
+    """T3 marks every user-role message with `createdBy`: "user" for what Sam typed in the app (web or
+    mobile), "agent" for t3_thread_send (the t3 CLI's `thread send` included), delegate_task and
+    scheduled-task text. Measured on 1,732 user-role messages from 2026-11-15 on: no other value occurs."""
     return payload.get("createdBy") == "user"

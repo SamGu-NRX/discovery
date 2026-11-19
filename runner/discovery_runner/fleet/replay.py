@@ -3,9 +3,14 @@
 - Dead: the runs the design names (cogportal's failed run, M362K's run 4), every abnormal run Sam answered
   with "continue", then the newest run of each failure cause not yet covered, up to 10. Sam's own
   "continue" labels a run dead without using the watcher's logic.
-- Sam-stopped: the 10 newest interrupted runs whose stop command came from Sam's app (a client UUID
-  command id in T3's command receipts).
-- Healthy: the 30 most recently updated threads whose runs in the window all completed.
+- Sam-stopped: the 10 newest interrupted runs with a stop or interrupt command from Sam's app (a client
+  UUID command id, or a cascade from one) in the run's window. This uses the receipt alone; the watcher also
+  requires the interrupt item's text, so the two rules overlap but are not the same.
+- Healthy: the 30 most recently updated threads whose runs in the window all completed. A completed run
+  can't make a card, so this set guards only against cards from the wrong thread or from open runs.
+
+Limits: every dead run found this way so far is `failed`, which the watcher cards on status alone, and a
+replay can't test stalls, because the first cycle starts the watcher's awake window at the present.
 
 The watcher replays from the window start with archived threads included (a thread archived since is
 evidence about later, not about the run), and the check passes when it flags at least 9 of 10 dead runs,
@@ -38,7 +43,8 @@ def dead_set(con, since, n=10):
         r = con.execute(f"SELECT run_id FROM {probe.RUNS} WHERE thread_id = ? AND ordinal = ?", (tid, ordinal)).fetchone()
         add(r[0] if r else None, why)
     abnormal = con.execute(
-        f"SELECT run_id, thread_id, status, completed_at FROM {probe.RUNS} WHERE status IN ('failed', 'interrupted')"
+        f"SELECT run_id, thread_id, status, completed_at FROM {probe.RUNS}"
+        " WHERE status IN ('failed', 'interrupted', 'cancelled')"
         " AND requested_at >= ? ORDER BY completed_at DESC", (watch.iso(since),)).fetchall()
     for rid, tid, status, done in abnormal:
         nxt = probe.sam_messages_after(con, tid, done, limit=1)
@@ -61,8 +67,9 @@ def sam_stopped_set(con, since, n=10):
             f"SELECT run_id, thread_id, requested_at, completed_at FROM {probe.RUNS} WHERE status = 'interrupted'"
             " AND requested_at >= ? ORDER BY completed_at DESC", (watch.iso(since - dt.timedelta(days=30)),)):
         ev = watch.stop_evidence(con, tid, rid, req, done)
-        if ev["commands"] and all(o == "app" for o, _ in ev["commands"]):
-            out.append({"run_id": rid, "why": f"app {ev['commands'][0][1]}: {ev['message']!r}"})
+        stops = [(o, t) for o, t, _ in ev["commands"] if t != "queued-message.promote-to-steer"]
+        if stops and all(o == "app" for o, _ in stops):
+            out.append({"run_id": rid, "why": f"app {stops[0][1]}: {ev['message']!r}"})
         if len(out) >= n:
             break
     return out

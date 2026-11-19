@@ -5,6 +5,7 @@ written the way T3 writes them: run ids `run:thread:<id>:ordinal:<n>`, `createdB
 items with T3's texts, command receipts with client UUIDs or MCP ids, and a contentless trigram FTS table
 whose rowid is the message's rowid.
 """
+import datetime as dt
 import hashlib
 import http.server
 import json
@@ -58,11 +59,14 @@ class T3DB:
         self.commit()
         return tid
 
-    def run(self, tid, ordinal, status, requested, completed=None, model="claude-opus-5-5", started=None,
-            executed=None):
+    def run(self, tid, ordinal, status, requested, completed=None, model="claude-opus-5-5", started="requested",
+            executed=None, continues=None):
         rid = f"run:thread:{tid}:ordinal:{ordinal}"
         payload = {"id": rid, "status": status, "modelSelection": {"model": model},
-                   "requestedAt": requested, "startedAt": started or requested, "completedAt": completed}
+                   "requestedAt": requested, "startedAt": requested if started == "requested" else started,
+                   "completedAt": completed}
+        if continues:
+            payload["restartContinuationOfRunId"] = continues
         self.con.execute("INSERT INTO orchestration_v2_projection_runs (run_id, thread_id, ordinal, status,"
                          " requested_at, completed_at, payload_json) VALUES (?,?,?,?,?,?,?)",
                          (rid, tid, ordinal, status, requested, completed, json.dumps(payload)))
@@ -89,8 +93,8 @@ class T3DB:
     def interrupt(self, tid, rid, at, message):
         self.item(tid, rid, "run_interrupt_request", "completed", at, message=message)
 
-    def receipt(self, tid, command_type, at, by="app"):
-        cid = str(uuid.uuid4()) if by == "app" else f"command:mcp:{uuid.uuid4()}:{command_type}"
+    def receipt(self, tid, command_type, at, by="app", cid=None):
+        cid = cid or (str(uuid.uuid4()) if by == "app" else f"command:mcp:{uuid.uuid4()}:{command_type}")
         self.con.execute("INSERT INTO orchestration_command_receipts (command_id, aggregate_kind, aggregate_id,"
                          " accepted_at, status, command_type) VALUES (?,?,?,?,?,?)",
                          (cid, "thread", tid, at, "accepted", command_type))
@@ -102,7 +106,11 @@ class T3DB:
         cur = self.con.execute("INSERT INTO orchestration_v2_projection_messages (message_id, thread_id, role,"
                                " created_at, updated_at, payload_json) VALUES (?,?,?,?,?,?)",
                                (mid, tid, role, at, at, json.dumps(payload)))
-        self.con.execute("INSERT INTO orchestration_v2_message_search (rowid, text) VALUES (?, ?)", (cur.lastrowid, text))
+        # T3 indexes assistant messages and the user-role ones Sam typed, never an agent's
+        # (t3code apps/server/src/orchestration-v2/messageSearchIndex.ts indexedMessageCondition).
+        if role == "assistant" or by == "user":
+            self.con.execute("INSERT INTO orchestration_v2_message_search (rowid, text) VALUES (?, ?)",
+                             (cur.lastrowid, text))
         self.commit()
         return mid
 
@@ -111,10 +119,16 @@ class T3DB:
         self.commit()
 
 
+def _now():
+    t = dt.datetime.now(dt.timezone.utc)
+    return t.strftime("%Y-%m-%dT%H:%M:%S.") + f"{t.microsecond // 1000:03d}Z"
+
+
 class FakeT3:
     """T3's MCP endpoint for the fleet's two writes, with T3's idempotency and access rules.
 
-    `clientRequestId` replays within one sign-in session namespace, as T3 does (stableCommandId). A send to a
+    `clientRequestId` replays within one sign-in namespace, as T3 does (stableCommandId), and survives a
+    restart because T3 keeps command receipts; a new sign-in (`relogin`) gets a new namespace. A send to a
     thread above the token's mode is refused (threadAccess.ts assertTargetWithinLimits). `drop_next` makes
     the server commit a call and then close the connection without answering: a lost response."""
 
@@ -167,9 +181,8 @@ class FakeT3:
         self.srv.shutdown()
         self.srv.server_close()
 
-    def restart(self):
-        """T3 restarted: replays from before are forgotten, and sign-ins get a new namespace."""
-        self.replays = {}
+    def relogin(self):
+        """The runner signed in again: a new session, so T3's replay of earlier keys no longer applies."""
         self.namespace = f"client:{uuid.uuid4()}"
 
     def handle(self, tool, args):
@@ -185,12 +198,13 @@ class FakeT3:
                 if row is None or order.index(row[0]) > order.index(self.token_mode):
                     return {"isError": True, "content": [{"type": "text", "text": f"Thread \"{args['threadId']}\""
                             f" runs in {row and row[0]}, above this caller's {self.token_mode} limit."}]}
-                mid = self.db.message(args["threadId"], args["message"], by="agent")
+                mid = self.db.message(args["threadId"], args["message"], by="agent", at=_now())
                 result = {"structuredContent": {"threadId": args["threadId"], "messageId": mid}}
             elif tool == "t3_thread_launch":
                 tid = "mcp:launch:" + hashlib.sha256(json.dumps([self.namespace, args.get("clientRequestId")]).encode()).hexdigest()
-                self.db.thread(tid, title=args["title"], mode=args.get("runtimeMode", "auto"))
-                self.db.message(tid, args["message"], by="agent")
+                self.db.thread(tid, title=args["title"], mode=args.get("runtimeMode", "auto"),
+                               project=args.get("projectId", "p1"), created=_now())
+                self.db.message(tid, args["message"], by="agent", at=_now())
                 result = {"structuredContent": {"threadId": tid, "runId": None, "status": "starting"}}
             else:
                 return {"isError": True, "content": [{"type": "text", "text": f"unknown tool {tool}"}]}
@@ -204,3 +218,7 @@ class FakeT3:
     def threads_titled(self, title):
         return self.db.con.execute("SELECT count(*) FROM orchestration_v2_projection_threads WHERE title = ?",
                                    (title,)).fetchone()[0]
+
+    def go(self, tid, text):
+        """Sam types in a thread."""
+        return self.db.message(tid, text, by="user", at=_now())
