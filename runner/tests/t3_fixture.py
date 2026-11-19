@@ -60,13 +60,15 @@ class T3DB:
         return tid
 
     def run(self, tid, ordinal, status, requested, completed=None, model="claude-opus-5-5", started="requested",
-            executed=None, continues=None):
+            executed=None, continues=None, held=False):
         rid = f"run:thread:{tid}:ordinal:{ordinal}"
         payload = {"id": rid, "status": status, "modelSelection": {"model": model},
                    "requestedAt": requested, "startedAt": requested if started == "requested" else started,
                    "completedAt": completed}
         if continues:
             payload["restartContinuationOfRunId"] = continues
+        if held:
+            payload["queueHeld"] = True
         self.con.execute("INSERT INTO orchestration_v2_projection_runs (run_id, thread_id, ordinal, status,"
                          " requested_at, completed_at, payload_json) VALUES (?,?,?,?,?,?,?)",
                          (rid, tid, ordinal, status, requested, completed, json.dumps(payload)))
@@ -139,6 +141,8 @@ class FakeT3:
         self.calls = []
         self.replays = {}
         self.drop_next = False
+        self.reject_next = False
+        self.rejected = set()
         self.namespace = f"client:{uuid.uuid4()}"
         fake = self
 
@@ -190,6 +194,11 @@ class FakeT3:
         with self.db.lock:
             self.calls.append((tool, args))
             replay_key = (self.namespace, tool, args.get("clientRequestId"))
+            if replay_key in self.rejected or self.reject_next:
+                # T3 stores a dispatch rejection and answers every retry of that command id with it.
+                self.reject_next = False
+                self.rejected.add(replay_key)
+                return {"isError": True, "content": [{"type": "text", "text": "previously rejected"}]}
             if args.get("clientRequestId") and replay_key in self.replays:
                 return self.replays[replay_key]
             if tool == "t3_thread_send":

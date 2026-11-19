@@ -49,7 +49,8 @@ SELECT r.run_id, r.thread_id, r.ordinal, r.status, r.requested_at, r.completed_a
        json_extract(r.payload_json, '$.modelSelection.model') AS model,
        json_extract(r.payload_json, '$.startedAt') AS started_at,
        t.title, t.runtime_mode, t.archived_at, t.deleted_at,
-       json_extract(t.payload_json, '$.lineage.parentThreadId') AS parent_id
+       json_extract(t.payload_json, '$.lineage.parentThreadId') AS parent_id,
+       json_extract(t.payload_json, '$.lineage.rootThreadId') AS root_id
 FROM {probe.RUNS} r JOIN {probe.THREADS} t ON t.thread_id = r.thread_id
 """
 RUN_SCAN = RUN_SELECT + "WHERE r.requested_at > :wm OR r.completed_at > :wm OR r.status IN ('preparing', 'starting', 'running')"
@@ -216,7 +217,9 @@ def classify(con, run: dict, now: dt.datetime | None = None, stall_min=30, awake
         cutoff = now - dt.timedelta(minutes=stall_min)
         # A sleeping Mac pauses runs and the watcher alike, so a stall counts only after the watcher has
         # itself been awake for the whole window.
-        if last and parse(last) < cutoff and (awake_since is None or parse(awake_since) <= cutoff):
+        # A closed T3 stops every run; it cancels and continues them itself when it starts again.
+        t3_up = t3_since is not None and t3_since <= cutoff
+        if last and parse(last) < cutoff and (awake_since is None or parse(awake_since) <= cutoff) and t3_up:
             card = {"kind": "stalled", "cause": f"no run activity since {last[:16]}Z", "detail": None}
     if card is None:
         return None
@@ -276,7 +279,7 @@ class Watcher:
     def _skip(self, run, seen) -> bool:
         if run["deleted_at"] or (run["archived_at"] and not self.include_archived):
             return True
-        if run["thread_id"] in self.exclude_threads or run.get("parent_id") in self.exclude_threads:
+        if self.exclude_threads & {run["thread_id"], run.get("parent_id"), run.get("root_id")}:
             return True  # the Operator thread and its children: a card about them starts another run there
         kinds = ("stalled",) if run["status"] in OPEN else TERMINAL_KINDS
         return any(f"{run['run_id']}:{k}" in seen for k in kinds)
@@ -310,7 +313,7 @@ class Watcher:
                 nxt["recheck"].setdefault(run["run_id"], iso(now))
                 continue
             if card is DEFER:
-                nxt["recheck"].setdefault(run["run_id"], iso(now))
+                nxt["recheck"][run["run_id"]] = iso(now)  # kept while T3 keeps deferring it
                 continue
             nxt["recheck"].pop(run["run_id"], None)
             if card:
@@ -346,12 +349,12 @@ def render(cards: list[dict], link) -> str:
         what = {"failed": "failed", "stopped_by_agent": "was stopped by an agent", "stalled": "stalled",
                 "cancelled": "was cancelled after it started",
                 "interrupted_unknown": "was interrupted, and nothing shows that you stopped it"}[c["kind"]]
-        lines.append(f"\n- {link(c['thread_id'], json.dumps(c['title'] or ''))} run {c['ordinal']} {what} ({c['cause']}).")
+        lines.append(f"\n- {link(c['thread_id'], json.dumps(c['title'] or '', ensure_ascii=False))} run {c['ordinal']} {what} ({c['cause']}).")
         if c.get("detail"):
             lines.append(f"  T3 says: \"{' '.join(str(c['detail']).split())[:240]}\"")
         if c.get("lead"):
             state = "idle" if c["lead"]["idle"] else "still running"
-            lines.append(f"  Its lead is {link(c['lead']['thread_id'], json.dumps(c['lead']['title'] or ''))}, {state}. "
+            lines.append(f"  Its lead is {link(c['lead']['thread_id'], json.dumps(c['lead']['title'] or '', ensure_ascii=False))}, {state}. "
                          "Nothing was sent to either.")
         if c.get("mode") == "full-access":
             lines.append("  Full access: only you can resume it.")

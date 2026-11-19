@@ -146,18 +146,21 @@ def sam_messages_after(con, thread_id, after, limit=1):
         " ORDER BY created_at LIMIT ?", (thread_id, after, limit))]
 
 
-SCHEDULED = "scheduled-task-message:"
+# A scheduled task's message and an answered question ("<agent's question>\n<answer>", which an agent can
+# also answer) carry createdBy "user" but are not text Sam typed (t3code ScheduledTaskService.ts,
+# Orchestrator.ts async-answer).
+NOT_TYPED = ("scheduled-task-message:", "async-answer:")
 TYPED_BY_SAM_SQL = ("json_extract(payload_json, '$.createdBy') = 'user'"
                     " AND coalesce(json_extract(payload_json, '$.creationSource'), '') IN ('web', 'mobile', 'server')"
-                    f" AND substr(message_id, 1, {len(SCHEDULED)}) <> '{SCHEDULED}'")
+                    + "".join(f" AND substr(message_id, 1, {len(p)}) <> '{p}'" for p in NOT_TYPED))
 
 
 def typed_by_sam(payload: dict, message_id: str = "") -> bool:
     """Text Sam typed in T3's app. T3 marks every user-role message with `createdBy` and `creationSource`.
     Measured on user-role messages since 2026-10-01: "user" with "web", "mobile" or "server" (his queued
-    messages and answers) is Sam; "agent" covers t3_thread_send (the t3 CLI's `thread send` included),
+    messages) is Sam; "agent" covers t3_thread_send (the t3 CLI's `thread send` included),
     delegate_task and scheduled tasks. A scheduled task's message takes the task's own `createdBy`
     (t3code ScheduledTaskService.ts), and "user" with "mcp" came from an MCP client, so both are left out."""
     mid = message_id or str(payload.get("id") or "")
     return (payload.get("createdBy") == "user" and payload.get("creationSource") in ("web", "mobile", "server")
-            and not mid.startswith(SCHEDULED))
+            and not mid.startswith(NOT_TYPED))

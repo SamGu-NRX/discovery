@@ -48,7 +48,14 @@ class SessionExpired(T3Error):
 ABOVE_AUTO_SCOPES = {"settings:write", "source-control:write"}
 
 def origin() -> str:
-    return json.loads(RUNTIME.expanduser().read_text())["origin"]
+    """The running T3 server's address. A stale file after a crash could name a port another process now
+    holds, so the recorded pid must be alive before the token goes there."""
+    d = json.loads(RUNTIME.expanduser().read_text())
+    try:
+        os.kill(int(d["pid"]), 0)
+    except (OSError, ValueError, KeyError) as e:
+        raise T3Down(f"T3 is not running (server-runtime.json pid {d.get('pid')}: {e})") from None
+    return d["origin"]
 
 
 class Client:

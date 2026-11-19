@@ -161,9 +161,12 @@ class Watcher(Fleet):
         self.db.thread("op", mode="auto")
         rid = self.db.run("op", 1, "failed", at(30), at(29))
         self.db.failure("op", rid, at(29))
-        self.db.thread("op-child", parent="op")
+        self.db.thread("op-child", parent="op", root="op")
         rid = self.db.run("op-child", 1, "failed", at(30), at(29))
         self.db.failure("op-child", rid, at(29))
+        self.db.thread("op-grandchild", parent="op-child", root="op")
+        rid = self.db.run("op-grandchild", 1, "failed", at(30), at(29))
+        self.db.failure("op-grandchild", rid, at(29))
         w = watch.Watcher(self.con, state=watch.MemoryState(), since=NOW - dt.timedelta(hours=10),
                           exclude_threads={"op"}, t3_since=NOW - dt.timedelta(days=1))
         self.assertEqual(w.cycle(NOW), [])
@@ -205,6 +208,15 @@ class Watcher(Fleet):
         self.awake(w)
         (card,) = w.cycle(NOW)
         self.assertEqual(card["kind"], "stalled")
+
+    def test_no_stall_card_while_t3_is_closed(self):
+        # T3 closed stops every run; T3 cancels and continues them when it starts, so no card is due.
+        self.db.thread("a")
+        self.db.run("a", 1, "running", at(90))
+        for since in (None, NOW - dt.timedelta(minutes=3)):
+            w = self.watcher(t3_since=since)
+            self.awake(w)
+            self.assertEqual(w.cycle(NOW), [])
 
     def test_no_stall_right_after_the_mac_wakes(self):
         # Regression: after a night asleep every open run looks 8 hours idle.
@@ -401,6 +413,16 @@ class Envelopes(Fleet):
         self.assertFalse(probe.typed_by_sam({"createdBy": "user", "creationSource": "web"}, mid))
         self.assertEqual([m["text"] for m in probe.sam_messages(self.con, "sam-thread")], [self.said])
 
+    def test_answered_question_is_not_sams_typing(self):
+        # An answer is stored as "<agent's question>\n<answer>" with createdBy "user", and agents can answer.
+        mid = "async-answer:req-1"
+        self.db.con.execute("INSERT INTO orchestration_v2_projection_messages (message_id, thread_id, role, created_at,"
+                            " updated_at, payload_json) VALUES (?,?,?,?,?,?)",
+                            (mid, "sam-thread", "user", "2026-11-11T00:00:00.000Z", "2026-11-11T00:00:00.000Z",
+                             json.dumps({"text": "go\n2", "createdBy": "user", "creationSource": "server"})))
+        self.db.commit()
+        self.assertEqual([m["text"] for m in probe.sam_messages(self.con, "sam-thread")], [self.said])
+
     def test_cut_excerpt_of_sams_words_passes(self):
         cut = "I want the sections [...] The brief should still be a brief"
         envelope.check(self.env(ask_verbatim=[{"text": cut, "source_message_ids": [self.mid]}]), self.con, self.routes)
@@ -589,7 +611,10 @@ class DuplicateSends(Fleet):
             self.db.run("kid", i + 1, "completed", at(60))
         self._tree("done", 25, open_=False)  # finished: nothing to stop, and it must not block launches
         self._tree("sams", 25)
-        self.db.message("sams", "let me take this one", by="user", at=at(10))  # Sam drives it now
+        self.db.thread("sams-kid", parent="sams", root="sams", mode="auto")
+        self.db.message("sams-kid", "let me take this one", by="user", at=at(10))  # Sam drives it from a child
+        self._tree("held", 25, open_=False)
+        self.db.run("held", 26, "queued", at(5), held=True)  # T3's Stop holds queued runs; they are not work
         lch = Launcher(self.con, client_factory=lambda: Client(self.t3.url, "tok"), mode="full", log=lambda m: None)
         self.assertEqual((lch.tree_runs("root"), lch.over_budget()), (21, ["root"]))
         self.assertEqual(lch.enforce_tree_budget(), ["root"])
@@ -609,6 +634,15 @@ class DuplicateSends(Fleet):
         cli.cycle({"fleet_operator_thread": "op"}, self.con, w, self.launcher(), outbox)
         self.assertEqual((self.t3.messages_in("op"), outbox.load()), (1, []))
 
+    def test_a_key_t3_rejected_is_retried_under_a_new_request_id(self):
+        # T3 answers a rejected command id with that rejection forever, so the same key would stall cards.
+        self.t3.reject_next = True
+        with self.assertRaises(T3Error):
+            self.launcher().post_cards("op", [self.card])
+        rec = self.launcher().post_cards("op", [self.card])
+        self.assertEqual((rec["state"], self.t3.messages_in("op")), ("accepted", 1))
+        self.assertTrue(self.t3.calls[-1][1]["clientRequestId"].endswith(".r2"))
+
     def test_card_post_t3_refuses_holds_the_batch_and_the_cycle_goes_on(self):
         # Regression: an archived or Full access Operator thread made every cycle raise before drafts and
         # the budget check could run.
@@ -619,6 +653,26 @@ class DuplicateSends(Fleet):
         self.db.failure("x", rid, at(29))
         summary = cli.cycle({"fleet_operator_thread": "full-op"}, self.con, self.watcher(), self.launcher(), cli.Outbox())
         self.assertEqual((summary["unposted"], "above this caller" in summary["post_refused"]), (1, True))
+
+    def test_a_failed_note_keeps_the_approval(self):
+        import time
+        from discovery_runner.fleet import cli
+
+        class Refusing(Launcher):
+            def launch(self, env, approved_by_go=False, routes=None):
+                raise envelope.Refused({"disk": "low"})
+
+        lch = Refusing(self.con, client_factory=lambda: Client(self.t3.url, "tok"), mode="full", log=lambda m: None)
+        with cli.drafts() as d:
+            d["items"]["1"] = {"envelope": {"template": "drafted", "title": "Demo", "brief": "Do it."}}
+            cli.run_drafts({"fleet_operator_thread": "op"}, self.con, lch, d)
+            time.sleep(0.01)
+            self.t3.go("op", "go 1")
+            self.t3.reject_next = True  # the note telling Sam why fails
+            cli.run_drafts({"fleet_operator_thread": "op"}, self.con, lch, d)
+            self.assertIn("go_at", d["items"]["1"])
+            cli.run_drafts({"fleet_operator_thread": "op"}, self.con, lch, d)
+            self.assertNotIn("go_at", d["items"]["1"])
 
     def test_t3_not_listening_is_not_uncertain(self):
         down = Launcher(self.con, client_factory=lambda: Client("http://127.0.0.1:9/mcp", "tok"), log=lambda m: None)
