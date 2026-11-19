@@ -206,6 +206,8 @@ class FakeT3:
                                project=args.get("projectId", "p1"), created=_now())
                 self.db.message(tid, args["message"], by="agent", at=_now())
                 result = {"structuredContent": {"threadId": tid, "runId": None, "status": "starting"}}
+            elif tool == "t3_thread_interrupt":
+                result = {"structuredContent": {"threadId": args["threadId"], "status": "stopped"}}
             else:
                 return {"isError": True, "content": [{"type": "text", "text": f"unknown tool {tool}"}]}
             self.replays[replay_key] = result

@@ -134,14 +134,16 @@ def cycle(cfg, con, watcher, launcher, outbox):
                 break  # held by the daily card cap
             batches.pop(0)
             outbox.save(batches)
-    launched = []
+    launched, stopped = [], []
     if launcher is not None and launcher.mode == "full":
+        stopped = launcher.enforce_tree_budget()
         d = drafts()
         try:
             launched = run_drafts(cfg, con, launcher, d)
         finally:
             save_drafts(d)
     return {"cards": len(cards), "unposted": sum(len(b) for b in batches), "launched": len(launched),
+            "stopped": stopped,
             "scan_rows": watcher.last_scan_rows}
 
 
@@ -165,6 +167,8 @@ def loop(cfg):
                     launcher = Launcher(con, mode=cfg["fleet_mode"], log=log)
                 else:
                     log("fleet_operator_thread is not set; cards are kept in logs/fleet-cards.jsonl only")
+            if launcher is not None:
+                launcher.mode = cfg["fleet_mode"]  # a mode change applies at the next cycle, not the next hour
             summary = cycle(cfg, con, watcher, launcher, Outbox())
             heartbeat("ok", **summary)
         except probe.SchemaChanged as e:

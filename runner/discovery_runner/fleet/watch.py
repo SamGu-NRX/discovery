@@ -1,7 +1,8 @@
 """The watcher: finds runs that ended abnormally and turns each into one card.
 
-Each cycle runs one query on T3's run table, watermarked on `requested_at` and `completed_at` and joined to
-the thread table for mode, parent and archived state, plus the few runs still open. T3 has no index on those
+Each cycle runs one scan query on T3's run table, watermarked on `requested_at` and `completed_at` and joined to
+the thread table for mode, parent and archived state, plus the few runs still open, then indexed lookups
+for each abnormal or open run. T3 has no index on those
 two columns, so the query scans the run table: 22,852 rows on 2026-11-19, 9 ms warm and about 0.3 s cold.
 Only abnormal ends get a card, because T3 already tells Sam when a run finishes normally:
 

@@ -117,7 +117,9 @@ def check(env: Envelope, con=None, routes=None) -> None:
             p["origin"] = f"{repo} has no origin remote"
         elif env.origin and not _same_remote(actual, env.origin):
             p["origin"] = f"{env.origin} does not match the repo's origin {actual}"
-        elif env.origin and topo.get("origin") and not _same_remote(topo["origin"], env.origin):
+        elif not topo.get("origin"):
+            p["repo"] = f"{repo}/.agents/topology.json declares no origin"
+        elif env.origin and not _same_remote(topo["origin"], env.origin):
             p["origin"] = f"{env.origin} does not match topology.json's {topo['origin']}"
         if env.base_branch and repo.is_dir() and "repo" not in p and \
                 _git(repo, "rev-parse", "--verify", "--quiet", f"refs/remotes/origin/{env.base_branch}") is None and \
@@ -169,9 +171,12 @@ def _find_on_word_edges(text: str, piece: str, start: int) -> int:
 
 def excerpt_in(text: str, excerpt: str) -> bool:
     """The excerpt's pieces appear in `text` in order, without overlap, on word edges."""
-    pieces = [p.strip() for p in excerpt.split(CUT)]
+    raw = excerpt.split(CUT)
+    # Only whitespace beside a cut may differ from Sam's text; the excerpt's own ends stay exact.
+    pieces = [p.lstrip() if i else p for i, p in enumerate(raw)]
+    pieces = [p.rstrip() if i < len(raw) - 1 else p for i, p in enumerate(pieces)]
     cut = len(pieces) > 1
-    if not any(pieces) or (cut and any(len(p.split()) < MIN_PIECE_WORDS for p in pieces if p)):
+    if not any(p.strip() for p in pieces) or (cut and any(len(p.split()) < MIN_PIECE_WORDS for p in pieces if p)):
         return False
     if not cut:
         return _find_on_word_edges(text, excerpt, 0) >= 0

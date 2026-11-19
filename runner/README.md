@@ -92,7 +92,7 @@ launchctl print gui/$(id -u)/com.samgu.discovery-runner | grep -E 'state|pid'
 
 The fleet watcher finds T3 runs that ended abnormally and posts one card for each to a pinned Operator thread. It runs as a second launchd job, `fleet loop`, every 2 minutes, because the main loop sleeps 10 minutes and can block on preps. It obeys `STOP`. It makes no model calls of its own, but each card message starts one turn in the Operator thread.
 
-**Where it reads.** It reads only T3's database, `~/.t3/userdata/statev2.sqlite`, opened read-only (`mode=ro`, `query_only`). Each cycle runs one query on `orchestration_v2_projection_runs`, joined to the thread table for mode, parent and archived state. The query is watermarked on `requested_at` and `completed_at`, with 2 minutes of overlap, plus the runs still open. T3 has no index on those two columns, so the query scans the run table. On 2026-11-19 that was 22,852 rows: a cycle took 9 ms warm and about 0.3 s cold, and a full 14-day poll took 38 ms. At startup, `probe.py` checks every table and column the fleet queries. If T3's schema changes, the watcher stops and logs each missing column as `WATCHER DISABLED`; it rechecks hourly.
+**Where it reads.** It reads only T3's database, `~/.t3/userdata/statev2.sqlite`, opened read-only (`mode=ro`, `query_only`). Each cycle runs one scan query on `orchestration_v2_projection_runs`, joined to the thread table for mode, parent and archived state, then a few indexed lookups (failure, stop evidence, activity, lead) for each run that ended abnormally or is still open. The query is watermarked on `requested_at` and `completed_at`, with 2 minutes of overlap, plus the runs still open. T3 has no index on those two columns, so the query scans the run table. On 2026-11-19 that was 22,852 rows: a cycle took 9 ms warm and about 0.3 s cold, and a full 14-day poll took 38 ms. At startup, `probe.py` checks every table and column the fleet queries. If T3's schema changes, the watcher stops and logs each missing column as `WATCHER DISABLED`; it rechecks hourly.
 
 **What gets a card.**
 
@@ -116,13 +116,13 @@ A dead child's card names its lead and says whether the lead is idle. Nothing is
 - **Lost answers.** A lost answer is written as an `uncertain` receipt. A refused connection is not, because that call never reached T3.
 - **Card order.** The watcher saves a run as seen only after its card is in `state/fleet-outbox.json`. Cards T3 has not accepted stay there.
 
-**Modes** (`fleet_mode`): `cards`, the default, only posts cards. `full` also shows each drafted launch (`fleet draft`) in the Operator thread and launches it once Sam types `go 2` there. Only text whose `createdBy` is "user" counts, and only a "go" typed after the draft was shown. A launch refused at that point stays queued, and the Operator thread says why. Resuming the operator's own threads, the unattended `wrap` and `correct` launches, and the design's 20-runs-per-launch limit are not built yet.
+**Modes** (`fleet_mode`): `cards`, the default, only posts cards. `full` also shows each drafted launch (`fleet draft`) in the Operator thread and launches it once Sam types `go 2` there. Only text whose `createdBy` is "user" counts, and only a "go" typed after the draft was shown. A launch refused at that point stays queued, and the Operator thread says why. In `full` mode each cycle also counts every run in each tree the operator launched, children included. A tree over 20 runs is stopped the way its Stop button does, and no new launch goes out while one is over. Resuming the operator's own threads and the unattended `wrap` and `correct` launches are not built yet.
 
 **Launch checks.** Launches run at Auto or lower. `envelope.py` refuses each of these before T3 is called, naming the field:
 
 - a launch missing its repo, origin, route model, base branch or round;
 - a model that is not one of the route's T3 targets in `routes.json`;
-- a repo without `.agents/topology.json`;
+- a repo without `.agents/topology.json`, or one whose `origin` is missing from the file or differs from the repo's;
 - round 4;
 - quoted words that are not Sam's.
 

@@ -158,6 +158,30 @@ class Launcher:
             f"SELECT count(DISTINCT thread_id) FROM {probe.RUNS} WHERE thread_id IN ({marks})"
             " AND status IN ('queued','preparing','starting','running','waiting')", ids).fetchone()[0]
 
+    def tree_runs(self, root_thread_id) -> int:
+        """Runs in a launched thread and every thread under it (T3's lineage.rootThreadId)."""
+        return self.con.execute(
+            f"SELECT count(*) FROM {probe.RUNS} r JOIN {probe.THREADS} t ON t.thread_id = r.thread_id"
+            " WHERE t.thread_id = ? OR json_extract(t.payload_json, '$.lineage.rootThreadId') = ?",
+            (root_thread_id, root_thread_id)).fetchone()[0]
+
+    def enforce_tree_budget(self) -> list[str]:
+        """Stop each launched tree that has used more than `runs_per_launch` runs, children counted, the way
+        its Stop button does (every delegated task included). Returns the stopped thread ids."""
+        self._require_full("stopping a launched tree")
+        stopped = []
+        for tid in self.own_threads():
+            n = self.tree_runs(tid)
+            if n <= self.lim["runs_per_launch"]:
+                continue
+            key = "fk-stop-" + hashlib.sha256(tid.encode()).hexdigest()[:24]
+            reason = f"Operator budget: this launch used {n} runs, over its {self.lim['runs_per_launch']}."
+            rec = self.write("stop", key, "t3_thread_interrupt", {"threadId": tid, "stop": True, "reason": reason},
+                             thread_id=tid)
+            if rec["state"] == "accepted":
+                stopped.append(tid)
+        return stopped
+
     def project_for(self, repo) -> str:
         root = str(Path(repo).expanduser().resolve())
         r = self.con.execute("SELECT project_id FROM projection_projects WHERE workspace_root = ?"
@@ -175,6 +199,9 @@ class Launcher:
         free_gb = shutil.disk_usage(Path(env.repo).expanduser()).free / 1e9
         if free_gb < self.lim["disk_floor_gb"]:
             raise envelope.Refused({"disk": f"{free_gb:.1f} GB free, under the {self.lim['disk_floor_gb']} GB floor"})
+        over = [t for t in self.own_threads() if self.tree_runs(t) > self.lim["runs_per_launch"]]
+        if over:
+            raise envelope.Refused({"runs_per_launch": f"{len(over)} launched trees are over their run budget"})
         if self.open_launches() >= self.lim["concurrent"]:
             raise envelope.Refused({"concurrent": f"{self.lim['concurrent']} launched threads are still open"})
         project_id = self.project_for(env.repo)

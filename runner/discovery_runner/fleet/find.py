@@ -106,7 +106,8 @@ def search(con, question: str, k=3, before=None, exclude=(), per_term_rows=4000)
                 f" {TEXT if whole else 'NULL'}"
                 f" FROM {probe.MESSAGE_SEARCH} s"
                 f" JOIN {probe.MESSAGES} m ON m.rowid = s.rowid WHERE {probe.MESSAGE_SEARCH} MATCH ?"
-                " AND m.role IN ('user', 'assistant') LIMIT ?", (_fts(t), per_term_rows)):
+                " AND m.role IN ('user', 'assistant') AND (? IS NULL OR m.created_at < ?) LIMIT ?",
+                (_fts(t), before, before, per_term_rows)):
             if whole and not whole.search(text or ""):
                 continue
             tf.setdefault(tid, {})
@@ -127,7 +128,7 @@ def search(con, question: str, k=3, before=None, exclude=(), per_term_rows=4000)
         f"SELECT thread_id, title, created_at, updated_at, archived_at, deleted_at FROM {probe.THREADS}"
         f" WHERE thread_id IN ({marks})", pool)}
     size = dict(con.execute(f"SELECT thread_id, count(*) FROM {probe.MESSAGES} WHERE thread_id IN ({marks})"
-                            " GROUP BY thread_id", pool).fetchall())
+                            " AND (? IS NULL OR created_at < ?) GROUP BY thread_id", [*pool, before, before]).fetchall())
     avg = (sum(size.values()) / len(size)) if size else 1
     k1, b = 1.2, 0.75
     out = []
