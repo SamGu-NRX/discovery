@@ -1,0 +1,6 @@
+﻿"Pid","Instance","WrittenGB","CommandLine"
+"0","idle","18.348",""
+"14836","chrome","2.12",""
+"4656","hipsdaemon","0.542",""
+"30484","wslrelay","0.21"," --mode 1 --vm-id {bd9530d2-cdef-4578-bef5-c2debff0bbb6} --handle 1796"
+"51580","codex-computer-use","0.042","""C:\Program Files\WindowsApps\OpenAI.Codex_26.1103.4239.0_x64__2p2nqsd0c76g0\app\resources\cua_node\bin\node_modules\@oai\sky\bin\windows\codex-computer-use.exe"" --parent-pid 26704"
