@@ -95,6 +95,7 @@ async function render() {
   if (document.activeElement !== $("worker-url")) $("worker-url").value = config.workerUrl;
   if (document.activeElement !== $("lens")) $("lens").value = config.lensId ?? "";
   $("lens-baseline").checked = config.lensBaseline;
+  $("daily-fetch").checked = config.dailyFetch;
   $("token").placeholder = config.ingestToken ? `Saved, ends in ${config.ingestToken.slice(-4)}` : "Paste the INGEST token";
 }
 

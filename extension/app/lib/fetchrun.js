@@ -107,33 +107,47 @@ export function parseJobs(input) {
     }
     if (job?.type === "context") {
       if (!Array.isArray(job.ids) || !job.ids.length || !job.ids.every(isPostId)) throw new Error(`${at}.ids must be post id strings`);
-      const known = ["ids", "type", "rankings", "parent", "branches", "quotes", "mentions", "links", "conversation", "upstream"];
-      for (const key of Object.keys(job)) if (!known.includes(key)) throw new Error(`${at}.${key} is not a context option`);
-      const rankings = job.rankings ?? ["Relevance", "Recency"];
-      if (!Array.isArray(rankings) || !rankings.every((r) => ["Relevance", "Recency", "Likes"].includes(r))) {
-        throw new Error(`${at}.rankings must list Relevance, Recency or Likes`);
-      }
-      const flag = (key) => {
-        const v = job[key] ?? true;
-        if (typeof v !== "boolean") throw new Error(`${at}.${key} must be true or false`);
-        return v;
-      };
-      return {
-        type: "context",
-        ids: [...new Set(job.ids)],
-        rankings,
-        parent: flag("parent"),
-        branches: flag("branches"),
-        quotes: flag("quotes"),
-        mentions: flag("mentions"),
-        links: flag("links"),
-        conversation: flag("conversation"),
-        upstream: flag("upstream"),
-      };
+      const { ids, type, ...options } = job;
+      return { type: "context", ids: [...new Set(ids)], ...contextOptions(options, at) };
     }
-    throw new Error(`${at}.type must be bookmarks_until or context, got ${JSON.stringify(job?.type)}`);
+    if (job?.type === "new_saves") {
+      const known = ["type", "boundary", "maxPages", "maxSaves", "context"];
+      for (const key of Object.keys(job)) if (!known.includes(key)) throw new Error(`${at}.${key} is not a new_saves option`);
+      if (job.boundary !== null && !isPostId(job.boundary)) throw new Error(`${at}.boundary must be a post id string, or null for a first run`);
+      const maxPages = job.maxPages ?? 5;
+      if (!Number.isInteger(maxPages) || maxPages < 1 || maxPages > 20) throw new Error(`${at}.maxPages must be 1..20`);
+      const maxSaves = job.maxSaves ?? 4;
+      if (!Number.isInteger(maxSaves) || maxSaves < 1 || maxSaves > 20) throw new Error(`${at}.maxSaves must be 1..20`);
+      return { type: "new_saves", boundary: job.boundary, maxPages, maxSaves, context: contextOptions(job.context ?? {}, `${at}.context`) };
+    }
+    throw new Error(`${at}.type must be bookmarks_until, context or new_saves, got ${JSON.stringify(job?.type)}`);
   });
   return { jobs: out, limits };
+}
+
+// What to collect around each post, for context and new_saves jobs.
+function contextOptions(options, at) {
+  const known = ["rankings", "parent", "branches", "quotes", "mentions", "links", "conversation", "upstream"];
+  for (const key of Object.keys(options)) if (!known.includes(key)) throw new Error(`${at}.${key} is not a context option`);
+  const rankings = options.rankings ?? ["Relevance", "Recency"];
+  if (!Array.isArray(rankings) || !rankings.every((r) => ["Relevance", "Recency", "Likes"].includes(r))) {
+    throw new Error(`${at}.rankings must list Relevance, Recency or Likes`);
+  }
+  const flag = (key) => {
+    const v = options[key] ?? true;
+    if (typeof v !== "boolean") throw new Error(`${at}.${key} must be true or false`);
+    return v;
+  };
+  return {
+    rankings,
+    parent: flag("parent"),
+    branches: flag("branches"),
+    quotes: flag("quotes"),
+    mentions: flag("mentions"),
+    links: flag("links"),
+    conversation: flag("conversation"),
+    upstream: flag("upstream"),
+  };
 }
 
 /**
@@ -159,6 +173,7 @@ export async function runJobs(jobs, limits, io) {
     ledger: [],
     posts: {},
     bookmarks: null,
+    newSaves: null,
     context: {},
     stop: null,
     lastRequestAt: null,
@@ -179,6 +194,7 @@ export async function runJobs(jobs, limits, io) {
   try {
     for (const job of jobs) {
       if (job.type === "bookmarks_until") await bookmarksUntil(run, io, job);
+      else if (job.type === "new_saves") await newSaves(run, io, job);
       else await context(run, io, job);
     }
   } catch (err) {
@@ -328,6 +344,35 @@ async function bookmarksUntil(run, io, job) {
     cursor = next.value;
   }
   state.wallMs = io.now() - started;
+}
+
+// The saves made since the last daily run (lib/daily.js): Bookmarks down to
+// `boundary`, the newest save that run handled, then context for the saves
+// above it, oldest first and at most maxSaves, so that a run always fits its
+// request cap (4 saves at 80 TweetDetail requests and 7 search pages each,
+// plus the bookmarks pages, stay under 400). `handled` is the newest save
+// whose context this run collected; the caller makes it the next boundary,
+// and later saves wait for the next run. A boundary X no longer lists (the
+// save was removed) is not guessed past: no context is fetched, `found` is
+// false, and the caller decides. boundary null is a first run: one page of
+// Bookmarks, no context, and its top post becomes the boundary.
+async function newSaves(run, io, job) {
+  const first = job.boundary === null;
+  await bookmarksUntil(run, io, { boundary: job.boundary ?? "0", after: 0, maxPages: first ? 1 : job.maxPages });
+  const { ids, boundaryIndex } = run.bookmarks;
+  const fresh = first || boundaryIndex === null ? [] : ids.slice(0, boundaryIndex);
+  const taken = fresh.slice(-job.maxSaves).reverse();
+  run.newSaves = {
+    boundary: job.boundary,
+    found: first ? null : boundaryIndex !== null,
+    top: ids[0] ?? null,
+    new: fresh,
+    taken,
+    handled: first ? (ids[0] ?? null) : null,
+  };
+  if (!taken.length) return;
+  await context(run, io, { type: "context", ids: taken, ...job.context });
+  run.newSaves.handled = taken.at(-1);
 }
 
 function postRecord(id) {

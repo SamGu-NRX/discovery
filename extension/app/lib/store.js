@@ -37,6 +37,8 @@ export async function loadConfig() {
     // For You top 100 instead.
     lensId: typeof config.lensId === "string" && /^[a-z0-9][a-z0-9-]{0,63}$/.test(config.lensId) ? config.lensId : null,
     lensBaseline: config.lensBaseline === true,
+    // The daily new-saves run (lib/daily.js). Off until Sam turns it on.
+    dailyFetch: config.dailyFetch === true,
   };
   for (const [key, { min, max, fallback }] of Object.entries(BOUNDS)) {
     const value = Number(config[key]);

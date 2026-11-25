@@ -311,7 +311,7 @@ test("only read operations are built: a mutation is refused by name, and a POST 
 });
 
 test("a job list with an unknown job type or option is refused, not half-run", () => {
-  assert.throws(() => parseJobs({ jobs: [{ type: "likes" }] }), /bookmarks_until or context/);
+  assert.throws(() => parseJobs({ jobs: [{ type: "likes" }] }), /bookmarks_until, context or new_saves/);
   assert.throws(() => parseJobs({ jobs: [{ type: "context", ids: ["1"], quote: false }] }), /quote is not a context option/);
   assert.throws(() => parseJobs({ jobs: [{ type: "context", ids: [1] }] }), /post id strings/);
 });
@@ -419,6 +419,45 @@ test("a saved reply also reads the conversation of the post it answers, in Relev
   const both = await run({ jobs: [{ type: "context", ids: ["401", "400"], ...DETAIL_ONLY }] }, harness(parentAnswer(bothLog)));
   assert.deepEqual(both.context["401"].parent, { id: "400", skipped: "saved in this run" });
   assert.deepEqual(bothLog.filter((x) => x.startsWith("400:")), ["400:Relevance:-", "400:Relevance:pb1", "400:Recency:-", "400:Recency:pb1"], "only 400's own two walks");
+});
+
+// Bookmarks newest first: 1 to 9 over three pages; every permalink is the
+// post alone.
+function savesAnswer(log, { detailReply } = {}) {
+  const pages = { "": [["1", "2", "3", "4"], "c1"], c1: [["5", "6", "7"], "c2"], c2: [["8", "9"], null] };
+  return (operation, v) => {
+    log.push(operation === "Bookmarks" ? `Bookmarks:${v.cursor ?? "-"}` : `TweetDetail:${v.focalTweetId}`);
+    if (operation === "Bookmarks") return bookmarksPage(...pages[v.cursor ?? ""]);
+    return detailReply ?? detail([{ type: "TimelineAddEntries", entries: [itemEntry(post(v.focalTweetId, "saver"), "9000")] }]);
+  };
+}
+const QUIET = { rankings: ["Relevance"], parent: false, upstream: false, ...DETAIL_ONLY };
+
+test("new_saves reads the saves above the last boundary, oldest first and at most maxSaves, and names the newest it handled", async () => {
+  const log = [];
+  const result = await run({ jobs: [{ type: "new_saves", boundary: "6", maxSaves: 3, context: QUIET }] }, harness(savesAnswer(log)));
+  assert.equal(result.stop, null);
+  assert.deepEqual(result.newSaves, { boundary: "6", found: true, top: "1", new: ["1", "2", "3", "4", "5"], taken: ["5", "4", "3"], handled: "3" });
+  assert.deepEqual(log, ["Bookmarks:-", "Bookmarks:c1", "TweetDetail:5", "TweetDetail:4", "TweetDetail:3"], "stops paging at the boundary; 1 and 2 wait for the next run");
+
+  // A first run reads one page and starts from its top post.
+  const firstLog = [];
+  const first = await run({ jobs: [{ type: "new_saves", boundary: null, context: QUIET }] }, harness(savesAnswer(firstLog)));
+  assert.deepEqual(first.newSaves, { boundary: null, found: null, top: "1", new: [], taken: [], handled: "1" });
+  assert.deepEqual(firstLog, ["Bookmarks:-"]);
+
+  // A boundary X no longer lists: nothing is guessed, nothing is handled.
+  const goneLog = [];
+  const gone = await run({ jobs: [{ type: "new_saves", boundary: "77", maxPages: 2, context: QUIET }] }, harness(savesAnswer(goneLog)));
+  assert.deepEqual(gone.newSaves, { boundary: "77", found: false, top: "1", new: [], taken: [], handled: null });
+  assert.deepEqual(goneLog, ["Bookmarks:-", "Bookmarks:c1"]);
+
+  // A run that stops during context handles nothing, so the next run retries.
+  const stopped = await run({ jobs: [{ type: "new_saves", boundary: "6", context: QUIET }] }, harness(savesAnswer([], { detailReply: BACK_OFF["HTTP 429"][0] })));
+  assert.equal(stopped.stop.reason, "rate_limited");
+  assert.equal(stopped.newSaves.handled, null);
+
+  assert.throws(() => parseJobs({ jobs: [{ type: "new_saves", boundary: "6", context: { ids: ["1"] } }] }), /context\.ids is not a context option/);
 });
 
 test("by default a post's conversation is followed past 40 requests, up to 80", async () => {
